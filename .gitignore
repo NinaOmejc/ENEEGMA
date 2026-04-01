@@ -1,0 +1,46 @@
+# Julia
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+/deps/deps.jl
+Manifest.toml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build outputs
+/build/
+/dist/
+*.o
+*.a
+*.so
+*.dylib
+
+# Example outputs and temporary files
+eneegma_example_outputs/
+results/
+*.csv.tmp
+*.json.bak
+.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment
+.env
+.venv
+venv/
+
+# Documentation
+docs/_build/
+site/
