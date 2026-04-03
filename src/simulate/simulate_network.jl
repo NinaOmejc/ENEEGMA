@@ -29,12 +29,10 @@ function simulate_network(net::Network)
         push!(dfs, df)
         save_ts_data(df, net, gs, irun)
 
-        if gs.verbose
+        if gs.verbosity_level > 0
             println("Run $(irun) completed for network $(net.name).")
         end
     end
-
-    println("--- SIMULATION COMPLETED ---")
 
     return dfs;
 end

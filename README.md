@@ -14,8 +14,6 @@ ENEEGMA is a Julia package for constructing, simulating, and optimizing networks
 3. **Efficient simulation**: Solve coupled stochastic and deterministic differential equations
 4. **Parameter optimization**: Fit network parameters to empirical EEG data using state-of-the-art optimizers
 
-The package is designed for **reproducible research** with complete configuration tracking and output documentation.
-
 ## Key Features
 
 ### 🎯 Grammar-based Sampling
@@ -64,7 +62,7 @@ Pkg.develop(url="https://github.com/NinaOmejc/ENEEGMA.jl.git")
 All settings have sensible defaults:
 
 ```julia
-using ENEEGMA
+using ENEEGMA # First compilation will take approximatelly 5 minutes
 
 # Create default settings for a 2-node network
 settings = create_default_settings(
@@ -87,7 +85,7 @@ save_settings_to_json(settings, "my_settings.json")
 
 ```julia
 # Load from file (best for reproducibility)
-settings = manage_settings("my_settings.json")
+settings = load_settings_file("my_settings.json")
 
 # Build the network
 network = Network(settings=settings)

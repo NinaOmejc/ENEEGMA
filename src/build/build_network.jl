@@ -1,16 +1,16 @@
 function build_network(settings::Settings)::Network
     
-    net = ENMEEG.Network(settings);
-    ENMEEG.build_nodes!(net);            
-    ENMEEG.construct_internode_conn_dynamics!(net);        
-    ENMEEG.construct_sensory_input_dynamics!(net);  
-    ENMEEG.construct_network_dynamics!(net);
-    ENMEEG.construct_network_diffusion_dynamics!(net);   
-    ENMEEG.update_network_parameters!(net);
-    ENMEEG.update_network_vars!(net);
-    ENMEEG.construct_network_problem!(net);
-    ENMEEG.set_network_signature!(net);
-    ENMEEG.export_network(net);
+    net = ENEEGMA.Network(settings);
+    ENEEGMA.build_nodes!(net);            
+    ENEEGMA.construct_internode_conn_dynamics!(net);        
+    ENEEGMA.construct_sensory_input_dynamics!(net);  
+    ENEEGMA.construct_network_dynamics!(net);
+    ENEEGMA.construct_network_diffusion_dynamics!(net);   
+    ENEEGMA.update_network_parameters!(net);
+    ENEEGMA.update_network_vars!(net);
+    ENEEGMA.construct_network_problem!(net);
+    ENEEGMA.set_network_signature!(net);
+    ENEEGMA.export_network(net);
 
     vprint("--- NETWORK $(net.name) SUCCESSFULLY BUILT"; level=1)
     return net;

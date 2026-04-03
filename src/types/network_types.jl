@@ -180,7 +180,7 @@ mutable struct Network
 
     function Network(settings::Settings;)
         network_settings = settings.network_settings
-        network_name = network_settings.network_name
+        network_name = settings.general_settings.exp_name
         network_conn = network_settings.network_conn
         sensory_input_conn = network_settings.sensory_input_conn
         sensory_input_func_string = network_settings.sensory_input_func

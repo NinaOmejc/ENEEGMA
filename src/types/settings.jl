@@ -30,26 +30,24 @@ function _dict_to_matrix(raw::AbstractDict, ::Type{T}) where T
 end
 
 mutable struct GeneralSettings <: AbstractSettings
-    settings_idx::Int64
+    exp_name::String
     path_out::String
-    settings_path::String
     save_model_formats::Vector{String}
     make_plots::Bool
-    verbose::Bool
     verbosity_level::Int64
     seed::Union{Int, Nothing}
 
-    function GeneralSettings(dict::Dict{String, Any}, settings_idx::Int64)::GeneralSettings
+    function GeneralSettings(dict::Dict{String, Any})::GeneralSettings
 
         # Use safe lookups for possibly-missing sections
-        netdict = get(dict, "network_settings", Dict{String, Any}())
         gendict = get(dict, "general_settings", Dict{String, Any}())
+        
+        # Get experiment name with explicit default
+        exp_name = String(get(gendict, "exp_name", "SimpleNetwork"))
 
-        network_name = String(get(netdict, "network_name", "DefaultNetwork"))
-
-        # Handle path out
-        path_out_root = String(get(gendict, "path_out", joinpath(".", "results", network_name)))
-        path_out = joinpath(path_out_root, "$(network_name)_s$(settings_idx)")
+        # Handle path out: <path_out>/
+        # All outputs go to a single base directory
+        path_out = String(get(gendict, "path_out", joinpath(".", "results")))
 
         if !isdir(path_out)
             mkpath(path_out)
@@ -78,25 +76,15 @@ mutable struct GeneralSettings <: AbstractSettings
             end
         end
 
-        override_idx = _coerce_settings_idx_value(get(gendict, "settings_idx", nothing))
-        settings_idx = override_idx === nothing ? settings_idx : override_idx
-        gendict["settings_idx"] = settings_idx
-
-        raw_verbose = get(gendict, "verbose", nothing)
-        fallback_level = raw_verbose === nothing ? 0 : (Bool(raw_verbose) ? 1 : 0)
-        raw_level = get(gendict, "verbosity_level", raw_verbose)
-        verbosity_level = _coerce_level(raw_level, fallback_level)
-        verbose_flag = verbosity_level > 0
+        # Get verbosity level (0=silent, 1=minimal, 2=detailed)
+        raw_level = get(gendict, "verbosity_level", 1)
+        verbosity_level = _coerce_level(raw_level, 1)
         gendict["verbosity_level"] = verbosity_level
 
-        settings_path = String(get(gendict, "settings_path", ""))
-
-        new(settings_idx,
+        new(exp_name,
             path_out,
-            settings_path,
-            Vector{String}(get(gendict, "save_model_formats", ["tex"])), # fix type
-            Bool(get(gendict, "make_plots", true)),
-            verbose_flag,
+            Vector{String}(get(gendict, "save_model_formats", ["tex"])),
+            Bool(get(gendict, "make_plots", false)),
             verbosity_level,
             seed
         )
@@ -104,7 +92,6 @@ mutable struct GeneralSettings <: AbstractSettings
 end
 
 mutable struct NetworkSettings <: AbstractSettings
-    network_name::String
     n_nodes::Int64
     node_names::Vector{String}
     node_models::Vector{String}
@@ -119,109 +106,103 @@ mutable struct NetworkSettings <: AbstractSettings
 
     # Constructor with validation built-in
     function NetworkSettings(settings::Dict{String, Any})::NetworkSettings
-        # Allow missing network_settings and fall back to defaults
+        # Get network settings dict
         netsett = get(settings, "network_settings", Dict{String, Any}())
-        network_name = String(get(netsett, "network_name", "DefaultNetwork"))
-        n_nodes = Int64(get(netsett, "n_nodes", -1))
         
-        # Validate/generate node models
-        node_models_raw = Vector{String}(get(netsett, "node_models", [""]))
-        if n_nodes == -1 && isempty(node_models_raw)
-            throw(ArgumentError("Either `n_nodes` or `node_models` must be specified in network settings."))
-        elseif n_nodes == -1
-            n_nodes = length(node_models_raw)
+        # n_nodes is required or defaults to 1
+        n_nodes = Int64(get(netsett, "n_nodes", 1))
+        n_nodes > 0 || throw(ArgumentError("n_nodes must be > 0, got $n_nodes"))
+        
+        # Get or create node names - must match n_nodes
+        node_names_raw = get(netsett, "node_names", nothing)
+        node_names = if isnothing(node_names_raw) || isempty(node_names_raw)
+            ["N$i" for i in 1:n_nodes]
+        else
+            nn = Vector{String}(node_names_raw)
+            length(nn) == n_nodes || throw(ArgumentError("node_names length ($(length(nn))) must match n_nodes ($n_nodes)"))
+            nn
         end
-
-        node_models = if all(isempty, node_models_raw)
-                            repeat(["Unknown"], n_nodes)
-                        elseif length(node_models_raw) == n_nodes
-                            Vector{String}(node_models_raw)
-                        elseif length(node_models_raw) == 1
-                            repeat(node_models_raw, n_nodes)
-                        else
-                            throw(ArgumentError("Length of `node_models` must be 1 or match `n_nodes`."))
-                        end
-
-        # Validate/generate node names
-        node_names_raw = Vector{String}(get(netsett, "node_names", [""]))
-        node_names = if all(isempty, node_names_raw)
-                            ["N$i" for i in 1:n_nodes]
-                        elseif length(node_names_raw) == n_nodes
-                            Vector{String}(node_names_raw)
-                        elseif length(node_names_raw) == 1 # Repeat the single name with an index
-                            base_name = node_names_raw[1]
-                            ["$base_name$i" for i in 1:n_nodes]
-                        else
-                            throw(ArgumentError("Length of `node_names` must be 1 or match `n_nodes`."))
-                        end     
-
-        # Validate/generate node coordinates
+        
+        # Get or create node models - must match n_nodes
+        node_models_raw = get(netsett, "node_models", nothing)
+        node_models = if isnothing(node_models_raw) || isempty(node_models_raw)
+            fill("WC", n_nodes)
+        else
+            nm = Vector{String}(node_models_raw)
+            length(nm) == n_nodes || throw(ArgumentError("node_models length ($(length(nm))) must match n_nodes ($n_nodes)"))
+            nm
+        end
+        
+        # Get or create node coordinates - must match n_nodes
         node_coords_raw = get(netsett, "node_coords", nothing)
         node_coords = if isnothing(node_coords_raw) || isempty(node_coords_raw)
-                            [Tuple(rand(-10.:0.1:10., 3)) for _ in 1:n_nodes]
-                        elseif length(node_coords_raw) == n_nodes
-                            [Tuple{Float64, Float64, Float64}(tuple(coords...)) for coords in node_coords_raw]
-                        else
-                            throw(ArgumentError("Length of `node_coords` must match `n_nodes`."))
-                        end
-
-        # Validate or generate structural connectivity matrix
+            [(0.0, float(i)*10.0, 0.0) for i in 1:n_nodes]
+        else
+            nc = [(Float64(c[1]), Float64(c[2]), Float64(c[3])) for c in node_coords_raw]
+            length(nc) == n_nodes || throw(ArgumentError("node_coords length ($(length(nc))) must match n_nodes ($n_nodes)"))
+            nc
+        end
+        
+        # Get or create connectivity matrix - must be n_nodes × n_nodes
         network_conn_raw = get(netsett, "network_conn", nothing)
         network_conn = if isnothing(network_conn_raw) || isempty(network_conn_raw)
-                            ones(n_nodes, n_nodes) - I(n_nodes)
-                        elseif network_conn_raw isa AbstractDict
-                            parsed = _dict_to_matrix(network_conn_raw, Float64)
-                            parsed === nothing ? ones(n_nodes, n_nodes) - I(n_nodes) : parsed
-                        elseif length(network_conn_raw) != n_nodes
-                            throw(ArgumentError("Size of `network_conn` must match `n_nodes`."))
-                        else
-                            Matrix{Float64}(hcat(network_conn_raw...)')
-                        end
-        network_conn[CartesianIndex.(1:n_nodes, 1:n_nodes)] .= 0.0 
-
+            zeros(n_nodes, n_nodes)
+        else
+            nc_mat = if network_conn_raw isa AbstractDict
+                parsed = _dict_to_matrix(network_conn_raw, Float64)
+                parsed === nothing ? zeros(n_nodes, n_nodes) : parsed
+            else
+                Matrix{Float64}(hcat(network_conn_raw...)')
+            end
+            (size(nc_mat) == (n_nodes, n_nodes)) || throw(ArgumentError("network_conn must be ($n_nodes × $n_nodes), got $(size(nc_mat))"))
+            nc_mat
+        end
         
-        # Validate or generate connection dynamics matrix
+        # Get or create connection functions matrix - must be n_nodes × n_nodes
         network_conn_funcs_raw = get(netsett, "network_conn_funcs", nothing)
         network_conn_funcs = if isnothing(network_conn_funcs_raw) || isempty(network_conn_funcs_raw)
-                                    fill("linear", n_nodes, n_nodes)
-                                elseif network_conn_funcs_raw isa AbstractDict
-                                    parsed = _dict_to_matrix(network_conn_funcs_raw, String)
-                                    parsed === nothing ? fill("linear", n_nodes, n_nodes) : parsed
-                                else
-                                    permutedims(Matrix{String}(hcat(network_conn_funcs_raw...)))
-                                end
-
-        # Validate or generate functional connectivity matrix
+            fill("", n_nodes, n_nodes)
+        else
+            ncf = if network_conn_funcs_raw isa AbstractDict
+                parsed = _dict_to_matrix(network_conn_funcs_raw, String)
+                parsed === nothing ? fill("", n_nodes, n_nodes) : parsed
+            else
+                permutedims(Matrix{String}(hcat(network_conn_funcs_raw...)))
+            end
+            (size(ncf) == (n_nodes, n_nodes)) || throw(ArgumentError("network_conn_funcs must be ($n_nodes × $n_nodes), got $(size(ncf))"))
+            ncf
+        end
+        
+        # Get or create delay matrix - must be n_nodes × n_nodes
         network_delay_raw = get(netsett, "network_delay", nothing)
         network_delay = if isnothing(network_delay_raw) || isempty(network_delay_raw)
-                            ones(n_nodes, n_nodes) .- I(n_nodes)
-                        elseif network_delay_raw isa AbstractDict
-                            parsed = _dict_to_matrix(network_delay_raw, Float64)
-                            parsed === nothing ? ones(n_nodes, n_nodes) .- I(n_nodes) : parsed
-                        elseif length(network_delay_raw) != n_nodes
-                            throw(ArgumentError("Size of `network_delay` must match `n_nodes`."))
-                        else
-                            Matrix{Float64}(hcat(network_delay_raw...)')
-                        end     
-
-
-        # Validate sensory input connectivity (must be empty or length == n_nodes)
-        sensory_input_conn = let v = Int.(get(netsett, "sensory_input_conn", Int[]))
-            if isempty(v)
-                @warn "No sensory input connectivity provided. Randomly assigning one node to receive input."
-                conn = zeros(Int, n_nodes)
-                conn[rand(1:n_nodes)] = 1
-                conn
-            elseif length(v) == n_nodes
-                v
+            zeros(n_nodes, n_nodes)
+        else
+            nd_mat = if network_delay_raw isa AbstractDict
+                parsed = _dict_to_matrix(network_delay_raw, Float64)
+                parsed === nothing ? zeros(n_nodes, n_nodes) : parsed
             else
-                throw(ArgumentError("Length of `sensory_input_conn` must be either $n_nodes or 0, got $(length(v))."))
+                Matrix{Float64}(hcat(network_delay_raw...)')
+            end
+            (size(nd_mat) == (n_nodes, n_nodes)) || throw(ArgumentError("network_delay must be ($n_nodes × $n_nodes), got $(size(nd_mat))"))
+            nd_mat
+        end
+        
+        # Get or create sensory input connectivity - must match n_nodes
+        sensory_input_conn = let v = get(netsett, "sensory_input_conn", nothing)
+            if isnothing(v) || isempty(v)
+                ones(Int, n_nodes)  # Default: all nodes receive input
+            else
+                sic = Int.(v)
+                length(sic) == n_nodes || throw(ArgumentError("sensory_input_conn length ($(length(sic))) must match n_nodes ($n_nodes)"))
+                sic
             end
         end
 
-        # Validate sensory input function
-        sensory_input_func = String(get(netsett, "sensory_input_func", ""))
+        # Get sensory input function
+        sensory_input_func = String(get(netsett, "sensory_input_func", "rand(Normal(0.0, 1.0))"))
 
+        # Get seed for sensory input
         seed_sensory_input = get(netsett, "seed_sensory_input", nothing)
         if seed_sensory_input === nothing || seed_sensory_input == ""
             seed_sensory_input = nothing
@@ -229,11 +210,10 @@ mutable struct NetworkSettings <: AbstractSettings
             seed_sensory_input = Int(seed_sensory_input)
         end
 
-        # Validate EEG output function
+        # Get EEG output function
         eeg_output = String(get(netsett, "eeg_output", ""))
 
         return new(
-            network_name,
             n_nodes,
             node_names,
             node_models,
@@ -250,43 +230,40 @@ mutable struct NetworkSettings <: AbstractSettings
 end
 
 mutable struct SamplingSettings <: AbstractSettings
-    type::String               # "grammar" or "GCVAE"
+    grammar_file::String
     n_samples::Int        
     only_unique::Bool
     max_resample_attempts::Int
-    fname_grammar::String
-    path_grammar::String
-    models_path::Union{String, Nothing}  # Path to CSV file with pre-sampled model recipes
-    model_idx::Union{Int, Nothing}       # Which model from CSV to use (1-based index)
+    seed::Union{Int, Nothing}
 
     function SamplingSettings(dict::Dict{String, Any})::SamplingSettings
         sampdict = get(dict, "sampling_settings", Dict{String, Any}())
         
-        # Parse models_path - allow null/empty to mean "not using pre-sampled models"
-        models_path_raw = get(sampdict, "models_path", nothing)
-        models_path = if models_path_raw === nothing || models_path_raw == ""
-            nothing
+        # Construct grammar_file from path + filename (or use combined path if provided)
+        grammar_file_raw = get(sampdict, "grammar_file", nothing)
+        grammar_file = if grammar_file_raw !== nothing && grammar_file_raw != ""
+            String(grammar_file_raw)
         else
-            String(models_path_raw)
+            # Fall back to constructing from path and filename
+            path = String(get(sampdict, "path_grammar", "grammars"))
+            fname = String(get(sampdict, "fname_grammar", "default_grammar.cfg"))
+            joinpath(path, fname)
         end
         
-        # Parse model_idx - allow null/empty to mean "not specified"
-        model_idx_raw = get(sampdict, "model_idx", nothing)
-        model_idx = if model_idx_raw === nothing || model_idx_raw == ""
+        # Parse seed - allow null/empty to mean "random"
+        seed_raw = get(sampdict, "seed", nothing)
+        seed = if seed_raw === nothing || seed_raw == ""
             nothing
         else
-            Int(model_idx_raw)
+            Int(seed_raw)
         end
         
         new(
-            String(get(sampdict, "type", "grammar")),
+            grammar_file,
             Int(get(   sampdict, "n_samples", 10)),
             Bool(get(  sampdict, "only_unique", true)),
             Int(get(   sampdict, "max_resample_attempts", 100)),
-            String(get(sampdict, "fname_grammar", "grammar1s.cfg")),
-            String(get(sampdict, "path_grammar", ".\\grammars")),
-            models_path,
-            model_idx
+            seed
         )
     end
 end
@@ -343,11 +320,11 @@ mutable struct SimulationSettings <: AbstractSettings
             inits_map,
             Tuple{Float64, Float64}(get(simdict, "tspan", (0.0, 10.0))),
             Int64(get(simdict, "n_runs", 1)),
-            get(simdict, "dt", nothing),
-            Float64(get(simdict, "saveat", 1e-3)),
+            Float64(get(simdict, "dt", 0.001)),
+            Float64(get(simdict, "saveat", 0.001)),
             get(simdict, "abstol", nothing),
             get(simdict, "reltol", nothing),
-            get(simdict, "solver", nothing),
+            String(get(simdict, "solver", "Tsit5")),
             Float64(get(simdict, "maxiters", -1)),
             Bool(get(simdict, "save_everystep", false)),
             Bool(get(simdict, "force_resimulation", false)),
@@ -378,7 +355,7 @@ mutable struct OptimizerSettings <: AbstractSettings
 
         new(
             Int64(get(dict, "population_size", 50)),
-            Float64(get(dict, "sigma0", -1.0)),
+            Float64(get(dict, "sigma0", 1.0)),
             Float64(get(dict, "K", 0.5)),
             Int64(get(dict, "n_samples", 100)),
             Float64(get(dict, "learning_rate", 0.1)),
@@ -882,6 +859,20 @@ mutable struct HyperparameterSweepSettings <: AbstractSettings
     end
 end
 
+"""
+    OptimizationSettings
+
+Settings for network parameter optimization.
+
+# Fields
+- `method::String`: Optimization method. **Currently only "CMAES" is supported.**
+- `loss::String`: Loss function specification
+- `n_restarts::Int64`: Number of optimization restarts
+- Additional fields for loss configuration, reparameterization, and hyperparameter sweeping
+
+Note: Previous optimization methods (DE, LBFGS, ADAM_NOGRAD) are no longer supported.
+Only CMAES (Covariance Matrix Adaptation Evolution Strategy) is available.
+"""
 mutable struct OptimizationSettings <: AbstractSettings
     method::String
     loss::String
@@ -909,10 +900,12 @@ mutable struct OptimizationSettings <: AbstractSettings
     function OptimizationSettings(dict::Dict)::OptimizationSettings
         optdict = get(dict, "optimization_settings", Dict{String, Any}())
         method = String(get(optdict, "method", get(optdict, "optimization_method", "CMAES")))
-        if method == "ADVI"
-            @warn "Optimization method $(method) does not require a loss function. Setting loss to ADVI."
-            optdict["loss"] = "ADVI"
+        
+        # Validate that only CMAES is supported
+        if method != "CMAES"
+            error("Optimization method '$method' is not supported. Only 'CMAES' is currently available.")
         end
+        
         get_section = key -> begin
             section = get(optdict, key, nothing)
             if section isa AbstractDict
@@ -924,15 +917,15 @@ mutable struct OptimizationSettings <: AbstractSettings
         loss_section = get_section("loss_settings")
         lossset = LossSettings(loss_section)
         optz = OptimizerSettings(get_section("optimizer_settings"))
-        loss_name = String(get(loss_section, "loss", get(optdict, "loss", "TS-MAE")))
+        loss_name = String(get(loss_section, "loss", get(optdict, "loss", "fspb")))
 #=         if lowercase(loss_name) in ("fspb+ssvep", "peakbg+ssvep", "fspb_ssvep", "fspb-ssvep")
             normalize_fspb_ssvep_weights!(lossset; background_auto=false)
         end =#
         loss_abstol = Float64(get(loss_section, "loss_abstol", get(optdict, "loss_abstol", get(optdict, "loss_limit", 1e-5))))
         loss_reltol = Float64(get(loss_section, "loss_reltol", get(optdict, "loss_reltol", get(optdict, "rel_diff_convergence", 1e-5))))
-        abs_target_loss = max(Float64(get(optdict, "abs_target_loss", 0.1)), 0.0)
+        abs_target_loss = max(Float64(get(optdict, "abs_target_loss", 0.01)), 0.0)
         component_fit = lowercase(String(get(optdict, "component_fit", "all")))
-        raw_reparam = get(optdict, "reparametrize", false)
+        raw_reparam = get(optdict, "reparametrize", true)
         raw_strategy = get(optdict, "reparam_strategy", nothing)
         reparam_flag, reparam_strategy = _parse_reparam_inputs(raw_reparam, raw_strategy)
 
@@ -968,7 +961,7 @@ mutable struct OptimizationSettings <: AbstractSettings
         empirical_ub_col = String(get(optdict, "empirical_ub_col", "q3"))
         
         save_optimization_history = _losssettings_as_bool(get(optdict, "save_optimization_history", false), false)
-        save_all_restarts = _losssettings_as_bool(get(optdict, "save_all_optim_restarts_results", false), false)
+        save_all_restarts = _losssettings_as_bool(get(optdict, "save_all_optim_restarts_results", true), true)
         save_modeled_psd = _losssettings_as_bool(get(optdict, "save_modeled_psd", false), false)
         n_restarts = Int64(get(optdict, "n_restarts", 1))
         raw_sweep_section = begin
@@ -1177,9 +1170,9 @@ mutable struct Settings
     optimization_settings::Union{OptimizationSettings, Nothing}
     data_settings::Union{DataSettings, Nothing}
 
-    function Settings(dict::Dict{String, Any}, settings_idx::Int64)
+    function Settings(dict::Dict{String, Any})
 
-        gen  = GeneralSettings(dict, settings_idx)
+        gen  = GeneralSettings(dict)
         net  = NetworkSettings(dict)
 
         # Always construct sampling, simulation, and optimization with defaults if missing

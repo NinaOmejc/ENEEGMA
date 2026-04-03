@@ -4,6 +4,7 @@
 # to fit a network model to target EEG data.
 
 using ENEEGMA
+using JSON
 
 println("="^70)
 println("ENEEGMA Example 3: Parameter Optimization")
@@ -15,14 +16,19 @@ println("="^70)
 println("\n[Step 1] Creating settings configured for optimization...")
 
 settings_dict = create_default_settings(
-    network_name="OptimizationExample_2Node",
+    exp_name="OptimizationExample_2Node",
     n_nodes=2,
     tspan=(0.0, 500.0),
     dt=1.0  # 1 kHz sampling for optimization
 )
 
+# Set unified output directory
+output_dir = "./eneegma_example_outputs"
+settings_dict["general_settings"]["path_out"] = output_dir
+
 # Key optimization-specific configuration
 os = settings_dict["optimization_settings"]
+os["method"] = "CMAES"  # Only CMAES is supported
 ls = os["loss_settings"]
 
 # Configure loss function for power spectral density fitting
@@ -32,13 +38,10 @@ ls["psd_window_size"] = 4                   # Welsh window size
 ls["psd_poly_order"] = 2                    # Detrending polynomial order
 ls["psd_smooth_sigma"] = 0.5                # Smoothing strength
 
-# Configure optimizer
+# Configure optimizer (CMAES only)
 optset = os["optimizer_settings"]
-optset["solver_type"] = "Adam"              # Adaptive moment estimation
-optset["learning_rate"] = 0.01              # Step size
-optset["maxiters"] = 100                    # Stop after 100 iterations
-optset["beta1"] = 0.9                       # Momentum parameter
-optset["beta2"] = 0.999                     # RMS prop parameter
+optset["population_size"] = 50              # Population size for CMAES
+optset["sigma0"] = -1.0                     # Automatic sigma initialization
 
 # Data configuration (would point to real EEG data)
 settings_dict["data_settings"]["data_path"] = ""  # User should provide path
@@ -46,20 +49,18 @@ settings_dict["data_settings"]["target_channel"] = "IC3"  # Which component to f
 
 println("✓ Optimization settings configured:")
 println("  - Loss: $(ls["loss_fn"]) ($(join(skipmissing([ls["freq_bands"]...]), "-")) Hz)")
-println("  - Optimizer: $(optset["solver_type"])")
-println("  - Max iterations: $(optset["maxiters"])")
-println("  - Learning rate: $(optset["learning_rate"])")
+println("  - Method: $(os["method"])")
+println("  - Population size: $(optset["population_size"])")
 
 # ============================================================================
 # Step 2: Save Configuration
 # ============================================================================
 println("\n[Step 2] Saving optimization configuration...")
 
-output_dir = "./eneegma_example_outputs"
 isdir(output_dir) || mkpath(output_dir)
 
-settings_path = joinpath(output_dir, "example3_optimization_settings.json")
-save_settings_to_json(settings_dict, settings_path)
+settings_path = joinpath(output_dir, "example3_settings.json")
+save_settings(settings_dict, settings_path)
 println("✓ Configuration saved to: $settings_path")
 
 # ============================================================================
@@ -67,19 +68,18 @@ println("✓ Configuration saved to: $settings_path")
 # ============================================================================
 println("\n[Step 3] Loading settings and preparing optimization environment...")
 
-settings = manage_settings(settings_path)
+settings = load_settings_file(settings_path)
 
 # Show what would be optimized
 println("\n  Network to be optimized:")
-println("    Name: $(settings.network_settings.network_name)")
+println("    Name: $(settings.general_settings.exp_name)")
 println("    Nodes: $(join(settings.network_settings.node_names, ", "))")
 println("    Models: $(join(settings.network_settings.node_models, ", "))")
 
 println("\n  Optimization will:")
 println("    • Vary node parameters to minimize fit error")
-println("    • Use $(settings.optimization_settings["optimizer_settings"]["solver_type"]) optimizer")
-println("    • Stop after $(settings.optimization_settings["optimizer_settings"]["maxiters"]) iterations")
-println("    • Track loss: $(settings.optimization_settings["loss_settings"]["loss_fn"])")
+println("    • Use $(settings.optimization_settings.method) with population size $(settings.optimization_settings.optimizer_settings.population_size)")
+println("    • Track loss: $(settings.optimization_settings.loss)")
 
 # ============================================================================
 # Step 4: Document Optimization Protocol
@@ -90,14 +90,12 @@ protocol_doc = Dict(
     "optimization_protocol" => Dict(
         "objective" => "Fit network model parameters to EEG spectral data",
         "loss_function" => "Power spectral density IAE (Integrated Absolute Error)",
-        "frequency_range_hz" => settings.optimization_settings["loss_settings"]["freq_bands"],
+        "frequency_range_hz" => [settings.optimization_settings.loss_settings.fmin, settings.optimization_settings.loss_settings.fmax],
         "target_data" => "User-provided EEG data (source-localized component)",
-        "optimization_algorithm" => "Adam (adaptive moment estimation)",
+        "optimization_algorithm" => "CMAES (Covariance Matrix Adaptation Evolution Strategy)",
         "hyperparameters" => Dict(
-            "learning_rate" => settings.optimization_settings["optimizer_settings"]["learning_rate"],
-            "beta1" => settings.optimization_settings["optimizer_settings"]["beta1"],
-            "beta2" => settings.optimization_settings["optimizer_settings"]["beta2"],
-            "max_iterations" => settings.optimization_settings["optimizer_settings"]["maxiters"]
+            "population_size" => settings.optimization_settings.optimizer_settings.population_size,
+            "sigma0" => settings.optimization_settings.optimizer_settings.sigma0
         ),
         "tunable_parameters" => "All node model parameters (specific to model structure)",
         "output_includes" => [
@@ -147,7 +145,7 @@ end
 
 println("✓ Expected output format saved to: $results_path")
 
-#========================================================================
+# ========================================================================
 # Step 6: Tips for Real Optimization
 # ========================================================================
 println("\n" * "="^70)
@@ -167,7 +165,7 @@ To run real parameter optimization:
    - Choose initialization strategy
 
 3. Run optimization:
-   settings = manage_settings("$settings_path")
+   settings = load_settings_file("$settings_path")
    target_data = load_target_data(settings)
    network = build_network(settings)
    result = optimize_network(network, target_data, settings)

@@ -35,9 +35,7 @@ function optimize_network(
     init_spec = blocks.init_spec
     use_reparam = os.reparametrize && os.reparam_strategy != :none
     loss_impl = wrap_loss_for_reparam(loss_fun, param_spec, init_spec; active=use_reparam)
-    optfun = (os.method in ["CMAES","DE","ADAM_NOGRAD"]) ?
-        OptimizationFunction(loss_impl) :
-        OptimizationFunction(loss_impl, Optimization.AutoForwardDiff())
+    optfun = OptimizationFunction(loss_impl)
         
     param_lb, param_ub = reparam_bounds(param_spec, tunable_params_lb, tunable_params_ub)
     init_lb, init_ub = reparam_bounds(init_spec, inits_lb, inits_ub)
@@ -116,7 +114,7 @@ end
 function singlerun_optimization(
     irestart::Int,
     optfun::OptimizationFunction,
-    optimizer::Union{Evolutionary.AbstractOptimizer, Optim.FirstOrderOptimizer},
+    optimizer::Evolutionary.AbstractOptimizer,
     args::NamedTuple,
     tunable_params_symbols::Vector{Symbol},
     tunables_lb::Vector{Float64},
@@ -156,19 +154,11 @@ function singlerun_optimization(
 
     local current_optsol = nothing
     try
-        if os.method == "ADAM_NOGRAD"
-            current_optsol = run_adam_nograd(
-                optfun, args,
-                tunables_guess, tunables_lb, tunables_ub,
-                os, callback_fun
-            )
-        else
-            current_optsol = Optimization.solve(optprob,
-                                                optimizer;
-                                                callback=callback_fun,
-                                                maxiters=os.maxiters
-            )
-        end
+        current_optsol = Optimization.solve(optprob,
+                                            optimizer;
+                                            callback=callback_fun,
+                                            maxiters=os.maxiters
+        )
 
         u_phys = materialize_logged_params(current_optsol.u, param_spec, init_spec)
         vprint("Optimization completed with:")
@@ -248,7 +238,6 @@ function create_callback(start_time::Dates.DateTime,
     # Create a closure to track the last seen iteration value and maintain a running count
     last_logged_iter = 0
     iter_offset = 0
-    is_evolutionary = os.method in ["CMAES", "DE"]
     
     # your global penalty value
     penalty_loss = 1e9
@@ -324,34 +313,21 @@ For LBFGS, handles multi-restart configuration if enabled.
 - `restart_options`: Dictionary with restart-specific settings (n_restarts, etc.)
 """
 
-function get_optimizer(os::OptimizationSettings)::Union{Evolutionary.AbstractOptimizer, Optim.FirstOrderOptimizer, Nothing}
+function get_optimizer(os::OptimizationSettings)::Evolutionary.AbstractOptimizer
     oz = os.optimizer_settings
 
-    if os.method == "CMAES"
-        optimizer_kwargs = NamedTuple()
-        if oz.population_size != -1
-            optimizer_kwargs = merge(optimizer_kwargs, (λ = oz.population_size,))
-        end
-        if hasproperty(oz, :sigma0) && oz.sigma0 != -1
-            optimizer_kwargs = merge(optimizer_kwargs, (sigma0 = oz.sigma0,))
-        end
-        optimizer = Evolutionary.CMAES(; optimizer_kwargs..., metrics = [Evolutionary.RelDiff(os.loss_reltol)])
-
-    elseif os.method == "DE"
-        recombination_type = Evolutionary.BINX(0.5)
-        optimizer_kwargs = NamedTuple()
-        if oz.population_size != -1
-            optimizer_kwargs = merge(optimizer_kwargs, (populationSize = oz.population_size,))
-        end
-        optimizer = Evolutionary.DE(; recombination=recombination_type, optimizer_kwargs..., metrics = Evolutionary.ConvergenceMetric[Evolutionary.RelDiff(os.loss_reltol)])
-
-    elseif os.method == "LBFGS"
-        optimizer = Optim.LBFGS()
-    elseif os.method == "ADAM_NOGRAD"
-        optimizer = nothing # Placeholder for future implementation
-    else
-        error("Optimization method not found: $(os.method). Choose from: CMAES, DE, LBFGS")
+    if os.method != "CMAES"
+        error("Optimization method not supported: $(os.method). Only CMAES is currently available.")
     end
-    return optimizer
+
+    optimizer_kwargs = NamedTuple()
+    if oz.population_size != -1
+        optimizer_kwargs = merge(optimizer_kwargs, (λ = oz.population_size,))
+    end
+    if hasproperty(oz, :sigma0) && oz.sigma0 != -1
+        optimizer_kwargs = merge(optimizer_kwargs, (sigma0 = oz.sigma0,))
+    end
+    
+    return Evolutionary.CMAES(; optimizer_kwargs..., metrics = [Evolutionary.RelDiff(os.loss_reltol)])
 end
 

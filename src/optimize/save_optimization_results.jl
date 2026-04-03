@@ -119,7 +119,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     task_type = data_settings === nothing ? "" : something(data_settings.task_type, "")
 
     results = OrderedDict(
-        "net_name" => settings.network_settings.network_name,
+        "net_name" => settings.general_settings.exp_name,
         "brain_source" => net.nodes[1].brain_source,
         "settings_idx" => general_settings.settings_idx,
         "settings_path" => general_settings.settings_path,

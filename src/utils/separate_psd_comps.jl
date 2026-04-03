@@ -1,4 +1,4 @@
-using ENMEEG
+using ENEEGMA
 using Plots
 using DataFrames
 using Statistics
@@ -28,14 +28,14 @@ function separate_psd_components(freqs::AbstractVector{<:Real},
     n == 0 && error("Empty PSD.")
 
     f = Float64.(freqs)
-    logpsd = ENMEEG.psd_preproc_has_log(ls.psd_preproc) ?
+    logpsd = ENEEGMA.psd_preproc_has_log(ls.psd_preproc) ?
         Float64.(powers) :
         log10.(max.(Float64.(powers), eps(Float64)))
 
     if peak_windows === nothing
-        peak_windows = ENMEEG.detect_peak_windows(f, logpsd, ls)
+        peak_windows = ENEEGMA.detect_peak_windows(f, logpsd, ls)
     end
-    peak_mask = ENMEEG._mask_from_windows(f, peak_windows)
+    peak_mask = ENEEGMA._mask_from_windows(f, peak_windows)
 
     fit_mask = (f .>= fmin_fit) .& (f .<= fmax_fit) .& .!peak_mask .& (f .> 0)
     if count(fit_mask) < min_points
@@ -130,26 +130,3 @@ function _linear_fit(x::AbstractVector{<:Real}, y::AbstractVector{<:Real})
     intercept = my - slope * mx
     return intercept, slope
 end
-
-
-# Example usage (run this file directly).
-task = "_ssvep"  # "" or "_ssvep"
-settings_path = "D:\\Experiments\\ENMEEG-Lab\\examples\\optimization_settings_literature_based$(task).json"
-settings = ENMEEG.manage_settings(settings_path)
-data = ENMEEG.prepare_target!(settings)
-
-ls = settings.optimization_settings.loss_settings
-if task == "rest"
-    background_quantile = 0.5
-else
-    background_quantile = 0.1
-end
-comps = separate_psd_components(data.freqs, data.powers, ls, background_quantile=background_quantile)
-
-p = plot(data.freqs, comps.logpsd, label="log PSD", linewidth=2, color=:black)
-plot!(p, data.freqs, comps.log_background, label="1/f background", linewidth=2, color=:dodgerblue)
-plot!(p, data.freqs, comps.log_background .+ comps.log_peak, label="background + peak", linewidth=1.5, color=:gray, linestyle=:dash)
-plot!(p, data.freqs, comps.log_peak, label="peak (log)", linewidth=2, color=:orange)
-xlabel!(p, "Hz")
-ylabel!(p, "Log10 PSD")
-display(p)

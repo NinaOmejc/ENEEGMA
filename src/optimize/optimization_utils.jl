@@ -114,15 +114,8 @@ function _translate_settings_path(path::AbstractString)
     if startswith(raw, "/ceph/grid/home/nomejc/eneegma_exp/experiments/")
         m = match(r"^/ceph/grid/home/nomejc/eneegma_exp/experiments/([^/]+)/(.+)$", raw)
         if m !== nothing
-            exp = m.captures[1]
-            fname = m.captures[2]
-            if exp in ["exp1", "exp2", "exp3", "exp4"]
-                return joinpath("D:\\Experiments\\ENMEEG-Lab\\results\\optimization_known", exp, fname)
-            elseif exp in ["exp5", "exp6"]
-                return joinpath("D:\\Experiments\\ENMEEG-Lab\\results\\optimization_unknown", exp, fname)
-            else
-                return raw
-            end
+            # Return path as-is (user should configure output paths in settings)
+            return raw
         end
     end
     return raw
@@ -312,7 +305,7 @@ function apply_model_to_settings!(settings::Settings, recipe::AbstractString, mo
     else
         settings.network_settings.node_models = [recipe]
     end
-    settings.network_settings.network_name = "$(settings.network_settings.network_name)_$(model_name)"
+    settings.general_settings.exp_name = "$(settings.general_settings.exp_name)_$(model_name)"
     settings.sampling_settings.model_idx = model_idx
     _rebuild_path_out!(settings)
     

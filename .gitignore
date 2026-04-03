@@ -25,6 +25,7 @@ Thumbs.db
 *.dylib
 
 # Example outputs and temporary files
+test/
 eneegma_example_outputs/
 results/
 *.csv.tmp
@@ -44,3 +45,4 @@ venv/
 # Documentation
 docs/_build/
 site/
+

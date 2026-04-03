@@ -1152,3 +1152,46 @@ function Base.show(io::IO, ::MIME"text/plain", ps::ParamSet)
 end
 
 
+# ==================================================================================
+#  PRETTY PRINTING SUMMARY (COMPACT FORMAT)
+# ==================================================================================
+
+"""
+    print_params_summary(paramset::ParamSet; format_type::String="short")
+
+Pretty-print parameter values in compact format.
+
+# Arguments
+- `paramset::ParamSet`: Parameter set to display
+- `format_type::String`: Output format (default "short")
+  - "short": Compact `name: value [min, max]` format, one per line
+  - "long": Extended format with type, bounds, and tunability info
+
+# Example
+```julia
+print_params_summary(net.params)
+print_params_summary(net.params; format_type="long")
+```
+"""
+function print_params_summary(paramset::ParamSet; format_type::String="short")
+    if isempty(paramset.params)
+        println("[Parameters]")
+        println("  (empty)")
+        return
+    end
+    
+    println("[Parameters]")
+    
+    if format_type == "short"
+        for p in paramset.params
+            println("  $(p.name): $(p.default) [$(p.min), $(p.max)]")
+        end
+    else  # long format
+        for p in paramset.params
+            println("  $(p.name): $(p.default) [$(p.min), $(p.max)]")
+            println("    type: $(p.type), tunable: $(p.tunable)")
+        end
+    end
+end
+
+

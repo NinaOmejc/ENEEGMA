@@ -570,3 +570,52 @@ function Base.show(io::IO, ::MIME"text/plain", vs::VarSet)
     println(io, "VarSet with $(length(names)) vars")
     print(io, "  names: ", join(preview, ", "))
 end
+
+# -------------------------
+# Pretty printing summaries
+# -------------------------
+
+"""
+    print_vars_summary(varset::VarSet; format_type::String="short")
+
+Pretty-print variable initial values in compact format.
+
+# Arguments
+- `varset::VarSet`: Variable set to display
+- `format_type::String`: Output format (default "short")
+  - "short": Compact `name: [min, max]` format, one per line
+  - "long": Extended format with equation index, input/output flags, and parent details
+
+# Example
+```julia
+print_vars_summary(net.vars)
+print_vars_summary(net.vars; format_type="long")
+```
+"""
+function print_vars_summary(varset::VarSet; format_type::String="short")
+    # Filter to only StateVar since those have init values
+    state_vars = get_state_vars(varset)
+    
+    if isempty(state_vars.vars)
+        println("[Variables (Init Ranges)]")
+        println("  (no state variables)")
+        return
+    end
+    
+    println("[Variables (Init Ranges)]")
+    
+    if format_type == "short"
+        for v in state_vars.vars
+            if v isa StateVar
+                println("  $(v.base.name): [$(v.init_min), $(v.init_max)]")
+            end
+        end
+    else  # long format
+        for v in state_vars.vars
+            if v isa StateVar
+                println("  $(v.base.name): [$(v.init_min), $(v.init_max)]")
+                println("    eq_idx: $(v.base.eq_idx), gets_sensory: $(v.gets_sensory_input), sends_internode: $(v.sends_internode_output)")
+            end
+        end
+    end
+end

@@ -113,8 +113,8 @@ end
 
 # Example usage:
 
-using ENMEEG
-grammar_path = "D:\\Experiments\\ENMEEG-Lab\\grammars\\grammar_gs.cfg"
+using ENEEGMA
+grammar_path = "path/to/grammar_gs.cfg"  # Set the path to your grammar file
 g = load_grammar(grammar_path)
 
 terms = [
