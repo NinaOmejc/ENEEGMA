@@ -9,7 +9,7 @@
 
 ENEEGMA - Exploring Neural EEG Model Architectures - is a Julia package for constructing, simulating, and optimizing networks of neural population models. 
 
-
+![ENEEGMA workflow](ENEEGMA_workflow.png)
 
 It enables:
 
