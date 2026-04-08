@@ -11,7 +11,7 @@ using CSV
 using DataFrames
 using JSON
 
-function update_settings!(settings::ENMEEG.Settings, 
+function update_settings!(settings::Settings, 
                           combo::Tuple,
                           combo_keys::Vector{String})
 
@@ -32,7 +32,7 @@ function update_settings!(settings::ENMEEG.Settings,
         setfield!(obj, last, convert(field_T, val))
     end
 
-    # ENMEEG.normalize_fspb_ssvep_weights!(settings.optimization_settings.loss_settings; background_auto=true)
+    # normalize_fspb_ssvep_weights!(settings.optimization_settings.loss_settings; background_auto=true)
     return settings
 end
 
@@ -57,8 +57,8 @@ function _run_single_combo!(settings::Settings,
                             combo_idx::Int)
 
     os = settings.optimization_settings
-    ENMEEG.update_settings!(settings, combo, combo_keys)
-    # ENMEEG.normalize_fspb_ssvep_weights!(settings.optimization_settings.loss_settings; background_auto=true)
+    update_settings!(settings, combo, combo_keys)
+    # normalize_fspb_ssvep_weights!(settings.optimization_settings.loss_settings; background_auto=true)
     if settings.data_settings.task_type == "ssvep"
         settings.optimization_settings.loss_settings.weight_fspb = settings.optimization_settings.loss_settings.weight_background
         println(" Weight for ssvep: $(settings.optimization_settings.loss_settings.weight_ssvep)")
@@ -68,25 +68,25 @@ function _run_single_combo!(settings::Settings,
     flush(stdout)
     
     net = build_network(settings)
-    ENMEEG.set_all_params_tunable!(net.params)
+    set_all_params_tunable!(net.params)
 
-    decision_dim = ENMEEG.count_decision_variables(net, os)
-    ENMEEG.ensure_population_size!(os, decision_dim)
-    ENMEEG.ensure_sigma0!(os, decision_dim)
+    decision_dim = count_decision_variables(net, os)
+    ensure_population_size!(os, decision_dim)
+    ensure_sigma0!(os, decision_dim)
 
-    optsol, optlogger, setter, blocks = ENMEEG.optimize_network(
+    optsol, optlogger, setter, blocks = optimize_network(
         net, data, settings;
         hyperparam_combo=combo, hyperparam_idx=combo_idx, hyperparam_keys=combo_keys
     )
-    ENMEEG.save_optimization_results(
+    save_optimization_results(
         optsol, optlogger, setter, net, data, settings;
         blocks=blocks, hyperparam_combo=combo, hyperparam_idx=combo_idx, hyperparam_keys=combo_keys
     )
     return nothing
 end
 
-function count_decision_variables(net::ENMEEG.Network, os::OptimizationSettings)::Int
-    blocks = ENMEEG.prepare_optimization_blocks(net, os)
+function count_decision_variables(net::Network, os::OptimizationSettings)::Int
+    blocks = prepare_optimization_blocks(net, os)
     return length(blocks.tunable_params_symbols) + length(blocks.init_lb)
 end
 
@@ -113,14 +113,14 @@ function run_hyperparameter_sweep(settings::Union{Nothing, Settings},
     save_mode = sweep_settings.save_results
 
     println("\n--- RUNNING HYPERPARAMETER SWEEP ---\n")
-    combo_keys, combos = ENMEEG.build_sweep_combos(settings)
+    combo_keys, combos = build_sweep_combos(settings)
     total = length(combos)
 
     if combo_idx !== nothing
         vprint("\n[Hyperparameter Sweep $(combo_idx) / $(length(combos))]", level=1)
-        combo = ENMEEG._get_combo_at(combos, combo_idx)
+        combo = _get_combo_at(combos, combo_idx)
         vprint("Hyperparameter combination: $(combo)\n", level=1)
-        ENMEEG._run_single_combo!(settings, data, combo, combo_keys, combo_idx)
+        _run_single_combo!(settings, data, combo, combo_keys, combo_idx)
         return nothing
     end
 
@@ -133,7 +133,7 @@ function run_hyperparameter_sweep(settings::Union{Nothing, Settings},
         vprint("\n[Hyperparameter Sweep $(i) / $(length(combos))]", level=1)
         vprint("Hyperparameter combination: $(combo)\n", level=1)
 
-        combo = ENMEEG._get_combo_at(combos, i)
-        ENMEEG._run_single_combo!(settings, data, combo, combo_keys, i)
+        combo = _get_combo_at(combos, i)
+        _run_single_combo!(settings, data, combo, combo_keys, i)
     end
 end

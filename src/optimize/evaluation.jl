@@ -40,12 +40,12 @@ function simulate_and_extract(
     simulation_settings = settings.simulation_settings
     
     # Get solver and kwargs
-    solver = ENMEEG.get_solver(net.problem, simulation_settings)
-    solver_kwargs = ENMEEG.get_solver_kwargs(net.problem, simulation_settings)
+    solver = get_solver(net.problem, simulation_settings)
+    solver_kwargs = get_solver_kwargs(net.problem, simulation_settings)
     
     # Simulate
     try
-        sol = ENMEEG.simulate_problem(
+        sol = simulate_problem(
             net.problem;
             new_params=params,
             new_inits=inits,
@@ -61,7 +61,7 @@ function simulate_and_extract(
         end
         
         # Extract brain source
-        brain_source_idx = ENMEEG.get_brain_source_idx(net)
+        brain_source_idx = get_brain_source_idx(net)
         
         # Filter time points (skip transient period)
         tspan = simulation_settings.tspan
@@ -169,7 +169,7 @@ function evaluate_model(
     end
     
     # Compute PSD
-    freqs, model_psd = ENMEEG._compute_noisy_psd_avg(
+    freqs, model_psd = _compute_noisy_psd_avg(
         model_prediction,
         data_settings.fs,
         loss_settings
@@ -181,12 +181,12 @@ function evaluate_model(
         metric_value = try
             if metric_name == "loss"
                 # Use the configured loss function from settings
-                loss_function = ENMEEG.get_metric_function(settings.optimization_settings.loss)
+                loss_function = get_metric_function(settings.optimization_settings.loss)
                 loss_function(model_prediction, data, data_settings.fs, loss_settings)
             elseif metric_name == "r2"
-                ENMEEG.metric_r2(model_psd, data.powers)
+                metric_r2(model_psd, data.powers)
             elseif metric_name == "iae" || metric_name == "iaep" || metric_name == "iaeb"
-                iae_parts === nothing && (iae_parts = ENMEEG.iae_decomposed(model_psd, data.powers, freqs,
+                iae_parts === nothing && (iae_parts = iae_decomposed(model_psd, data.powers, freqs,
                                                                         data_settings.task_type, loss_settings))
                 metric_name == "iae"  ? iae_parts.full :
                 metric_name == "iaep" ? iae_parts.peak :
@@ -207,14 +207,14 @@ function evaluate_model(
                 f0 = loss_settings.ssvep_stim_freq_hz
                 H = loss_settings.ssvep_n_harmonics
                 bw = loss_settings.ssvep_bandwidth_hz
-                harmonic_mask = ENMEEG._harmonic_mask(freqs, f0, H, bw; fmin=loss_settings.fmin, fmax=loss_settings.fmax)
+                harmonic_mask = _harmonic_mask(freqs, f0, H, bw; fmin=loss_settings.fmin, fmax=loss_settings.fmax)
                 metric_maes(model_psd, data.powers, freqs, harmonic_mask)
             elseif metric_name == "maef"
                 # Weighted MAE that automatically switches between rest (maer) and SSVEP (maes)
                 metric_maef(model_psd, data, freqs, data_settings.task_type, loss_settings)
             else
                 # For any other metric name, try to get the function dynamically
-                metric_function = ENMEEG.get_metric_function(metric_name)
+                metric_function = get_metric_function(metric_name)
                 metric_function(model_prediction, data, data_settings.fs, loss_settings)
             end
         catch e
@@ -252,8 +252,8 @@ Reuses compute_peak_score and compute_background_score from losses.jl
 """
 function metric_maer(model_psd::Vector{Float64}, target_psd::Vector{Float64}, freqs::Vector{Float64}, peak_mask::AbstractVector{Bool})
     # Use existing helper functions from losses.jl
-    peak_score = ENMEEG.compute_peak_score(model_psd, target_psd, peak_mask)
-    background_score = ENMEEG.compute_background_score(model_psd, target_psd, peak_mask)
+    peak_score = compute_peak_score(model_psd, target_psd, peak_mask)
+    background_score = compute_background_score(model_psd, target_psd, peak_mask)
     
     # Weight peak 2x stronger than background (2:1 ratio)
     return 1.0 * peak_score + 0.5 * background_score
@@ -275,8 +275,8 @@ Reuses compute_peak_score and compute_background_score from losses.jl
 """
 function metric_maes(model_psd::Vector{Float64}, target_psd::Vector{Float64}, freqs::Vector{Float64}, harmonic_mask::AbstractVector{Bool})
     # Use existing helper functions from losses.jl
-    harmonic_score = ENMEEG.compute_peak_score(model_psd, target_psd, harmonic_mask)
-    background_score = ENMEEG.compute_background_score(model_psd, target_psd, harmonic_mask)
+    harmonic_score = compute_peak_score(model_psd, target_psd, harmonic_mask)
+    background_score = compute_background_score(model_psd, target_psd, harmonic_mask)
     
     # Weight harmonics 2x stronger than background (2:1 ratio)
     return 1.0 * harmonic_score + 0.5 * background_score
@@ -313,7 +313,7 @@ function metric_maef(model_psd::Vector{Float64}, data::TargetPSD, freqs::Vector{
         f0 = loss_settings.ssvep_stim_freq_hz
         H = loss_settings.ssvep_n_harmonics
         bw = loss_settings.ssvep_bandwidth_hz
-        harmonic_mask = ENMEEG._harmonic_mask(freqs, f0, H, bw; fmin=loss_settings.fmin, fmax=loss_settings.fmax)
+        harmonic_mask = _harmonic_mask(freqs, f0, H, bw; fmin=loss_settings.fmin, fmax=loss_settings.fmax)
         return metric_maes(model_psd, data.powers, freqs, harmonic_mask)
     else
         error("Unknown task_type: $(task_type). Expected 'rest' or 'ssvep'")
@@ -399,7 +399,7 @@ function iae_decomposed(a::Vector{Float64}, b::Vector{Float64},
         f0 = loss_settings.ssvep_stim_freq_hz
         H  = loss_settings.ssvep_n_harmonics
         bw = loss_settings.ssvep_bandwidth_hz
-        ENMEEG._harmonic_mask(freqs, f0, H, bw; fmin=loss_settings.fmin, fmax=loss_settings.fmax)
+        _harmonic_mask(freqs, f0, H, bw; fmin=loss_settings.fmin, fmax=loss_settings.fmax)
     else
         error("Unknown task_type: $task_type")
     end

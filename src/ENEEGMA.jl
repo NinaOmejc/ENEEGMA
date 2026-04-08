@@ -9,27 +9,9 @@ A Julia package for grammar-based sampling, construction, and optimization of br
 - **Simulation framework**: Solve coupled ODEs efficiently
 - **Parameter optimization**: Fit model parameters to real EEG data
 
-## Quick Start
-
-```julia
-using ENEEGMA
-
-# Create settings with defaults
-settings_dict = create_default_settings()
-
-# Sample a model from grammar
-grammar = load_grammar()
-model_name = sample_from_grammar(grammar)
-
-# Build and simulate network
-result = simulate_network(settings_dict)
-
-# Optimize parameters
-opt_result = optimize_network(settings_dict, target_data)
-```
-
 See `examples/` directory for working examples.
 """
+
 module ENEEGMA
 
 # --- Standard Packages ---
@@ -45,9 +27,8 @@ using DifferentialEquations
 using OrdinaryDiffEq
 
 # --- Optimization Packages ---
-using Optimization, OptimizationOptimJL
-using Evolutionary
-
+using Optimization, OptimizationOptimJL, OptimizationEvolutionary, Evolutionary
+    
 # --- Signal Processing ---
 using Statistics, Distributions, FFTW
 using Interpolations
@@ -62,6 +43,19 @@ const QUIET_SOLVER_LOGGER = Logging.SimpleLogger(stderr, Logging.Error)
 # --- Differential Equation Context ---
 @variables t
 D = Differential(t)
+
+# ============================================================================
+# GRAMMAR-BASED SAMPLING (included before types so RuleTree is available)
+# ============================================================================
+
+include("grammar/grammar.jl")
+include("grammar/grammar_utils.jl")
+
+export Grammar, GrammarRule
+export sample_from_grammar, export_grammar, save_grammar, load_grammar
+export sample_rule, sample_pop_connectivity, terminals2rules, save_parse_trees
+export list_rules, normalize_rule_groups!, ensure_rule_ids!, assign_rule_ids!
+export rule_id_map
 
 # ============================================================================
 # TYPE DEFINITIONS
@@ -81,7 +75,7 @@ export Population, InputDynamics, SensoryInput, InternodeInput, InterpopulationI
 export update_param_minmax!, update_param_values!, update_param_tunability!
 export get_param_minmax_values, get_param_default_values, get_param_tunability, get_param_type
 export sample_param_values, needs_tscale, MIN_PARAM_VAL, MAX_PARAM_VAL
-export print_params_summary
+export print_params_summary, set_all_params_tunable!
 
 # Variable management
 export StateVar, ExtraVar, Var, VarSet
@@ -124,19 +118,6 @@ export detrend_vector, detrend_df
 export normalize_spectrum, normalize_spectra
 
 # ============================================================================
-# GRAMMAR-BASED SAMPLING
-# ============================================================================
-
-include("grammar/grammar.jl")
-include("grammar/grammar_utils.jl")
-
-export Grammar, GrammarRule
-export sample_from_grammar, export_grammar, save_grammar, load_grammar
-export sample_rule, sample_pop_connectivity, terminals2rules
-export list_rules, normalize_rule_groups!, ensure_rule_ids!, assign_rule_ids!
-export rule_id_map
-
-# ============================================================================
 # MODEL BUILDING
 # ============================================================================
 
@@ -177,16 +158,17 @@ export solver_needs_dt, sol2df, save_params_and_inits, save_ts_data
 # OPTIMIZATION
 # ============================================================================
 
-include("optimize/target_preparation.jl")
+include("optimize/data_preparation.jl")
 include("optimize/losses.jl")
 include("optimize/optimization_utils.jl")
 include("optimize/reparametrization.jl")
 include("optimize/optimize_network.jl")
+include("optimize/evaluation.jl")
 
 export compute_loss, compute_loss_from_simulation
 export optimize_network, setup_optimization_problem
 export ObjectiveFunction
-export TargetPSD, prepare_target!, ReparamSpec
+export TargetPSD, prepare_data!, ReparamSpec
 export get_metric_function, get_loss_function
 export apply_subject_specific_peak_range!
 export detect_peak_windows, build_broad_peak_metadata

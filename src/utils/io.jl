@@ -4,15 +4,17 @@
 Load data from CSV file specified in DataSettings.
 
 # Arguments
-- `ds::DataSettings`: Data settings containing path and filename
+- `ds::DataSettings`: Data settings containing data_file path
 
 # Returns
 DataFrame with loaded data
 """
 function load_data(ds::DataSettings)
     # Validate inputs
-    data_file = joinpath(ds.data_path, ds.data_fname)
-    data = CSV.read(data_file, DataFrame)
+    isnothing(ds.data_file) && error("data_file not specified in DataSettings")
+    !isfile(ds.data_file) && error("Data file not found: $(ds.data_file)")
+    
+    data = CSV.read(ds.data_file, DataFrame)
     return data
 end
 
@@ -100,17 +102,19 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
     
     # Network settings
     ns = settings.network_settings
+    # Serialize node_models: convert RuleTree to string representation
+    node_models_serialized = [m isa String ? m : serialize_rule_tree(m) for m in ns.node_models]
     d["network_settings"] = Dict(
         "n_nodes" => ns.n_nodes,
         "node_names" => ns.node_names,
-        "node_models" => ns.node_models,
+        "node_models" => node_models_serialized,
         "node_coords" => ns.node_coords,
         "network_conn" => ns.network_conn,
         "network_delay" => ns.network_delay,
         "network_conn_funcs" => ns.network_conn_funcs,
         "sensory_input_conn" => ns.sensory_input_conn,
         "sensory_input_func" => ns.sensory_input_func,
-        "seed_sensory_input" => ns.seed_sensory_input,
+        "sensory_seed" => ns.sensory_seed,
         "eeg_output" => ns.eeg_output
     )
     
@@ -127,14 +131,11 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
     data_s = settings.data_settings
     d["data_settings"] = if data_s !== nothing
         Dict(
-            "data_path" => data_s.data_path,
-            "data_fname" => data_s.data_fname,
-            "fs" => data_s.fs,
-            "data_columns" => data_s.data_columns,
+            "data_file" => data_s.data_file,
             "target_channel" => data_s.target_channel,
             "task_type" => data_s.task_type,
-            "metadata_path" => data_s.metadata_path,
-            "metadata_file" => data_s.metadata_file
+            "fs" => data_s.fs,
+            "data_columns" => data_s.data_columns
         )
     else
         Dict()
@@ -151,7 +152,6 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
         "loss_abstol" => os.loss_abstol,
         "loss_reltol" => os.loss_reltol,
         "abs_target_loss" => os.abs_target_loss,
-        "component_fit" => os.component_fit,
         "param_range_level" => os.param_range_level,
         "save_optimization_history" => os.save_optimization_history,
         "save_all_optim_restarts_results" => os.save_all_optim_restarts_results,
@@ -176,7 +176,7 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
             "psd_noise_avg_reps" => ls.psd_noise_avg_reps,
             "sigma_meas" => ls.sigma_meas,
             "auto_initialize_sigma_meas" => ls.auto_initialize_sigma_meas,
-            "noise_seed" => ls.noise_seed,
+            "loss_noise_seed" => ls.loss_noise_seed,
             "peak_bandwidth_hz" => ls.peak_bandwidth_hz,
             "peak_prominence_db" => ls.peak_prominence_db,
             "max_peak_windows" => ls.max_peak_windows,
@@ -214,7 +214,7 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
             "n_samples" => samp_s.n_samples,
             "only_unique" => samp_s.only_unique,
             "max_resample_attempts" => samp_s.max_resample_attempts,
-            "seed" => samp_s.seed
+            "grammar_seed" => samp_s.grammar_seed
         )
     else
         Dict()
@@ -344,36 +344,77 @@ function print_section_short(section::String, settings_dict::Dict)
         println("\n[Network Settings]")
         println("  n_nodes: $(get(ns, "n_nodes", "N/A"))")
         println("  node_names: $(join(get(ns, "node_names", []), ", "))")
-        println("  node_models: $(join(get(ns, "node_models", []), ", "))")
-        
-        node_coords = get(ns, "node_coords", [])
-        if isempty(node_coords)
-            println("  node_coords: (empty)")
+        # Handle both String and RuleTree node models
+        node_models_raw = get(ns, "node_models", [])
+        node_models_display = if all(x -> x isa String for x in node_models_raw)
+            join(node_models_raw, ", ")
         else
-            println("  node_coords: $(node_coords)")
+            join([x isa String ? x : serialize_rule_tree(x) for x in node_models_raw], ", ")
+        end
+        println("  node_models: $(node_models_display)")
+        
+        # node_coords: Print each coordinate on separate line
+        node_coords = get(ns, "node_coords", [])
+        println("  node_coords:")
+        if isempty(node_coords)
+            println("    (empty)")
+        else
+            for (i, coord) in enumerate(node_coords)
+                println("    Node $i: $coord")
+            end
         end
         
+        # network_conn: Print matrix with rows
         conn = get(ns, "network_conn", [])
+        println("  network_conn:")
         if isempty(conn)
-            println("  network_conn: (empty)")
+            println("    (empty)")
+        elseif conn isa Vector
+            println("    $(conn)")
         else
             rows = length(conn)
             cols = (rows > 0 && conn[1] isa Vector) ? length(conn[1]) : 1
-            println("  network_conn: $(rows)×$(cols) matrix")
+            println("    $rows × $cols matrix")
+            for (i, row) in enumerate(conn)
+                println("      Row $i: $(row)")
+            end
         end
         
+        # network_delay: Print matrix with rows
         delay = get(ns, "network_delay", [])
+        println("  network_delay:")
         if isempty(delay)
-            println("  network_delay: (empty)")
+            println("    (empty)")
+        elseif delay isa Vector
+            println("    $(delay)")
         else
             rows = length(delay)
             cols = (rows > 0 && delay[1] isa Vector) ? length(delay[1]) : 1
-            println("  network_delay: $(rows)×$(cols) matrix")
+            println("    $rows × $cols matrix")
+            for (i, row) in enumerate(delay)
+                println("      Row $i: $(row)")
+            end
+        end
+        
+        # network_conn_funcs: Print matrix with rows
+        funcs = get(ns, "network_conn_funcs", [])
+        println("  network_conn_funcs:")
+        if isempty(funcs)
+            println("    (empty)")
+        elseif funcs isa Vector
+            println("    $(funcs)")
+        else
+            rows = length(funcs)
+            cols = (rows > 0 && funcs[1] isa Vector) ? length(funcs[1]) : 1
+            println("    $rows × $cols matrix")
+            for (i, row) in enumerate(funcs)
+                println("      Row $i: $(row)")
+            end
         end
         
         println("  sensory_input_conn: $(join(get(ns, "sensory_input_conn", []), ", "))")
         println("  sensory_input_func: $(get(ns, "sensory_input_func", "none"))")
-        println("  seed_sensory_input: $(get(ns, "seed_sensory_input", nothing))")
+        println("  sensory_seed: $(get(ns, "sensory_seed", nothing))")
         println("  eeg_output: $(get(ns, "eeg_output", "default"))")
     end
     
@@ -393,7 +434,7 @@ function print_section_short(section::String, settings_dict::Dict)
     if should_print("data_settings")
         ds = get(settings_dict, "data_settings", Dict())
         println("\n[Data Settings]")
-        println("  data_path: $(get(ds, "data_path", ""))")
+        println("  data_file: $(get(ds, "data_file", ""))")
         println("  target_channel: $(get(ds, "target_channel", "IC3"))")
         println("  task_type: $(get(ds, "task_type", nothing))")
         println("  fs: $(get(ds, "fs", nothing))")
@@ -407,7 +448,6 @@ function print_section_short(section::String, settings_dict::Dict)
         println("  abs_target_loss: $(get(os, "abs_target_loss", 0.01))")
         println("  reparametrize: $(get(os, "reparametrize", true))")
         println("  param_range_level: $(get(os, "param_range_level", "high"))")
-        println("  component_fit: $(get(os, "component_fit", "all"))")
         println("  n_restarts: $(get(os, "n_restarts", 1))")
         println("  maxiters: $(get(os, "maxiters", 2000))")
         println("  time_limit_minutes: $(get(os, "time_limit_minutes", 120))")
@@ -424,7 +464,7 @@ function print_section_short(section::String, settings_dict::Dict)
         println("  n_samples: $(get(samp, "n_samples", 10))")
         println("  only_unique: $(get(samp, "only_unique", true))")
         println("  max_resample_attempts: $(get(samp, "max_resample_attempts", 100))")
-        println("  seed: $(get(samp, "seed", nothing))")
+        println("  grammar_seed: $(get(samp, "grammar_seed", nothing))")
     end
 end
 
@@ -456,7 +496,14 @@ function print_section_long(section::String, settings_dict::Dict)
         println("  node_names            :: Vector   | Names of each node")
         println("    → $(join(get(ns, "node_names", []), ", "))")
         println("  node_models           :: Vector   | Model per node (Unknown=grammar-sampled)")
-        println("    → $(join(get(ns, "node_models", []), ", "))")
+        # Handle both String and RuleTree node models
+        node_models_raw = get(ns, "node_models", [])
+        node_models_display = if all(x -> x isa String for x in node_models_raw)
+            join(node_models_raw, ", ")
+        else
+            join([x isa String ? x : serialize_rule_tree(x) for x in node_models_raw], ", ")
+        end
+        println("    → $(node_models_display)")
         
         # node_coords: Print actual coordinates
         node_coords = get(ns, "node_coords", [])
@@ -521,8 +568,8 @@ function print_section_long(section::String, settings_dict::Dict)
         println("    → $(join(get(ns, "sensory_input_conn", []), ", "))")
         println("  sensory_input_func    :: String   | Input dynamics function")
         println("    → $(get(ns, "sensory_input_func", "none"))")
-        println("  seed_sensory_input    :: Int?     | Seed for input randomization")
-        println("    → $(get(ns, "seed_sensory_input", nothing))")
+        println("  sensory_seed      :: Int?     | Seed for input randomization")
+        println("    → $(get(ns, "sensory_seed", nothing))")
         println("  eeg_output            :: String   | EEG recording specification")
         println("    → $(get(ns, "eeg_output", "default"))")
     end
@@ -563,8 +610,6 @@ function print_section_long(section::String, settings_dict::Dict)
         println("    → $(get(os, "reparametrize", true))")
         println("  param_range_level     :: String   | Parameter range level (high/medium/low)")
         println("    → $(get(os, "param_range_level", "high"))")
-        println("  component_fit         :: String   | Component fit target (all, rest, background, ssvep, full)")
-        println("    → $(get(os, "component_fit", "all"))")
         println("  n_restarts            :: Int      | Number of optimization restarts")
         println("    → $(get(os, "n_restarts", 1))")
         println("  maxiters              :: Int      | Maximum iterations per restart")
@@ -611,7 +656,7 @@ function print_section_long(section::String, settings_dict::Dict)
         println("    noise_settings")
         println("      → sigma_meas      → $(get(ls, "sigma_meas", 0.0))")
         println("      → auto_initialize → $(get(ls, "auto_initialize_sigma_meas", true))")
-        println("      → seed            → $(get(ls, "noise_seed", nothing))")
+        println("      → seed            → $(get(ls, "loss_noise_seed", nothing))")
         println("    ssvep_settings")
         println("      → enabled         → $(get(ls, "ssvep_enabled", true))")
         println("      → stim_freq       → $(get(ls, "ssvep_stim_freq_hz", 5.0)) Hz")
@@ -642,8 +687,8 @@ function print_section_long(section::String, settings_dict::Dict)
     if should_print("data_settings")
         ds = get(settings_dict, "data_settings", Dict())
         println("\n[Data Settings]")
-        println("  data_path             :: String   | Path to data directory")
-        println("    → $(get(ds, "data_path", ""))")
+        println("  data_file             :: String   | Path to data CSV file")
+        println("    → $(get(ds, "data_file", ""))")
         println("  target_channel        :: String   | Channel/component to fit")
         println("    → $(get(ds, "target_channel", "IC3"))")
         println("  task_type             :: String?  | Type of task (optional)")
@@ -663,8 +708,8 @@ function print_section_long(section::String, settings_dict::Dict)
         println("    → $(get(samp, "only_unique", true))")
         println("  max_resample_attempts :: Int      | Max attempts to resample for uniqueness")
         println("    → $(get(samp, "max_resample_attempts", 100))")
-        println("  seed                  :: Int?     | Random seed for sampling (nothing=random)")
-        println("    → $(get(samp, "seed", nothing))")
+        println("  grammar_seed          :: Int?     | Random seed for sampling (nothing=random)")
+        println("    → $(get(samp, "grammar_seed", nothing))")
     end
 end
 
@@ -730,7 +775,6 @@ function load_settings_file(settings_path::String)::Settings
     set_verbose(s.general_settings.verbosity_level) # Set global verbosity level based on settings
 
     print_settings_summary(s; section="network_settings")
-    vprint("--- SETTINGS LOADED for $(s.general_settings.exp_name)")
     flush(stdout)
 
     return s

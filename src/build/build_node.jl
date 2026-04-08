@@ -10,7 +10,15 @@ function build_nodes!(net::Network)::Network
     for (node_id, node_model) in enumerate(netsett.node_models)
         node = Node(node_id, netsett.node_names[node_id], node_model; node_coordinates=netsett.node_coords[node_id])
 
-        if any(occursin(node_model, known_node) for known_node in known_node_models)
+        # Convert RuleTree to string representation for model checking
+        model_str = if node_model isa String
+            node_model
+        else
+            # RuleTree: will be handled by configure_node_model!
+            serialize_rule_tree(node_model)
+        end
+        
+        if any(occursin(model_str, known_node) for known_node in known_node_models)
             pops, node = get_known_node_model_info!(node)
         else
             pops, node = configure_node_model!(node, sampsett)
@@ -214,14 +222,20 @@ end
 
 function configure_node_model!(node::Node, sampsett::SamplingSettings)::Tuple{Vector{Population}, Node}
     
-    # Load grammar
-    fname_grammar = joinpath(sampsett.path_grammar, sampsett.fname_grammar)
-    grammar = load_grammar(fname_grammar)
+    # Load grammar from the grammar_file path (already complete path)
+    grammar = load_grammar(sampsett.grammar_file)
     ensure_rule_ids!(grammar)
     # list_rules(grammar)
     
+    # Convert RuleTree model to string if necessary
+    model_str = if node.build_setts.model isa String
+        node.build_setts.model
+    else
+        serialize_rule_tree(node.build_setts.model)
+    end
+    
     # Parse rule ids into parsed rules
-    model_rule_ids = [parse(Int, m.match) for m in eachmatch(r"\d+", node.build_setts.model)]
+    model_rule_ids = [parse(Int, m.match) for m in eachmatch(r"\d+", model_str)]
     parsed_rules = Vector{ParsedRule}(undef, length(model_rule_ids))
     for (rule_pos, rule_id) in enumerate(model_rule_ids)
         chosen_rule = if rule_id == 0
@@ -524,7 +538,13 @@ function print_network_nodes_info(net::Network)
     vprint("\nNetwork $(net.name): $(total_nodes) nodes, $(total_pops) populations"; level=2)
     for node in net.nodes
         node_states = max(length(node.vars.vars), sum(max(pop.n_state_vars, length(pop.dynamics)) for pop in node.populations))
-        vprint("  • $(node.name) ($(node.build_setts.model)): pops=$(node.n_pops), states=$(node_states)"; level=2)
+        # Convert RuleTree to string for display if necessary
+        model_display = if node.build_setts.model isa String
+            node.build_setts.model
+        else
+            serialize_rule_tree(node.build_setts.model)
+        end
+        vprint("  • $(node.name) ($model_display): pops=$(node.n_pops), states=$(node_states)"; level=2)
         for pop in node.populations
             state_count = pop.n_state_vars > 0 ? pop.n_state_vars : length(pop.dynamics)
             input_spec = isempty(pop.build_setts.input_dynamics_spec) ? "none" : join(unique(pop.build_setts.input_dynamics_spec), "/")

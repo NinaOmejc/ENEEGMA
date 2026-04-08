@@ -1180,7 +1180,7 @@ function print_params_summary(paramset::ParamSet; format_type::String="short")
         return
     end
     
-    println("[Parameters]")
+    println("[Parameters][Defaults and Ranges]")
     
     if format_type == "short"
         for p in paramset.params

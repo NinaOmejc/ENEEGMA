@@ -1,4 +1,5 @@
 using FFTW
+using DSP
 
 """
     SpectralTransforms Module
@@ -63,7 +64,7 @@ mutable struct SpectrumWorkspace
     scratch::Vector{Float64}
 end
 
-function WelchWorkspace(nperseg::Int, nfft::Int, fs::Real; window_type::Function=hanning, overlap::Float64=0.5)
+function WelchWorkspace(nperseg::Int, nfft::Int, fs::Real; window_type::Function=DSP.hanning, overlap::Float64=0.5)
     overlap = clamp(overlap, 0.0, 0.99)
     nperseg <= 0 && error("nperseg must be positive")
     nfft <= 0 && error("nfft must be positive")
@@ -83,7 +84,7 @@ function WelchWorkspace(nperseg::Int, nfft::Int, fs::Real; window_type::Function
                           nperseg, nfft, Float64(fs), overlap, hop, window_norm)
 end
 
-function SpectrumWorkspace(nperseg::Int, nfft::Int, fs::Real; window_type::Function=hanning, overlap::Float64=0.5)
+function SpectrumWorkspace(nperseg::Int, nfft::Int, fs::Real; window_type::Function=DSP.hanning, overlap::Float64=0.5)
     welch = WelchWorkspace(nperseg, nfft, fs; window_type=window_type, overlap=overlap)
     scratch = zeros(Float64, length(welch.psd_full))
     return SpectrumWorkspace(welch, scratch)
@@ -369,7 +370,7 @@ function compute_stft(data::Vector{Float64}, fs::Float64;
     
     # Calculate hop size and prepare windows
     hop_size = round(Int, window_size * (1 - overlap))
-    window_func = hanning(window_size)
+    window_func = DSP.hanning(window_size)
     
     # Calculate the number of frames
     n_frames = 1 + div(length(data) - window_size, hop_size)
@@ -430,7 +431,7 @@ end
 
 
 function compute_welch_pow_spectrum(data::AbstractVector{<:Real}, fs::Real;
-                                    window_type::Function=hanning,
+                                    window_type::Function=DSP.hanning,
                                     xlims::Union{Tuple{Float64, Float64}, Nothing}=nothing,
                                     nperseg::Union{Int, Nothing}=nothing,
                                     nfft::Union{Int, Nothing}=nothing,
@@ -448,7 +449,7 @@ end
 
 """
     compute_welch_pow_spectra(df::DataFrame, fs::Float64; 
-                              signal_cols=nothing, window_type=hanning, xlims=nothing)
+                              signal_cols=nothing, window_type=DSP.hanning, xlims=nothing)
 
 Compute Welch power spectra for multiple signals in a DataFrame. Welch's method returns 
 power spectral density (PSD) — typically in units of V²/Hz (or arbitrary units if 
@@ -465,7 +466,7 @@ uncalibrated).
 - DataFrame with columns: signal, frequency, power
 """
 function compute_welch_pow_spectra(df::DataFrame, fs::Float64; 
-                                   signal_cols=nothing, window_type=hanning, xlims=nothing)
+                                   signal_cols=nothing, window_type=DSP.hanning, xlims=nothing)
     
     # Get signal columns (exclude time column if not specified)
     if signal_cols === nothing
@@ -745,7 +746,7 @@ end
 compute_preprocessed_welch_psd(
         data::Vector{Float64}, fs::Real;
         xlims::Union{Tuple{Float64,Float64},Nothing}=nothing,
-        window_type::Function=hanning,
+        window_type::Function=DSP.hanning,
         nfft::Union{Int,Nothing}=2048,
         window_size::Int=11,
         poly_order::Int=3,
@@ -765,7 +766,7 @@ Returns `(freqs, smoothed_log_power)`.
 function compute_preprocessed_welch_psd(
     data::AbstractVector{<:Real},
     fs::Real;
-    window_type::Function=hanning,
+    window_type::Function=DSP.hanning,
     xlims::Union{Tuple{Float64,Float64},Nothing}=(1., 48.),
     nfft::Union{Int,Nothing}=2048,
     window_size::Int=5,
@@ -848,14 +849,14 @@ function _compute_noisy_psd_avg(model_prediction::AbstractVector{<:Real},
         return compute_preprocessed_welch_psd(model_prediction, fs; loss_settings=loss_settings)
     end
 
-    seed_backup = loss_settings.noise_seed
+    seed_backup = loss_settings.loss_noise_seed
     freqs = Float64[]
     accum = Float64[]
     for rep in 1:reps
         if seed_backup === nothing
-            loss_settings.noise_seed = nothing
+            loss_settings.loss_noise_seed = nothing
         else
-            loss_settings.noise_seed = Int(seed_backup) + rep - 1
+            loss_settings.loss_noise_seed = Int(seed_backup) + rep - 1
         end
         noisy = Float64.(model_prediction)
         apply_measurement_noise!(noisy, sigma_effective, loss_settings)
@@ -866,7 +867,7 @@ function _compute_noisy_psd_avg(model_prediction::AbstractVector{<:Real},
         end
         accum .+= powers_rep
     end
-    loss_settings.noise_seed = seed_backup
+    loss_settings.loss_noise_seed = seed_backup
     return freqs, accum ./ reps
 end
 

@@ -18,12 +18,12 @@ function optimize_network(
     tspan === nothing && error("SimulationSettings.tspan must be specified for optimization.")
 
     # get some optimization components
-    solver = ENMEEG.get_solver(net.problem, ss)
-    solver_kwargs = ENMEEG.get_solver_kwargs(net.problem, ss)
-    loss_fun = ENMEEG.get_loss_function(os.loss)
-    optimizer = ENMEEG.get_optimizer(os)
+    solver = get_solver(net.problem, ss)
+    solver_kwargs = get_solver_kwargs(net.problem, ss)
+    loss_fun = get_loss_function(os.loss)
+    optimizer = get_optimizer(os)
     
-    blocks = ENMEEG.prepare_optimization_blocks(net, os)
+    blocks = prepare_optimization_blocks(net, os)
     tunable_params_symbols = blocks.tunable_params_symbols
     tunable_params_lb = blocks.tunable_params_lb
     tunable_params_ub = blocks.tunable_params_ub
@@ -49,7 +49,7 @@ function optimize_network(
 
     # create setter function for updating NamedTuple of **all params** (not just tunables) inside Problem. Nothing to do with inits here.
     setter = make_namedtuple_setter(Tuple(tunable_params_symbols))
-    brain_source_idx = ENMEEG.get_brain_source_idx(net)
+    brain_source_idx = get_brain_source_idx(net)
 
     args = (
         prob=net.problem, data=data, setter=setter,
@@ -68,7 +68,7 @@ function optimize_network(
 
         start_time = now()
         
-        optsol, runlog, failure_reason = ENMEEG.singlerun_optimization(irestart, optfun, optimizer, args, 
+        optsol, runlog, failure_reason = singlerun_optimization(irestart, optfun, optimizer, args, 
             tunable_params_symbols, tunables_lb, tunables_ub,
             os, start_time, net, param_spec, init_spec, initial_values_native, inits_lb, inits_ub
         )
@@ -84,7 +84,7 @@ function optimize_network(
         end
         
         if settings.optimization_settings.save_all_optim_restarts_results && optsol !== nothing
-            ENMEEG.save_optimization_results(optsol, runlog, setter, net, data, settings; blocks=blocks, restart_idx=irestart,
+            save_optimization_results(optsol, runlog, setter, net, data, settings; blocks=blocks, restart_idx=irestart,
                                               hyperparam_combo=hyperparam_combo, hyperparam_idx=hyperparam_idx, hyperparam_keys=hyperparam_keys)
         end
 
@@ -133,14 +133,14 @@ function singlerun_optimization(
 
     optlogger = OptLogEntry[]
     failure_reason = nothing
-    callback_fun = ENMEEG.create_callback(start_time, irestart, optlogger, os;
+    callback_fun = create_callback(start_time, irestart, optlogger, os;
                                    param_spec=param_spec,
                                    init_spec=init_spec)
 
     # Sample fresh parameter and initial values for this restart
     tunable_params_guess = sample_param_values(net.params; p_subset=tunable_params_symbols, return_type="vector")
     tunable_params_guess = map_to_shared_space(tunable_params_guess, param_spec)
-    initial_values_guess_native = ENMEEG.sample_inits(net.vars; return_type="vector", sort=true)
+    initial_values_guess_native = sample_inits(net.vars; return_type="vector", sort=true)
     initial_values_guess = map_to_shared_space(initial_values_guess_native, init_spec)
     tunables_guess = vcat(tunable_params_guess, initial_values_guess)
 

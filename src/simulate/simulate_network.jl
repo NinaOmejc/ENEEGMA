@@ -281,9 +281,21 @@ function save_params_and_inits(inits::NamedTuple, net::Network, gs::GeneralSetti
         push!(df, (name="sensory_input_func", value=net.sensory_input_str))
     end
 
+    # Include candidate name if present
+    fname_suffix = if !isnothing(gs.candidate_name)
+        "_$(gs.candidate_name)"
+    else
+        ""
+    end
+    
     # Generate filename and save; Create directory if it doesn't exist
-    mkpath(gs.path_out)
-    filename = joinpath(gs.path_out, "$(net.name)_params_inits_run$(irun).csv")
+    # Output directory: path_out / exp_name / [candidate_NAME/]
+    output_dir = joinpath(gs.path_out, gs.exp_name)
+    if !isnothing(gs.candidate_name)
+        output_dir = joinpath(output_dir, "candidate_$(gs.candidate_name)")
+    end
+    mkpath(output_dir)
+    filename = joinpath(output_dir, "$(net.name)$(fname_suffix)_params_inits_run$(irun).csv")
     CSV.write(filename, df)
     return nothing
     
@@ -291,8 +303,20 @@ end
 
 
 function save_ts_data(df::DataFrame, net::Network, gs::GeneralSettings, irun::Int64=1)::Nothing
+    # Include candidate name if present
+    fname_suffix = if !isnothing(gs.candidate_name)
+        "_$(gs.candidate_name)"
+    else
+        ""
+    end
     
-    filename = joinpath(gs.path_out, "$(net.name)_ts_data_run$(irun).csv")
+    # Output directory: path_out / exp_name / [candidate_NAME/]
+    output_dir = joinpath(gs.path_out, gs.exp_name)
+    if !isnothing(gs.candidate_name)
+        output_dir = joinpath(output_dir, "candidate_$(gs.candidate_name)")
+    end
+    mkpath(output_dir)
+    filename = joinpath(output_dir, "$(net.name)$(fname_suffix)_ts_data_run$(irun).csv")
     CSV.write(filename, df)
 
     return nothing

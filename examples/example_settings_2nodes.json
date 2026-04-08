@@ -1,16 +1,13 @@
 {
   "general_settings": {
-    "network_name": "ExampleNetwork",
+    "exp_name": "ExampleNetwork2",
     "path_out": "./results",
     "verbosity_level": 1,
     "seed": null,
     "make_plots": false,
-    "save_model_formats": [
-      "tex"
-    ]
+    "save_model_formats": ["tex"]
   },
   "network_settings": {
-    "network_name": "ExampleNetwork",
     "n_nodes": 2,
     "node_names": [
       "N1",
@@ -21,24 +18,16 @@
       "Unknown"
     ],
     "node_coords": [
-      [
-        0.0,
-        10.0,
-        0.0
-      ],
-      [
-        0.0,
-        20.0,
-        0.0
-      ]
+      [0.0, 10.0, 0.0],
+      [0.0, 20.0, 0.0]      
     ],
     "network_conn": [
       [0.0, 0.1],
       [0.1, 0.0]
     ],
     "network_delay": [
-      [0.01, 0.01],
-      [0.01, 0.01]
+      [0.0, 0.1],
+      [0.1, 0.0]
     ],
     "network_conn_funcs": [],
     "sensory_input_conn": [
@@ -46,7 +35,7 @@
       0
     ],
     "sensory_input_func": "",
-    "seed_sensory_input": null,
+    "sensory_seed": null,
     "eeg_output": ""
   },
   "simulation_settings": {
@@ -66,24 +55,26 @@
   },
   "sampling_settings": {
     "grammar_file": "",
-    "sampling_method": "uniform",
-    "random_seed": null
+    "n_samples": 100,
+    "only_unique": true,
+    "grammar_seed": null
   },
   "data_settings": {
     "data_path": "",
-    "target_channel": "IC3",
-    "task_type": null
+    "data_fname": "",
+    "fs": 256.0,
+    "target_channel": "IC1"
   },
   "optimization_settings": {
     "method": "CMAES",
     "loss_settings": {
-      "loss_fn": "psd_iae",
-      "freq_bands": [
+      "loss": "psd_iae",
+      "fbands": [
         1.0,
         50.0
       ],
       "sigma_meas": 0.0,
-      "noise_seed": null,
+      "loss_noise_seed": null,
       "psd_window_size": 5,
       "psd_poly_order": 2,
       "psd_rel_eps": 1e-12,

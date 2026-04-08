@@ -36,6 +36,7 @@ mutable struct GeneralSettings <: AbstractSettings
     make_plots::Bool
     verbosity_level::Int64
     seed::Union{Int, Nothing}
+    candidate_name::Union{String, Nothing}
 
     function GeneralSettings(dict::Dict{String, Any})::GeneralSettings
 
@@ -81,12 +82,20 @@ mutable struct GeneralSettings <: AbstractSettings
         verbosity_level = _coerce_level(raw_level, 1)
         gendict["verbosity_level"] = verbosity_level
 
+        candidate_name = get(gendict, "candidate_name", nothing)
+        if candidate_name === nothing || candidate_name == ""
+            candidate_name = nothing
+        else
+            candidate_name = String(candidate_name)
+        end
+
         new(exp_name,
             path_out,
             Vector{String}(get(gendict, "save_model_formats", ["tex"])),
             Bool(get(gendict, "make_plots", false)),
             verbosity_level,
-            seed
+            seed,
+            candidate_name
         )
     end
 end
@@ -94,14 +103,14 @@ end
 mutable struct NetworkSettings <: AbstractSettings
     n_nodes::Int64
     node_names::Vector{String}
-    node_models::Vector{String}
+    node_models::Vector{Union{String, RuleTree}}
     node_coords::Vector{Tuple{Float64, Float64, Float64}}
     network_conn::Matrix{Float64}
     network_conn_funcs::Matrix{String}
     network_delay::Matrix{Float64}
     sensory_input_conn::Vector{Int64}
     sensory_input_func::String
-    seed_sensory_input::Union{Int, Nothing}
+    sensory_seed::Union{Int, Nothing}
     eeg_output::String
 
     # Constructor with validation built-in
@@ -123,12 +132,18 @@ mutable struct NetworkSettings <: AbstractSettings
             nn
         end
         
-        # Get or create node models - must match n_nodes
+        # Get or create node models - must match n_nodes (supports both String and RuleTree)
         node_models_raw = get(netsett, "node_models", nothing)
         node_models = if isnothing(node_models_raw) || isempty(node_models_raw)
             fill("WC", n_nodes)
         else
-            nm = Vector{String}(node_models_raw)
+            # Accept both strings and RuleTree objects
+            nm = if all(x -> x isa String for x in node_models_raw)
+                Vector{String}(node_models_raw)
+            else
+                # Mixed or all RuleTree: keep as Vector{Union{String, RuleTree}}
+                Vector{Union{String, RuleTree}}(node_models_raw)
+            end
             length(nm) == n_nodes || throw(ArgumentError("node_models length ($(length(nm))) must match n_nodes ($n_nodes)"))
             nm
         end
@@ -203,11 +218,11 @@ mutable struct NetworkSettings <: AbstractSettings
         sensory_input_func = String(get(netsett, "sensory_input_func", "rand(Normal(0.0, 1.0))"))
 
         # Get seed for sensory input
-        seed_sensory_input = get(netsett, "seed_sensory_input", nothing)
-        if seed_sensory_input === nothing || seed_sensory_input == ""
-            seed_sensory_input = nothing
+        sensory_seed = get(netsett, "sensory_seed", nothing)
+        if sensory_seed === nothing || sensory_seed == ""
+            sensory_seed = nothing
         else
-            seed_sensory_input = Int(seed_sensory_input)
+            sensory_seed = Int(sensory_seed)
         end
 
         # Get EEG output function
@@ -223,7 +238,7 @@ mutable struct NetworkSettings <: AbstractSettings
             network_delay,
             sensory_input_conn,
             sensory_input_func,
-            seed_sensory_input,
+            sensory_seed,
             eeg_output
         )
     end
@@ -234,7 +249,7 @@ mutable struct SamplingSettings <: AbstractSettings
     n_samples::Int        
     only_unique::Bool
     max_resample_attempts::Int
-    seed::Union{Int, Nothing}
+    grammar_seed::Union{Int, Nothing}
 
     function SamplingSettings(dict::Dict{String, Any})::SamplingSettings
         sampdict = get(dict, "sampling_settings", Dict{String, Any}())
@@ -250,12 +265,12 @@ mutable struct SamplingSettings <: AbstractSettings
             joinpath(path, fname)
         end
         
-        # Parse seed - allow null/empty to mean "random"
-        seed_raw = get(sampdict, "seed", nothing)
-        seed = if seed_raw === nothing || seed_raw == ""
+        # Parse grammar seed - allow null/empty to mean "random"
+        grammar_seed_raw = get(sampdict, "grammar_seed", nothing)
+        grammar_seed = if grammar_seed_raw === nothing || grammar_seed_raw == ""
             nothing
         else
-            Int(seed_raw)
+            Int(grammar_seed_raw)
         end
         
         new(
@@ -263,16 +278,13 @@ mutable struct SamplingSettings <: AbstractSettings
             Int(get(   sampdict, "n_samples", 10)),
             Bool(get(  sampdict, "only_unique", true)),
             Int(get(   sampdict, "max_resample_attempts", 100)),
-            seed
+            grammar_seed
         )
     end
 end
 
 
 mutable struct SimulationSettings <: AbstractSettings
-    new_params_map_subset::OrderedDict{String, Float64}
-    new_params_range_subset::OrderedDict{String, Tuple{Float64, Float64}}
-    new_inits_map_subset::OrderedDict{String, Float64}
     tspan::Tuple{Float64, Float64}
     n_runs::Int64
     dt::Union{Float64, Nothing}
@@ -281,43 +293,13 @@ mutable struct SimulationSettings <: AbstractSettings
     reltol::Union{Float64, Nothing}
     solver::Union{String, Nothing}
     maxiters::Union{Int, Nothing}
-    save_everystep::Bool
-    force_resimulation::Bool
-    verbose::Bool
     
     # Constructor with type conversion and default values
     function SimulationSettings(dict::Dict{String, Any})::SimulationSettings
 
         simdict = get(dict, "simulation_settings", Dict{String, Any}())
 
-        # Process parameter maps
-        params_map = OrderedDict{String, Float64}()
-        for (key, value) in get(simdict, "new_params_map_subset", Dict())
-            params_map[key] = Float64(value)
-        end
-
-        # Process parameter ranges
-        params_range = OrderedDict{String, Tuple{Float64, Float64}}()
-        for (key, value) in get(simdict, "new_params_range_subset", Dict())
-            if value isa Vector && length(value) >= 2
-                params_range[key] = (Float64(value[1]), Float64(value[2]))
-            elseif value isa Tuple && length(value) == 2
-                params_range[key] = (Float64(value[1]), Float64(value[2]))
-            else
-                @warn "Skipping invalid range for $key: $value. Expected [min, max] or (min, max)."
-            end
-        end
-
-        # Process initial values
-        inits_map = OrderedDict{String, Float64}()
-        for (key, value) in get(simdict, "new_inits_map_subset", Dict())
-            inits_map[key] = Float64(value)
-        end
-
         new(
-            params_map,
-            params_range,
-            inits_map,
             Tuple{Float64, Float64}(get(simdict, "tspan", (0.0, 10.0))),
             Int64(get(simdict, "n_runs", 1)),
             Float64(get(simdict, "dt", 0.001)),
@@ -325,10 +307,7 @@ mutable struct SimulationSettings <: AbstractSettings
             get(simdict, "abstol", nothing),
             get(simdict, "reltol", nothing),
             String(get(simdict, "solver", "Tsit5")),
-            Float64(get(simdict, "maxiters", -1)),
-            Bool(get(simdict, "save_everystep", false)),
-            Bool(get(simdict, "force_resimulation", false)),
-            Bool(get(simdict, "verbose", false))
+            get(simdict, "maxiters", nothing)
         )
     end
 end
@@ -564,12 +543,12 @@ function normalize_loss_settings_dict!(lossdict::Dict{String, Any})
             lossdict["sigma_meas"] = Float64(noise["sigma_meas"])
         end
         haskey(noise, "auto_initialize") && (lossdict["auto_initialize_sigma_meas"] = _losssettings_as_bool(noise["auto_initialize"], true))
-        if haskey(noise, "noise_seed")
-            raw_seed = noise["noise_seed"]
+        if haskey(noise, "loss_noise_seed")
+            raw_seed = noise["loss_noise_seed"]
             if raw_seed === nothing || raw_seed == ""
-                lossdict["noise_seed"] = nothing
+                lossdict["loss_noise_seed"] = nothing
             else
-                lossdict["noise_seed"] = _coerce_settings_idx_value(raw_seed)
+                lossdict["loss_noise_seed"] = _coerce_settings_idx_value(raw_seed)
             end
         end
     end
@@ -618,7 +597,7 @@ mutable struct LossSettings <: AbstractSettings
     psd_noise_avg_reps::Int
     sigma_meas::Float64
     auto_initialize_sigma_meas::Bool
-    noise_seed::Union{Nothing, Int}
+    loss_noise_seed::Union{Nothing, Int}
     peak_bandwidth_hz::Float64
     peak_prominence_db::Float64
     max_peak_windows::Int
@@ -648,7 +627,7 @@ mutable struct LossSettings <: AbstractSettings
         dict = cooked
         fmin = Float64(get(dict, "fmin", 1.0))
         fmax = Float64(get(dict, "fmax", 48.0))
-        fbands = Vector{String}(get(dict, "fbands", ["delta", "theta", "alpha", "betalow", "betahigh"]))
+        fbands = string.(get(dict, "fbands", ["delta", "theta", "alpha", "betalow", "betahigh"]))
         psd_window_size = Int(get(dict, "psd_window_size", 5))
         psd_poly_order = Int(get(dict, "psd_poly_order", 2))
         psd_rel_eps = Float64(get(dict, "psd_rel_eps", 1e-12))
@@ -665,8 +644,8 @@ mutable struct LossSettings <: AbstractSettings
         auto_initialize_sigma = _losssettings_as_bool(get(dict, "auto_initialize_sigma_meas", true), true)
         sigma_meas = max(Float64(get(dict, "sigma_meas", 0.0)), 0.0)
 
-        noise_seed_val = get(dict, "noise_seed", nothing)
-        noise_seed = noise_seed_val === nothing ? nothing : _coerce_settings_idx_value(noise_seed_val)
+        loss_noise_seed_val = get(dict, "loss_noise_seed", nothing)
+        loss_noise_seed = loss_noise_seed_val === nothing ? nothing : _coerce_settings_idx_value(loss_noise_seed_val)
 
         peak_bandwidth_hz = max(Float64(get(dict, "peak_bandwidth_hz", 6.0)), eps())
         peak_prominence_db = Float64(get(dict, "peak_prominence_db", 0.5))
@@ -705,7 +684,7 @@ mutable struct LossSettings <: AbstractSettings
             psd_welch_nperseg,
             psd_welch_nfft,
             psd_noise_avg_reps,
-            sigma_meas, auto_initialize_sigma, noise_seed,
+            sigma_meas, auto_initialize_sigma, loss_noise_seed,
             peak_bandwidth_hz, peak_prominence_db, max_peak_windows,
             weight_background, fspb_enabled, peak_detection_empty,
             peak_baseline_window_hz, peak_baseline_quantile, peak_min_frequency_hz, peak_max_frequency_hz,
@@ -869,9 +848,6 @@ Settings for network parameter optimization.
 - `loss::String`: Loss function specification
 - `n_restarts::Int64`: Number of optimization restarts
 - Additional fields for loss configuration, reparameterization, and hyperparameter sweeping
-
-Note: Previous optimization methods (DE, LBFGS, ADAM_NOGRAD) are no longer supported.
-Only CMAES (Covariance Matrix Adaptation Evolution Strategy) is available.
 """
 mutable struct OptimizationSettings <: AbstractSettings
     method::String
@@ -879,7 +855,6 @@ mutable struct OptimizationSettings <: AbstractSettings
     loss_abstol::Float64
     loss_reltol::Float64
     abs_target_loss::Float64
-    component_fit::String
     param_range_level::String
     empirical_param_table_path::Union{String, Nothing}
     empirical_lb_col::String
@@ -924,7 +899,6 @@ mutable struct OptimizationSettings <: AbstractSettings
         loss_abstol = Float64(get(loss_section, "loss_abstol", get(optdict, "loss_abstol", get(optdict, "loss_limit", 1e-5))))
         loss_reltol = Float64(get(loss_section, "loss_reltol", get(optdict, "loss_reltol", get(optdict, "rel_diff_convergence", 1e-5))))
         abs_target_loss = max(Float64(get(optdict, "abs_target_loss", 0.01)), 0.0)
-        component_fit = lowercase(String(get(optdict, "component_fit", "all")))
         raw_reparam = get(optdict, "reparametrize", true)
         raw_strategy = get(optdict, "reparam_strategy", nothing)
         reparam_flag, reparam_strategy = _parse_reparam_inputs(raw_reparam, raw_strategy)
@@ -979,7 +953,6 @@ mutable struct OptimizationSettings <: AbstractSettings
             loss_abstol,
             loss_reltol,
             abs_target_loss,
-            component_fit,
             param_range_level,
             empirical_param_table_path,
             empirical_lb_col,
@@ -1136,26 +1109,44 @@ Configuration for data input and metadata.
 Note: DataSettings can be `nothing` if no data is used (e.g., for pure network building).
 """
 mutable struct DataSettings <: AbstractSettings
-    data_path::Union{String, Nothing}
-    data_fname::Union{String, Nothing}
-    fs::Union{Float64, Nothing}
-    data_columns::Union{Vector{String}, Nothing}
+    data_file::Union{String, Nothing}
     target_channel::Union{String, Nothing}
     task_type::Union{String, Nothing}
-    metadata_path::Union{String, Nothing}
-    metadata_file::Union{String, Nothing}
+    fs::Union{Float64, Nothing}
+    data_columns::Union{Vector{String}, Nothing}
 
     function DataSettings(dict::Dict{String, Any})::DataSettings
-        data_path = haskey(dict, "data_path") ? (dict["data_path"] === nothing ? nothing : String(dict["data_path"])) : nothing
-        data_fname = haskey(dict, "data_fname") ? (dict["data_fname"] === nothing ? nothing : String(dict["data_fname"])) : nothing
-        fs = haskey(dict, "fs") ? (dict["fs"] === nothing ? nothing : Float64(dict["fs"])) : nothing
+        # Handle data_file: can be absolute or relative path
+        data_file = haskey(dict, "data_file") ? (dict["data_file"] === nothing ? nothing : String(dict["data_file"])) : nothing
+        
+        # If no data_file specified, try to use default example data file
+        if data_file === nothing
+            # pathof(ENEEGMA) returns /path/to/ENEEGMA/src/ENEEGMA.jl
+            # We want /path/to/ENEEGMA/examples/
+            eneegma_root = dirname(dirname(pathof(ENEEGMA)))
+            examples_path = joinpath(eneegma_root, "examples")
+            default_data_file = joinpath(examples_path, "example_data_rest.csv")
+            if isfile(default_data_file)
+                data_file = default_data_file
+            end
+        end
+        
+        # Resolve relative paths to examples folder (cross-platform)
+        if data_file !== nothing && !isfile(data_file) && !isabspath(data_file)
+            eneegma_root = dirname(dirname(pathof(ENEEGMA)))
+            examples_path = joinpath(eneegma_root, "examples")
+            candidate_path = joinpath(examples_path, basename(data_file))
+            if isfile(candidate_path)
+                data_file = candidate_path
+            end
+        end
+        
+        target_channel = haskey(dict, "target_channel") ? (dict["target_channel"] === nothing ? nothing : String(dict["target_channel"])) : "IC3"
+        task_type = haskey(dict, "task_type") ? (dict["task_type"] === nothing ? nothing : String(dict["task_type"])) : "rest"
+        fs = haskey(dict, "fs") ? (dict["fs"] === nothing ? nothing : Float64(dict["fs"])) : 256.0
         data_columns = haskey(dict, "data_columns") ? (dict["data_columns"] === nothing ? nothing : Vector{String}(dict["data_columns"])) : nothing
-        target_channel = haskey(dict, "target_channel") ? (dict["target_channel"] === nothing ? nothing : String(dict["target_channel"])) : nothing
-        task_type = haskey(dict, "task_type") ? (dict["task_type"] === nothing ? nothing : String(dict["task_type"])) : nothing
-        metadata_path = haskey(dict, "metadata_path") ? (dict["metadata_path"] === nothing ? nothing : String(dict["metadata_path"])) : nothing
-        metadata_file = haskey(dict, "metadata_file") ? (dict["metadata_file"] === nothing ? nothing : String(dict["metadata_file"])) : nothing
 
-        return new(data_path, data_fname, fs, data_columns, target_channel, task_type, metadata_path, metadata_file)
+        return new(data_file, target_channel, task_type, fs, data_columns)
     end
 end
 
@@ -1175,13 +1166,13 @@ mutable struct Settings
         gen  = GeneralSettings(dict)
         net  = NetworkSettings(dict)
 
-        # Always construct sampling, simulation, and optimization with defaults if missing
+        # Always construct sampling, simulation, optimization, and data with defaults if missing
         samp = SamplingSettings(dict)
         sim  = SimulationSettings(dict)
         opt  = OptimizationSettings(dict)
 
-        datad = get(dict, "data_settings", nothing)
-        data  = datad === nothing ? nothing : DataSettings(datad)
+        datad = get(dict, "data_settings", Dict{String, Any}())
+        data  = DataSettings(datad)
 
         return new(gen, net, samp, sim, opt, data)
     end

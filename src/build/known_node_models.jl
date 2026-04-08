@@ -41,6 +41,13 @@ end
 
 function get_known_node_model_info!(node::Node)
     model = node.build_setts.model
+    
+    # If model is a RuleTree (grammar-sampled), cannot use known model lookup
+    # Return empty populations; will be built via configure_node_model! instead
+    if model isa RuleTree
+        return Population[], node
+    end
+    
     if model == "AlphaRhythm" || model == "ARM"
         return AlphaRhythm(node)
     elseif model == "WilsonCowan" || model == "WC"

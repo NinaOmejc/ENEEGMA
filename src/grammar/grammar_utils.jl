@@ -132,8 +132,8 @@ terms = [
     "full",
 ]
 
-tree_str = terminals2rules(g, terms; start_symbol="Node")
-tree_str_full = terminals2rules(g, terms; start_symbol="Node", full=true)
-println(tree_str)
+parse_tree_str = terminals2rules(g, terms; start_symbol="Node")
+parse_tree_str_full = terminals2rules(g, terms; start_symbol="Node", full=true)
+println(parse_tree_str)
 # e.g. "2{6{12,16,21,21},6{12,16,21,22},25,23,23,36}"
  =#

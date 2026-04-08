@@ -19,9 +19,9 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     optimization_settings = settings.optimization_settings
     loss_settings = optimization_settings.loss_settings
 
-    blocks = blocks === nothing ? ENMEEG.prepare_optimization_blocks(net, optimization_settings) : blocks
-    params_native, inits_native, min_optlogger_loss = ENMEEG.best_params_inits(optsol, optlogger, blocks)
-    param_range_entries, init_range_entries = ENMEEG.native_range_entries(net, blocks)
+    blocks = blocks === nothing ? prepare_optimization_blocks(net, optimization_settings) : blocks
+    params_native, inits_native, min_optlogger_loss = best_params_inits(optsol, optlogger, blocks)
+    param_range_entries, init_range_entries = native_range_entries(net, blocks)
     best_loss = min(optsol.minimum, min_optlogger_loss)
 
     restart_str = restart_idx === nothing ? "" : "_r$(restart_idx)"
@@ -30,12 +30,12 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
 
     fname_loss = "$(base_prefix)_loss_over_iterations.png"
     path_loss = joinpath(general_settings.path_out, fname_loss)
-    ENMEEG.plot_loss_over_iterations(optlogger, general_settings, path_loss)
-    ENMEEG.save_optlogger(optlogger, settings; fullfname_csv=joinpath(general_settings.path_out, "$(base_prefix)_optlogger.csv"))
+    plot_loss_over_iterations(optlogger, general_settings, path_loss)
+    save_optlogger(optlogger, settings; fullfname_csv=joinpath(general_settings.path_out, "$(base_prefix)_optlogger.csv"))
 
     # Simulate and evaluate model with best parameters using centralized function
     opt_params = setter(net.problem.p, params_native)
-    result = ENMEEG.evaluate_model(
+    result = evaluate_model(
         net, opt_params, inits_native, target_data, settings;
         compute_metrics=["loss", "iae", "fsmae", "maef"],
         demean=true
@@ -51,24 +51,24 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     freqs = result.freqs
     modeled_powers = result.model_psd
     
-    ENMEEG.save_modeled_psd(modeled_powers, freqs, settings; 
+    save_modeled_psd(modeled_powers, freqs, settings; 
                                 fullfname_csv=joinpath(general_settings.path_out, "$(base_prefix)_modeled_psd.csv"))
 
     fname_obs_ts = "$(base_prefix)_plot_obs_vs_mod_ts.png"
     path_obs_ts = joinpath(general_settings.path_out, fname_obs_ts)
-    ENMEEG.plot_observed_vs_modelled_ts_windows(sol, target_data, general_settings, net;
+    plot_observed_vs_modelled_ts_windows(sol, target_data, general_settings, net;
                                                 fullfname_fig=path_obs_ts)
 
     fname_obs_freq = "$(base_prefix)_plot_obs_vs_mod_freq.png"
     path_obs_freq = joinpath(general_settings.path_out, fname_obs_freq)
-    ENMEEG.plot_observed_vs_modelled_psd(modeled_powers, target_data.powers, freqs;
+    plot_observed_vs_modelled_psd(modeled_powers, target_data.powers, freqs;
                                    fullfname_fig=path_obs_freq,
                                    general_settings=general_settings)
 
     # PLOT: Parameter exploration
     fname_param = "$(base_prefix)_param_exploration.png"
     path_param = joinpath(general_settings.path_out, fname_param)
-    ENMEEG.plot_param_exploration(optlogger, net; 
+    plot_param_exploration(optlogger, net; 
                                 true_parameters=true_parameters,
                                 loss_settings=loss_settings,
                                 fullfname_fig=path_param,
@@ -79,7 +79,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     fname_freq_anim = "$(base_prefix)_freq_sweep.gif"
     freq_plot_path = joinpath(general_settings.path_out, fname_freq_plot)
     freq_anim_path = joinpath(general_settings.path_out, fname_freq_anim)
-    ENMEEG.plot_psd_spetra_evolution(optlogger, net, setter;
+    plot_psd_spetra_evolution(optlogger, net, setter;
                     target_data=target_data,
                     general_settings=general_settings,
                     simulation_settings=simulation_settings,
@@ -406,7 +406,7 @@ function plot_param_exploration(optlogger::Vector{OptLogEntry},
     end
 
     # Get ALL tunable parameters from network (includes tscale and any other added params)
-    tunable_params = ENMEEG.get_symbols(ENMEEG.get_tunable_params(net.params); sort=true)
+    tunable_params = get_symbols(get_tunable_params(net.params); sort=true)
     tunable_syms = Symbol.(tunable_params)
     tunable_params_lb, tunable_params_ub = get_param_minmax_values(net.params; p_subset=tunable_params, return_type="vector")
 
@@ -417,8 +417,8 @@ function plot_param_exploration(optlogger::Vector{OptLogEntry},
             Float64[first(t) for t in values(true_parameters)]
 
     # Get initial conditions (state variables)
-    state_vars = ENMEEG.get_state_vars(net.vars)
-    inits_lb, inits_ub = ENMEEG.get_var_minmax_values(state_vars; return_type="vector")
+    state_vars = get_state_vars(net.vars)
+    inits_lb, inits_ub = get_var_minmax_values(state_vars; return_type="vector")
     inits_default_vals = zeros(length(state_vars.vars))  # assume default inits are zero
 
     # Combine parameters and initial conditions
@@ -652,12 +652,12 @@ function compute_r2_for_params(net::Network,
                                inits_native::Vector{Float64})::Float64
     sim = net.settings.simulation_settings
     loss = net.settings.optimization_settings.loss_settings
-    solver = ENMEEG.get_solver(net.problem, sim)
-    solver_kwargs = ENMEEG.get_solver_kwargs(net.problem, sim)
+    solver = get_solver(net.problem, sim)
+    solver_kwargs = get_solver_kwargs(net.problem, sim)
 
-    setter = ENMEEG.make_namedtuple_setter(Tuple(param_symbols))
+    setter = make_namedtuple_setter(Tuple(param_symbols))
     opt_params = setter(net.problem.p, params_native)
-    sol = ENMEEG.simulate_problem(net.problem;
+    sol = simulate_problem(net.problem;
                                   new_params=opt_params,
                                   new_inits=inits_native,
                                   solver=solver,
@@ -670,7 +670,7 @@ function compute_r2_for_params(net::Network,
     end
     model_prediction = Matrix(df)[:, 2]
     fs = length(sol.t) > 1 ? 1.0 / (sol.t[2] - sol.t[1]) : 1.0 / sim.saveat
-    _, modeled_powers = ENMEEG._compute_noisy_psd_avg(model_prediction, fs, loss)
+    _, modeled_powers = _compute_noisy_psd_avg(model_prediction, fs, loss)
     target_freqs, target_curve = target_data.freqs, target_data.powers
     if target_curve === nothing || length(target_curve) != length(modeled_powers)
         return NaN
@@ -681,7 +681,7 @@ end
 function native_range_entries(net::Network, blocks)
     param_ranges = OrderedDict{String, Any}[]
     for (idx, sym) in enumerate(blocks.tunable_params_symbols)
-        param_type = String(ENMEEG.get_param_by_symbol(net.params, sym).type)
+        param_type = String(get_param_by_symbol(net.params, sym).type)
         push!(param_ranges, OrderedDict(
             "name" => String(sym),
             "native_bounds" => [blocks.tunable_params_lb[idx], blocks.tunable_params_ub[idx]],

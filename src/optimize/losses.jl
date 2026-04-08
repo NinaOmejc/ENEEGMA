@@ -119,7 +119,7 @@ function compute_loss(new_params, args, metric_fun::Function)
     sigma_effective = max(loss_settings.sigma_meas, 0.0)
     updated_all_params = setter(all_params, θ)
     new_prob = remake(prob; p=updated_all_params, u0=iv, tspan=tspan)
-    sol = ENMEEG.safe_solve(new_prob, solver; solver_kwargs=solver_kwargs)
+    sol = safe_solve(new_prob, solver; solver_kwargs=solver_kwargs)
     
     if !SciMLBase.successful_retcode(sol)
         return 1e9
@@ -134,7 +134,7 @@ function compute_loss(new_params, args, metric_fun::Function)
 
     # Apply measurement noise if using time-series loss
     if metric_fun === metric_tsmae && sigma_effective > 0
-        ENMEEG.apply_measurement_noise!(model_prediction, sigma_effective, loss_settings)
+        apply_measurement_noise!(model_prediction, sigma_effective, loss_settings)
     end
     
     if any(!isfinite, model_prediction)
@@ -276,13 +276,13 @@ function metric_peak_background(model_prediction, target::TargetPSD, fs, loss_se
     pm = target.peak_metadata
     pm === nothing && return metric_fsmae(model_prediction, target, fs, loss_settings)
 
-    model_freqs, modeled_powers = ENMEEG._compute_noisy_psd_avg(model_prediction, fs, loss_settings)
-    aligned_model = ENMEEG._interpolate_psd(model_freqs, modeled_powers, pm.reference_freqs)
+    model_freqs, modeled_powers = _compute_noisy_psd_avg(model_prediction, fs, loss_settings)
+    aligned_model = _interpolate_psd(model_freqs, modeled_powers, pm.reference_freqs)
     peak_mask = pm.peak_mask
     any(peak_mask) || return metric_fsmae(model_prediction, target, fs, loss_settings)
 
-    peak_score = ENMEEG.compute_peak_score(aligned_model, pm.reference_psd, peak_mask)
-    background_score = ENMEEG.compute_background_score(aligned_model, pm.reference_psd, peak_mask)
+    peak_score = compute_peak_score(aligned_model, pm.reference_psd, peak_mask)
+    background_score = compute_background_score(aligned_model, pm.reference_psd, peak_mask)
     return loss_settings.weight_fspb * peak_score + loss_settings.weight_background * background_score
 end
 
@@ -366,29 +366,29 @@ function metric_fspb_plus_ssvep(model_prediction, target::TargetPSD, fs, loss_se
     pm = target.peak_metadata
     pm === nothing && return metric_fsmae(model_prediction, target, fs, loss_settings)
 
-    model_freqs, modeled_powers = ENMEEG._compute_noisy_psd_avg(model_prediction, fs, loss_settings)
-    aligned_model = ENMEEG._interpolate_psd(model_freqs, modeled_powers, target.freqs)
+    model_freqs, modeled_powers = _compute_noisy_psd_avg(model_prediction, fs, loss_settings)
+    aligned_model = _interpolate_psd(model_freqs, modeled_powers, target.freqs)
 
     # Build union mask for background: fspb peaks + SSVEP harmonics
     fspb_mask = pm.peak_mask
     f0 = loss_settings.ssvep_stim_freq_hz
     H = loss_settings.ssvep_n_harmonics
     bw = loss_settings.ssvep_bandwidth_hz
-    harmonic_mask = ENMEEG._harmonic_mask(target.freqs, f0, H, bw; fmin=loss_settings.fmin, fmax=loss_settings.fmax)
+    harmonic_mask = _harmonic_mask(target.freqs, f0, H, bw; fmin=loss_settings.fmin, fmax=loss_settings.fmax)
     union_mask = fspb_mask .| harmonic_mask
 
     total = 0.0
     if loss_settings.fspb_enabled
-        fspb_peak = ENMEEG.compute_peak_score(aligned_model, pm.reference_psd, fspb_mask)
+        fspb_peak = compute_peak_score(aligned_model, pm.reference_psd, fspb_mask)
         total += w_fspb * fspb_peak
     end
     if loss_settings.ssvep_enabled
-        ssvep_peak = ENMEEG._ssvep_harmonic_weighted_mae(aligned_model, target.powers, target.freqs, harmonic_mask,
+        ssvep_peak = _ssvep_harmonic_weighted_mae(aligned_model, target.powers, target.freqs, harmonic_mask,
                                                 f0, H, bw, loss_settings.ssvep_harmonic_decay)
         total += w_ssvep * ssvep_peak
     end
     if loss_settings.fspb_enabled || loss_settings.ssvep_enabled
-        background_score = ENMEEG.compute_background_score(aligned_model, pm.reference_psd, union_mask)
+        background_score = compute_background_score(aligned_model, pm.reference_psd, union_mask)
         total += w_bg * background_score
         # print all three scores for logging
         #println("FSPB peak: $(loss_settings.fspb_enabled ? fspb_peak : "N/A"), SSVEP peak: $(loss_settings.ssvep_enabled ? ssvep_peak : "N/A"), Background: $background_score")
@@ -613,19 +613,19 @@ end
 # ================================
 
 # Draw a white-noise template (N(0,1)) of requested length
-# If noise_seed is nothing/null → use non-deterministic random noise
-# If noise_seed is an integer → use deterministic seeded noise
+# If loss_noise_seed is nothing/null → use non-deterministic random noise
+# If loss_noise_seed is an integer → use deterministic seeded noise
 function _measurement_noise_template(len::Int, loss_settings::LossSettings)
     if len <= 0
         return Float64[]
     end
-    if loss_settings.noise_seed === nothing
+    if loss_settings.loss_noise_seed === nothing
         # No seed specified: use Julia's default random state (non-deterministic)
-        vprint("Applying measurement noise, but noise_seed is null: note that results will vary between runs/calls", level=1)
+        vprint("Applying measurement noise, but loss_noise_seed is null: note that results will vary between runs/calls", level=1)
         return randn(len)
     else
         # Seed specified: use deterministic seeded RNG
-        rng = Random.MersenneTwister(Int(loss_settings.noise_seed))
+        rng = Random.MersenneTwister(Int(loss_settings.loss_noise_seed))
         return randn(rng, len)
     end
 end

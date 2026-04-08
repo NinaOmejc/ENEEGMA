@@ -101,7 +101,7 @@ end
 ############################################################
 
 mutable struct NodeBuildSetts
-    model::String
+    model::Union{String, RuleTree}
     n_pops::Int
     pop_models::Vector{String}
     pop_conn::Vector{String}
@@ -123,7 +123,7 @@ mutable struct Node <: AbstractNode
     brain_source::String
     build_setts::NodeBuildSetts
 
-    function Node(id::Int, name::String, model::String;
+    function Node(id::Int, name::String, model::Union{String, RuleTree};
                   node_coordinates::Tuple{Float64, Float64, Float64} = (0.0, 0.0, 0.0),
                   pop_conn::Vector{String}=["none"])::Node
         dynamics = Vector{Equation}()

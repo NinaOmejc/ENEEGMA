@@ -299,6 +299,167 @@ Base.show(io::IO, t::RuleTree) = print(io, serialize_rule_tree(t))
 
 
 """
+    _resolve_output_path(base_dir::AbstractString, filename::AbstractString)
+
+Given a base directory and filename, resolve the full path with collision handling.
+
+If the file already exists, appends "_2", "_3", etc. to the filename stem until
+a non-existent path is found.
+
+# Example
+```julia
+path = _resolve_output_path("results/exp1", "grammar_samples.txt")
+# Returns: "results/exp1/grammar_samples.txt" (or "_2", "_3" variant if exists)
+```
+"""
+function _resolve_output_path(base_dir::AbstractString, filename::AbstractString)
+    # Ensure base directory exists
+    !isdir(base_dir) && mkpath(base_dir)
+    
+    # Split filename into stem and extension
+    path = joinpath(base_dir, filename)
+    
+    # If file doesn't exist, return it as-is
+    !isfile(path) && return path
+    
+    # File exists, find a non-conflicting name
+    parts = splitext(filename)
+    stem = parts[1]
+    ext = parts[2]
+    
+    counter = 2
+    while true
+        new_filename = "$(stem)_$(counter)$(ext)"
+        new_path = joinpath(base_dir, new_filename)
+        !isfile(new_path) && return new_path
+        counter += 1
+    end
+end
+
+
+"""
+    save_parse_trees(trees::Vector{RuleTree}, filepath::AbstractString)
+
+Save a vector of parse trees to a CSV file with model names and parse_tree strings.
+
+Creates a table with two columns:
+- `model_name`: Auto-generated names (G1, G2, ...)
+- `parse_tree`: Serialized parse tree in compact string format (e.g., "2{6{12,16,21},25,23}")
+
+# Arguments
+- `trees::Vector{RuleTree}`: Vector of parse trees to save
+- `filepath::AbstractString`: Output file path (typically .csv)
+
+# Example
+```julia
+trees = sample_from_grammar(settings)[:parse_tree]
+save_parse_trees(trees, "parse_trees.csv")
+```
+"""
+function save_parse_trees(trees::Vector{RuleTree}, filepath::AbstractString)
+    model_names = ["G$i" for i in 1:length(trees)]
+    parse_trees = [serialize_rule_tree(tree) for tree in trees]
+    
+    df = DataFrame(
+        model_name = model_names,
+        parse_tree = parse_trees
+    )
+    
+    # CSV.write automatically quotes fields containing the delimiter (comma)
+    # so parse_trees like "1{8{11,16,21,22,58},25,23,34}" become quoted in output:
+    # G1,"1{8{11,16,21,22,58},25,23,34}"
+    CSV.write(filepath, df)
+    return nothing
+end
+
+
+"""
+    save_parse_trees(trees::Vector{RuleTree}, settings)
+
+Save a vector of parse trees using settings configuration.
+
+Output file path is constructed as: `settings.general_settings.path_out / settings.general_settings.exp_name / grammar_samples.csv`
+
+Creates a CSV table with columns: model_name (G1, G2, ...) and parse_tree (serialized parse trees).
+
+If the file already exists, "_2", "_3", etc. are appended to avoid overwrites.
+
+# Arguments
+- `trees::Vector{RuleTree}`: Vector of parse trees to save
+- `settings`: Settings object with `general_settings.path_out` and `general_settings.exp_name`
+
+# Example
+```julia
+settings = create_default_settings()
+trees = sample_from_grammar(settings)[:parse_tree]
+save_parse_trees(trees, settings)
+```
+"""
+function save_parse_trees(trees::Vector{RuleTree}, settings)
+    gen_s = settings.general_settings
+    base_dir = joinpath(gen_s.path_out, gen_s.exp_name)
+    filepath = _resolve_output_path(base_dir, "grammar_samples.csv")
+    save_parse_trees(trees, filepath)
+    return nothing
+end
+
+
+"""
+    save_parse_trees(samples_dict::Dict, filepath::AbstractString)
+
+Save parse trees from a grammar sampling result dictionary to a CSV table.
+
+Extracts `:parse_tree` key from the dict returned by `sample_from_grammar()`.
+Creates CSV with model_name and parse_tree columns.
+
+# Arguments
+- `samples_dict::Dict`: Dictionary returned by `sample_from_grammar()` with `:parse_tree` key
+- `filepath::AbstractString`: Output file path (typically .csv)
+
+# Example
+```julia
+results = sample_from_grammar(settings)
+save_parse_trees(results, "parse_trees.csv")
+```
+"""
+function save_parse_trees(samples_dict::Dict, filepath::AbstractString)
+    if !haskey(samples_dict, :parse_tree)
+        error("samples_dict does not contain :parse_tree key")
+    end
+    save_parse_trees(samples_dict[:parse_tree], filepath)
+    return nothing
+end
+
+
+"""
+    save_parse_trees(samples_dict::Dict, settings)
+
+Save parse trees from a grammar sampling result dictionary to a CSV table using settings configuration.
+
+Extracts `:parse_tree` key and uses settings for output directory configuration.
+Creates CSV with model_name (G1, G2, ...) and parse_tree columns.
+
+# Arguments
+- `samples_dict::Dict`: Dictionary returned by `sample_from_grammar()` with `:parse_tree` key
+- `settings`: Settings object with `general_settings.path_out` and `general_settings.exp_name`
+
+# Example
+```julia
+settings = create_default_settings()
+results = sample_from_grammar(settings)
+save_parse_trees(results, settings)
+```
+"""
+function save_parse_trees(samples_dict::Dict, settings)
+    if !haskey(samples_dict, :parse_tree)
+        error("samples_dict does not contain :parse_tree key")
+    end
+    save_parse_trees(samples_dict[:parse_tree], settings)
+    return nothing
+end
+
+
+"""
 Parse a serialized rule tree (produced by `serialize_rule_tree` or `_full`)
 back into a `RuleTree`.
 """
@@ -466,9 +627,9 @@ make_rng(seed::Union{Int,Nothing}) =
 # Internal helper (new) to generate one sample.
 function _sample_once(g::Grammar, rng::AbstractRNG, start_symbol::String, return_mode::Symbol)
     tree, dict, flat = expand!(g, start_symbol, rng; sample_dict=nothing)
-    return return_mode === :tree  ? tree  :
-           return_mode === :string ? flat :
-           return_mode === :dict  ? dict  :
+    return return_mode === :parse_tree         ? tree  :
+           return_mode === :terminals         ? flat :
+           return_mode === :full_rule_expansion ? dict  :
            error("Unknown return_mode=$(return_mode)")
 end
 
@@ -476,9 +637,9 @@ end
 
 # Internal helper: normalize requested modes into canonical set.
 function _canonical_modes(return_mode::Union{Symbol,AbstractVector{Symbol}})
-    canonical(sym::Symbol) = sym in (:model, :models)   ? :models  :
-                             sym in (:string, :strings) ? :strings :
-                             sym in (:tree, :trees)     ? :tree    :
+    canonical(sym::Symbol) = sym in (:model, :models, :full_rule_expansion)   ? :full_rule_expansion  :
+                             sym in (:terminal, :terminals, :string, :strings) ? :terminals :
+                             sym in (:tree, :trees, :parse_tree)     ? :parse_tree    :
                              error("Unsupported return_mode symbol: $(sym)")
     requested = return_mode isa Symbol ? (return_mode,) :
                 return_mode isa AbstractVector{Symbol} ? Tuple(return_mode) :
@@ -494,15 +655,15 @@ function _sample_from_grammar_core(g::Grammar;
                                    start_symbol::AbstractString)
 
     modes = _canonical_modes(return_mode)
-    need_models  = :models  in modes
-    need_strings = :strings in modes
-    need_trees   = :tree    in modes
+    need_full_rule_expansion = :full_rule_expansion in modes
+    need_terminals           = :terminals           in modes
+    need_parse_tree          = :parse_tree          in modes
 
     idmap = rule_id_map(g)
 
-    samples_dict   = need_models  ? Vector{OrderedDict{String,String}}(undef, n_samples) : nothing
-    samples_string = need_strings ? Vector{String}(undef, n_samples)                     : nothing
-    samples_tree   = need_trees   ? Vector{RuleTree}(undef, n_samples)                   : nothing
+    samples_dict      = need_full_rule_expansion ? Vector{OrderedDict{String,String}}(undef, n_samples) : nothing
+    samples_terminals = need_terminals           ? Vector{String}(undef, n_samples)                     : nothing
+    samples_trees     = need_parse_tree          ? Vector{RuleTree}(undef, n_samples)                   : nothing
 
     for i in 1:n_samples
         s_str, s_dict, s_tree = expand!(g, start_symbol, rng)
@@ -511,21 +672,21 @@ function _sample_from_grammar_core(g::Grammar;
             recon = _tree_to_string(s_tree, idmap)
             recon != s_str && (s_str = recon)
         end
-        need_models  && (samples_dict[i]   = s_dict)
-        need_strings && (samples_string[i] = s_str)
-        need_trees   && (samples_tree[i]   = s_tree)
+        need_full_rule_expansion && (samples_dict[i]      = s_dict)
+        need_terminals           && (samples_terminals[i] = s_str)
+        need_parse_tree          && (samples_trees[i]     = s_tree)
     end
 
     if length(modes) == 1
         m = first(modes)
-        m === :models  && return samples_dict
-        m === :strings && return samples_string
-        m === :tree    && return samples_tree
+        m === :full_rule_expansion && return samples_dict
+        m === :terminals           && return samples_terminals
+        m === :parse_tree          && return samples_trees
     else
         out = Dict{Symbol,Any}()
-        need_models  && (out[:models]  = samples_dict)
-        need_strings && (out[:strings] = samples_string)
-        need_trees   && (out[:tree]    = samples_tree)
+        need_full_rule_expansion && (out[:full_rule_expansion] = samples_dict)
+        need_terminals           && (out[:terminals]           = samples_terminals)
+        need_parse_tree          && (out[:parse_tree]          = samples_trees)
         return out
     end
 end
@@ -534,7 +695,7 @@ end
 function sample_from_grammar(g::Grammar;
                              n_samples::Integer=1,
                              seed::Union{Int,Nothing}=nothing,
-                             return_mode::Union{Symbol,AbstractVector{Symbol}}=:models,
+                             return_mode::Union{Symbol,AbstractVector{Symbol}}=:full_rule_expansion,
                              start_symbol::Union{Nothing,AbstractString}=nothing)
     rng = make_rng(seed)
     start_sym = start_symbol === nothing ? infer_start_symbol(g) : String(start_symbol)
@@ -549,12 +710,42 @@ end
 function sample_from_grammar(grammar_path::AbstractString;
                              n_samples::Integer=1,
                              seed::Union{Int,Nothing}=nothing,
-                             return_mode::Union{Symbol,AbstractVector{Symbol}}=:models,
+                             return_mode::Union{Symbol,AbstractVector{Symbol}}=:full_rule_expansion,
                              start_symbol::Union{Nothing,AbstractString}=nothing)
     g = load_grammar(grammar_path)
     return sample_from_grammar(g;
         n_samples=n_samples,
         seed=seed,
+        return_mode=return_mode,
+        start_symbol=start_symbol)
+end
+
+# Public wrapper: Settings-based interface.
+# Extracts grammar configuration from Settings object.
+# Default: returns dict with :full_rule_expansion, :parse_tree, :terminals keys
+#
+# Seed priority: 
+#   1. sampling_settings.grammar_seed (if not nothing)
+#   2. general_settings.seed (fallback if grammar_seed is nothing)
+#   3. nothing (random seed)
+function sample_from_grammar(settings;
+                             return_mode::Union{Symbol,AbstractVector{Symbol}}=[:full_rule_expansion, :parse_tree, :terminals],
+                             start_symbol::Union{Nothing,AbstractString}=nothing)
+    samp_s = settings.sampling_settings
+    if samp_s === nothing
+        error("settings.sampling_settings is nothing; cannot access grammar configuration")
+    end
+    
+    # Determine which seed to use: grammar_seed takes priority, fall back to general seed
+    grammar_seed = samp_s.grammar_seed
+    if grammar_seed === nothing && settings.general_settings !== nothing
+        grammar_seed = settings.general_settings.seed
+    end
+    
+    g = load_grammar(samp_s.grammar_file)
+    return sample_from_grammar(g;
+        n_samples=samp_s.n_samples,
+        seed=grammar_seed,
         return_mode=return_mode,
         start_symbol=start_symbol)
 end

@@ -109,7 +109,7 @@ function construct_sensory_input_dynamics!(net::Network)::Network
     si = net.sensory_input_str
     n_points = Int(floor((ss.tspan[2]-ss.tspan[1]) / ss.saveat)) + 1
     t_values = collect(ss.tspan[1]:ss.saveat:ss.tspan[2])
-    rng = ns.seed_sensory_input === nothing ? nothing : MersenneTwister(ns.seed_sensory_input)
+    rng = ns.sensory_seed === nothing ? nothing : MersenneTwister(ns.sensory_seed)
 
     if si == "None" || si === nothing || si == ""
         s_values = zeros(length(t_values))
@@ -691,7 +691,13 @@ end
 function node_signature(n::Node)
     pops_part = join([population_signature(p) for p in n.populations], ",")
     conns_part = "matrix"
-    return "Node$(n.id){model=$(n.build_setts.model);pops=[$pops_part];conns=$(conns_part)}"
+    # Convert RuleTree to string for signature if necessary
+    model_sig = if n.build_setts.model isa String
+        n.build_setts.model
+    else
+        serialize_rule_tree(n.build_setts.model)
+    end
+    return "Node$(n.id){model=$(model_sig);pops=[$pops_part];conns=$(conns_part)}"
 end
 
 function set_network_signature!(net::Network)::Network
@@ -701,14 +707,36 @@ end
 
 function export_network(net::Network)
     gs = net.settings.general_settings;
-    fname_out = "$(net.name)_equations"
+    # Include candidate name in filename if present
+    fname_suffix = if !isnothing(gs.candidate_name)
+        "_$(gs.candidate_name)"
+    else
+        ""
+    end
+    fname_out = "$(net.name)$(fname_suffix)_equations"
+    
+    # Construct output directory: path_out / exp_name / [candidate_NAME/]
+    output_dir = joinpath(gs.path_out, gs.exp_name)
+    if !isnothing(gs.candidate_name)
+        output_dir = joinpath(output_dir, "candidate_$(gs.candidate_name)")
+    end
+    !isdir(output_dir) && mkpath(output_dir)
+    
     if "tex" in gs.save_model_formats
         eqs = vcat(net.dynamics, net.diffusion_dynamics)
-        transform2latex(eqs, show_plot=false, path_tex="$(gs.path_out)\\$(fname_out).tex")
+        path_tex = joinpath(output_dir, "$(fname_out).tex")
+        transform2latex(eqs, show_plot=false, path_tex=path_tex)
     end
     if "txt" in gs.save_model_formats
-        recipe = net.settings.network_settings.node_models[1]
-        open("$(gs.path_out)\\$(fname_out).txt", "w") do io
+        recipe_raw = net.settings.network_settings.node_models[1]
+        # Handle both String and RuleTree node models
+        recipe = if recipe_raw isa String
+            recipe_raw
+        else
+            serialize_rule_tree(recipe_raw)
+        end
+        path_txt = joinpath(output_dir, "$(fname_out).txt")
+        open(path_txt, "w") do io
             write(io, "Recipe: $(recipe)\n\n")
         end
     end
