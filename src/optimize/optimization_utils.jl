@@ -7,11 +7,11 @@ struct OptimizationResults
     exp_name::String
     task_type::String
     data_path::Union{Nothing, String}
-    data_fname::Union{Nothing, String}
+    data_file::Union{Nothing, String}
     data_sub::Union{Nothing, String}
     data_ic::Union{Nothing, String}
-    settings_idx::Int
-    settings_path::String
+    settings_idx::Union{Int, Nothing}
+    settings_path::Union{String, Nothing}
     model_name::String
     node_models::String
     model_idx::Int
@@ -178,8 +178,10 @@ function load_optimization_results(path::AbstractString; dicttype=Dict)
 
     net_name = String(get(raw, "net_name", ""))
     exp_name = String(get(raw, "exp_name", ""))
-    settings_idx = _coerce_int(get(raw, "settings_idx", 0))
-    settings_path_updated = _translate_settings_path(String(get(raw, "settings_path", "")))
+    settings_idx_val = get(raw, "settings_idx", nothing)
+    settings_idx = settings_idx_val === nothing ? nothing : _coerce_int(settings_idx_val)
+    settings_path_val = get(raw, "settings_path", nothing)
+    settings_path_updated = settings_path_val === nothing ? nothing : _translate_settings_path(String(settings_path_val))
     node_models = String(get(raw, "node_models", ""))
     task_type = String(get(raw, "task_type", ""))
     hyperparam_idx = _coerce_int(get(raw, "hyperparam_idx", nothing))
@@ -226,7 +228,6 @@ function load_optimization_results(path::AbstractString; dicttype=Dict)
         best_inits = Vector{Float64}(best_inits)
     end
 
-    # Load data path fields and translate HPC paths
     data_path = get(raw, "data_path", nothing)
     if data_path isa AbstractString
         data_path = _translate_data_path(data_path)
@@ -234,25 +235,25 @@ function load_optimization_results(path::AbstractString; dicttype=Dict)
         data_path = get_local_data_path()
     end
 
-    data_fname = get(raw, "data_fname", get(raw, "data_path", nothing))
+    data_file = get(raw, "data_file", get(raw, "data_fname", nothing))
     data_sub = get(raw, "data_sub", nothing)
     data_ic = get(raw, "data_ic", nothing)
 
-    if data_fname isa AbstractString
-        data_fname = String(data_fname)
+    if data_file isa AbstractString
+        data_file = String(data_file)
         data_sub = String(data_sub)
         data_ic = String(data_ic)
     else
-        # load settings file to infer data_fname if not present in results
-        if isfile(settings_path_updated)
+        # load settings file to infer data_file if not present in results
+        if !isnothing(settings_path_updated) && isfile(settings_path_updated)
             settings_json = JSON.parsefile(settings_path_updated; dicttype=Dict)
-            # data fname is inside settings_json.data_settings
+            # data file is inside settings_json.data_settings
             data_settings = get(settings_json, "data_settings", Dict{String, Any}())
-            data_fname = String(get(data_settings, "data_fname", ""))
-            data_sub = data_fname == "" ? "" : split(data_fname, "_")[1]
+            data_file = String(get(data_settings, "data_file", ""))
+            data_sub = data_file == "" ? "" : split(data_file, "_")[1]
             data_ic = String(get(data_settings, "target_channel", ""))
         else
-            data_fname = ""
+            data_file = ""
         end
     end
 
@@ -261,7 +262,7 @@ function load_optimization_results(path::AbstractString; dicttype=Dict)
         exp_name,
         task_type,
         data_path,
-        data_fname,
+        data_file,
         data_sub,
         data_ic,
         settings_idx,

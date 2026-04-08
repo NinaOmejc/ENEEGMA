@@ -27,7 +27,7 @@ using DifferentialEquations
 using OrdinaryDiffEq
 
 # --- Optimization Packages ---
-using Optimization, OptimizationOptimJL, OptimizationEvolutionary, Evolutionary
+using Optimization, OptimizationEvolutionary
     
 # --- Signal Processing ---
 using Statistics, Distributions, FFTW
@@ -163,6 +163,7 @@ include("optimize/losses.jl")
 include("optimize/optimization_utils.jl")
 include("optimize/reparametrization.jl")
 include("optimize/optimize_network.jl")
+include("optimize/save_optimization_results.jl")
 include("optimize/evaluation.jl")
 
 export compute_loss, compute_loss_from_simulation
@@ -175,5 +176,6 @@ export detect_peak_windows, build_broad_peak_metadata
 export estimate_sigma_init, estimate_sigma_floor
 export maybe_initialize_std_measured_noise!
 export findpeaks, compute_peak_score, compute_background_score
+export save_optimization_results
 
 end  # module ENEEGMA

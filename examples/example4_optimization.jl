@@ -62,6 +62,7 @@ set_all_params_tunable!(net.params)
 # ============================================================================
 # Step 7: Run Optimization (commented - uncomment when ready)
 # ============================================================================
+print_settings_summary(settings; section="optimization_settings")
+settings.optimization_settings.time_limit_minutes = 1 
 optsol, optlogger, setter, blocks = optimize_network(net, data, settings)
-save_optimization_results(optsol, optlogger, setter, net, data, settings; blocks=blocks)
 

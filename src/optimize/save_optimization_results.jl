@@ -26,7 +26,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
 
     restart_str = restart_idx === nothing ? "" : "_r$(restart_idx)"
     hyperparam_str = hyperparam_idx === nothing ? "" : "_h$(hyperparam_idx)"
-    base_prefix = "$(net.name)_s$(general_settings.settings_idx)$(hyperparam_str)$(restart_str)"
+    base_prefix = "$(net.name)$(hyperparam_str)$(restart_str)"
 
     fname_loss = "$(base_prefix)_loss_over_iterations.png"
     path_loss = joinpath(general_settings.path_out, fname_loss)
@@ -121,10 +121,10 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     results = OrderedDict(
         "net_name" => settings.general_settings.exp_name,
         "brain_source" => net.nodes[1].brain_source,
-        "settings_idx" => general_settings.settings_idx,
-        "settings_path" => general_settings.settings_path,
-        "data_fname" => data_settings.data_fname,
-        "data_sub" => match(r"sub-\d+", data_settings.data_fname) !== nothing ? match(r"sub-\d+", data_settings.data_fname).match : "",
+        "exp_name" => general_settings.exp_name,
+        "candidate_name" => something(general_settings.candidate_name, "none"),
+        "data_file" => something(data_settings.data_file, ""),
+        "data_sub" => match(r"sub-\d+", data_settings.data_file) !== nothing ? match(r"sub-\d+", data_settings.data_file).match : "",
         "data_ic" => data_settings.target_channel,
         "restart_idx" => restart_idx,
         "node_models" => node_models,
@@ -606,8 +606,8 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
     upper_pad = 0.1 * span
     ylims_tuple = (power_min - lower_pad, power_max + upper_pad)
 
-    fig_path = isnothing(fullfname_fig) ? "$(gen.path_out)\\$(net.name)_S$(gen.settings_idx)_freq_sweep.png" : fullfname_fig
-    anim_path = isnothing(fullfname_anim) ? "$(gen.path_out)\\$(net.name)_S$(gen.settings_idx)_freq_sweep.gif" : fullfname_anim
+    fig_path = isnothing(fullfname_fig) ? "$(gen.path_out)\\$(net.name)_$(gen.exp_name)_freq_sweep.png" : fullfname_fig
+    anim_path = isnothing(fullfname_anim) ? "$(gen.path_out)\\$(net.name)_$(gen.exp_name)_freq_sweep.gif" : fullfname_anim
 
     p = plot(title="Frequency spectra evolution", xlabel="Frequency (Hz)", ylabel="Norm Log10 Power")
     if matches_target
@@ -740,7 +740,7 @@ function plot_observed_vs_modelled_ts_windows(sol::SciMLBase.AbstractODESolution
 
     outpath = fullfname_fig === nothing ?
               joinpath(general_settings.path_out,
-                       "$(net.name)_S$(general_settings.settings_idx)_plot_obs_vs_mod_ts.png") :
+                       "$(net.name)_$(general_settings.exp_name)_plot_obs_vs_mod_ts.png") :
               String(fullfname_fig)
     savefig(p, outpath)
     return nothing

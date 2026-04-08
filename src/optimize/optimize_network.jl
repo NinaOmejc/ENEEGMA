@@ -37,15 +37,12 @@ function optimize_network(
     loss_impl = wrap_loss_for_reparam(loss_fun, param_spec, init_spec; active=use_reparam)
     optfun = OptimizationFunction(loss_impl)
         
+    all_params = net.problem.p
     param_lb, param_ub = reparam_bounds(param_spec, tunable_params_lb, tunable_params_ub)
     init_lb, init_ub = reparam_bounds(init_spec, inits_lb, inits_ub)
     tunables_lb = vcat(param_lb, init_lb)
     tunables_ub = vcat(param_ub, init_ub)
     ensure_population_size!(os, length(tunables_lb))
-
-    # Note: tscale parameters are now proper Param objects with defaults,
-    # so they're automatically included in net.problem.p
-    all_params = net.problem.p
 
     # create setter function for updating NamedTuple of **all params** (not just tunables) inside Problem. Nothing to do with inits here.
     setter = make_namedtuple_setter(Tuple(tunable_params_symbols))
@@ -102,12 +99,10 @@ function optimize_network(
         max_len = 1200
         detail = length(detail) > max_len ? string(detail[1:max_len], " … [truncated]") : detail
         error("All optimization attempts failed. Check solver settings and model stability." * detail)
+    else
+        save_optimization_results(best_optsol, optlogger, setter, net, data, settings; blocks=blocks)
     end
 
-    # NOTE: best_optsol.u contains the final optimizer state, which may not be the actual best.
-    # The true best parameters are tracked in optlogger. check_optimization_results() will
-    # extract min_loss.params from optlogger for plotting and results export.
-    
     return best_optsol, optlogger, setter, blocks
 end
 
