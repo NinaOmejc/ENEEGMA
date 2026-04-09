@@ -149,8 +149,7 @@ Loss function configuration for optimization.
 | `psd_welch_nperseg` | Int | > 0 or 0 | `0` | Welch samples per segment. 0=auto. |
 | `psd_welch_nfft` | Int | > 0 or 0 | `0` | FFT size. 0=auto. |
 | `psd_noise_avg_reps` | Int | ≥ 1 | `1` | Number of noise averages for loss. |
-| `sigma_meas` | Float | ≥ 0 | `0.0` | Measurement noise std dev. 0=no noise. |
-| `auto_initialize_sigma_meas` | Bool | `true`, `false` | `true` | Auto-initialize measurement noise from data. |
+| `measurement_noise_std` | Float | ≥ 0 | `0.0` | Measurement noise standard deviation. 0=no noise. |
 | `loss_noise_seed` | Int or null | Any integer or `null` | `null` | Random seed for loss measurement noise. If `null`, non-deterministic. |
 | `peak_bandwidth_hz` | Float | > 0 | `6.0` | Frequency bandwidth for peak detection (Hz). |
 | `peak_prominence_db` | Float | Any | `0.5` | Prominence threshold for peak detection (dB). |
@@ -189,11 +188,10 @@ Grid search and hyperparameter sweep configuration.
 |---------|------|-------------|---------|-------------|
 | `param_range_levels` | Array[String] | Valid level names | `["high"]` | Parameter range levels to sweep. |
 | `sigma0_mode` | String | `"auto"`, `"absolute"` | `"auto"` | Scaling mode for initial sigma. |
-| `population_grid` | Array[Int] | > 0 | `[50]` | Population sizes to test. |
+| `population_grid` | Array[Int] | > 0 | `[40, 80]` | Population sizes to test. |
 | `restart_grid` | Array[Int] | > 0 | `[1]` | Restart counts to test. |
-| `sigma_values_override` | Array[Float] | > 0 or null | `null` | Override sigma0 values. |
+| `sigma_values_override` | Array[Float] | > 0 or null | `[2.0, 8.0]` | Override sigma0 values. |
 | `hyperparameter_axes` | Array[Dict] | See format below | `[]` | Multi-dimensional hyperparameter grid. |
-| `save_results` | String | `"best"`, `"all"`, `"none"` | `"best"` | Which results to save. |
 
 **Hyperparameter Axes Format:**
 ```json

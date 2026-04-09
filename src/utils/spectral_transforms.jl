@@ -609,7 +609,7 @@ function psd_preproc_flags_from_spec(spec::Union{Nothing, AbstractString})
 end
 
 function psd_preproc_has_log(spec::Union{Nothing, AbstractString})
-    _, has_log, _ = psd_preproc_flags_from_spec(spec)
+    has_log = psd_preproc_flags_from_spec(spec)
     return has_log
 end
 
@@ -722,24 +722,11 @@ function run_psd_preproc_pipeline!(ws::SpectrumWorkspace,
     return psd
 end
 
-function _get_losssettings_psd_ops!(loss_settings::LossSettings,
-                                    spec::String,
-                                    ctx_window_size::Int,
-                                    ctx_poly_order::Int,
-                                    ctx_rel_eps::Float64,
-                                    ctx_sigma::Float64)
+function _parse_psd_preproc_pipeline!(spec::String)::Vector{AbstractPSDPreprocessOp}
     spec == "none" && return AbstractPSDPreprocessOp[]
-    current_key = (spec, ctx_window_size, ctx_poly_order, ctx_rel_eps, ctx_sigma)
-    cached_key = loss_settings.psd_preproc_ops_cache_key
-    cached_ops = loss_settings.psd_preproc_ops
-    if cached_ops !== nothing && cached_key == current_key
-        return cached_ops
-    end
-    ctx = PSDPipelineContext(ctx_window_size, ctx_poly_order, ctx_rel_eps, ctx_sigma)
-    ops = parse_psd_preproc_pipeline(spec, ctx)
-    loss_settings.psd_preproc_ops = ops
-    loss_settings.psd_preproc_ops_cache_key = current_key
-    return ops
+    # Standard hardcoded parameters
+    ctx = PSDPipelineContext(11, 2, 1e-12, 1.0)
+    return parse_psd_preproc_pipeline(spec, ctx)
 end
 
 """ 
@@ -786,29 +773,14 @@ function compute_preprocessed_welch_psd(
 
     fspan = xlims
     pipeline_spec = preproc_pipeline
-    ctx_window_size = window_size
-    ctx_poly_order = poly_order
-    ctx_rel_eps = rel_eps
-    ctx_sigma = smooth_sigma
 
     ws = workspace
     if loss_settings !== nothing
         fspan = (loss_settings.fmin, loss_settings.fmax)
-        ctx_window_size = loss_settings.psd_window_size
-        ctx_poly_order = loss_settings.psd_poly_order
-        ctx_rel_eps = loss_settings.psd_rel_eps
-        ctx_sigma = loss_settings.psd_smooth_sigma
         pipeline_spec === nothing && (pipeline_spec = loss_settings.psd_preproc)
-        cached = loss_settings.psd_workspace
-        if ws === nothing && cached isa SpectrumWorkspace
-            ws = cached
-        end
     end
 
     ws = _ensure_spectrum_workspace(ws, nperseg_val, nfft_val, fs_val, window_type, overlap_val)
-    if loss_settings !== nothing
-        loss_settings.psd_workspace = ws
-    end
 
     freq_view, psd_view = _welch_psd!(ws.welch, data, fspan)
     freqs = copy(freq_view)
@@ -823,52 +795,10 @@ function compute_preprocessed_welch_psd(
         return freqs, psd
     end
 
-    ops = if loss_settings !== nothing && pipeline_spec === nothing
-        _get_losssettings_psd_ops!(loss_settings,
-                                   canonical_spec,
-                                   ctx_window_size,
-                                   ctx_poly_order,
-                                   ctx_rel_eps,
-                                   ctx_sigma)
-    else
-        ctx = PSDPipelineContext(ctx_window_size, ctx_poly_order, ctx_rel_eps, ctx_sigma)
-        parse_psd_preproc_pipeline(canonical_spec, ctx)
-    end
+    ops = _parse_psd_preproc_pipeline!(canonical_spec)
     psd = run_psd_preproc_pipeline!(ws, psd, freqs, ops)
 
     return freqs, psd
-end
-
-function _compute_noisy_psd_avg(model_prediction::AbstractVector{<:Real},
-                                fs::Real,
-                                loss_settings::LossSettings)
-    reps = max(loss_settings.psd_noise_avg_reps, 1)
-    sigma_effective = max(loss_settings.sigma_meas, 0.0)
-
-    if sigma_effective <= 0
-        return compute_preprocessed_welch_psd(model_prediction, fs; loss_settings=loss_settings)
-    end
-
-    seed_backup = loss_settings.loss_noise_seed
-    freqs = Float64[]
-    accum = Float64[]
-    for rep in 1:reps
-        if seed_backup === nothing
-            loss_settings.loss_noise_seed = nothing
-        else
-            loss_settings.loss_noise_seed = Int(seed_backup) + rep - 1
-        end
-        noisy = Float64.(model_prediction)
-        apply_measurement_noise!(noisy, sigma_effective, loss_settings)
-        freqs_rep, powers_rep = compute_preprocessed_welch_psd(noisy, fs; loss_settings=loss_settings)
-        if isempty(freqs)
-            freqs = freqs_rep
-            accum = zeros(length(powers_rep))
-        end
-        accum .+= powers_rep
-    end
-    loss_settings.loss_noise_seed = seed_backup
-    return freqs, accum ./ reps
 end
 
 ###################################################################################

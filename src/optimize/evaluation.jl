@@ -45,7 +45,7 @@ function simulate_and_extract(
     
     # Simulate
     try
-        sol = simulate_problem(
+        sol = simulate_network(
             net.problem;
             new_params=params,
             new_inits=inits,
@@ -97,8 +97,8 @@ end
 
 
 """
-    evaluate_model(net::Network, params, inits, data::TargetPSD, settings::Settings; 
-                   compute_metrics=["loss", "r2"], demean=true)
+    evaluate_model(net::Network, params, inits, data::Data, settings::Settings; 
+                   evaluation_metrics=["loss", "r2", "iae"], demean=true)
 
 Complete model evaluation: simulate, compute PSD, and calculate metrics.
 
@@ -106,9 +106,9 @@ Complete model evaluation: simulate, compute PSD, and calculate metrics.
 - `net::Network`: The network to evaluate
 - `params`: Parameter values (NamedTuple or Vector)
 - `inits`: Initial condition values (NamedTuple or Vector)
-- `data::TargetPSD`: Target data for comparison
+- `data::Data`: Target data for comparison
 - `settings::Settings`: Settings object
-- `compute_metrics`: Which metrics to compute (can be empty)
+- `evaluation_metrics`: Which metrics to compute (can be: "loss", "r2", "iae"). Default: ["loss", "r2", "iae"]
 - `demean::Bool=true`: Whether to demean prediction before PSD computation
 
 # Returns
@@ -119,16 +119,16 @@ A NamedTuple with fields:
 - `model_psd::Vector{Float64}`: Model power spectral density
 - `success::Bool`: Whether simulation succeeded
 - `error_msg::String`: Error message if failed
-- `metrics::Dict{String, Float64}`: Computed metrics (loss, r2, etc.)
+- `metrics::Dict{String, Float64}`: Computed metrics (loss, r2, iae)
 
 """
 function evaluate_model(
     net::Network,
     params,
     inits,
-    data::TargetPSD,
+    data::Data,
     settings::Settings;
-    compute_metrics::AbstractVector=["loss", "r2"],
+    evaluation_metrics::AbstractVector=["loss", "r2", "iae"],
     demean::Bool=true
 )
     data_settings = settings.data_settings
@@ -139,7 +139,7 @@ function evaluate_model(
         net, params, inits, settings; demean=demean)
     
     # Normalize metric names (allows empty vector like [])
-    metric_names = String.(compute_metrics)
+    metric_names = String.(evaluation_metrics)
 
     # Initialize results
     metrics = Dict{String, Float64}()
@@ -176,46 +176,19 @@ function evaluate_model(
     )
     
     # Compute requested metrics
-    iae_parts = nothing
     for metric_name in metric_names
         metric_value = try
             if metric_name == "loss"
-                # Use the configured loss function from settings
-                loss_function = get_metric_function(settings.optimization_settings.loss)
+                # Use the unified region-weighted loss function
+                loss_function = get_metric_function()
                 loss_function(model_prediction, data, data_settings.fs, loss_settings)
             elseif metric_name == "r2"
-                metric_r2(model_psd, data.powers)
-            elseif metric_name == "iae" || metric_name == "iaep" || metric_name == "iaeb"
-                iae_parts === nothing && (iae_parts = iae_decomposed(model_psd, data.powers, freqs,
-                                                                        data_settings.task_type, loss_settings))
-                metric_name == "iae"  ? iae_parts.full :
-                metric_name == "iaep" ? iae_parts.peak :
-                                        iae_parts.back            
-            elseif metric_name == "maer"
-                # Weighted MAE for resting state (peak weighted 2x)
-                # Use peak_metadata if available, otherwise create simple alpha band mask
-                if data.peak_metadata !== nothing
-                    peak_mask = data.peak_metadata.peak_mask
-                else
-                    # Fallback to alpha band if no metadata
-                    peak_mask = (freqs .>= 8.0) .& (freqs .<= 12.0)
-                end
-                metric_maer(model_psd, data.powers, freqs, peak_mask)
-            elseif metric_name == "maes"
-                # Weighted MAE for SSVEP (harmonics weighted 2x)
-                # Extract stimulation frequency from loss_settings
-                f0 = loss_settings.ssvep_stim_freq_hz
-                H = loss_settings.ssvep_n_harmonics
-                bw = loss_settings.ssvep_bandwidth_hz
-                harmonic_mask = _harmonic_mask(freqs, f0, H, bw; fmin=loss_settings.fmin, fmax=loss_settings.fmax)
-                metric_maes(model_psd, data.powers, freqs, harmonic_mask)
-            elseif metric_name == "maef"
-                # Weighted MAE that automatically switches between rest (maer) and SSVEP (maes)
-                metric_maef(model_psd, data, freqs, data_settings.task_type, loss_settings)
+                r2(model_psd, data.powers)
+            elseif metric_name == "iae"
+                # Integrated absolute error using unified region weighting from freq_peak_metadata
+                weighted_iae(model_psd, data.powers, freqs, data)
             else
-                # For any other metric name, try to get the function dynamically
-                metric_function = get_metric_function(metric_name)
-                metric_function(model_prediction, data, data_settings.fs, loss_settings)
+                error("Unknown evaluation metric: $metric_name. Supported metrics: loss, r2, iae")
             end
         catch e
             vprint("Warning: Error computing metric '$(metric_name)': $(e)", level=2)
@@ -237,88 +210,7 @@ function evaluate_model(
 end
 
 
-"""
-    metric_maer(model_psd, target_psd, freqs, peak_mask)
 
-Weighted Mean Absolute Error for resting state task.
-Peak region (from metadata or fallback to 8-12 Hz) is weighted 2x stronger than background.
-Reuses compute_peak_score and compute_background_score from losses.jl
-
-# Arguments
-- `model_psd`: Model power spectral density
-- `target_psd`: Target power spectral density  
-- `freqs`: Frequency vector
-- `peak_mask`: Boolean mask indicating peak regions (from peak_metadata or manual)
-"""
-function metric_maer(model_psd::Vector{Float64}, target_psd::Vector{Float64}, freqs::Vector{Float64}, peak_mask::AbstractVector{Bool})
-    # Use existing helper functions from losses.jl
-    peak_score = compute_peak_score(model_psd, target_psd, peak_mask)
-    background_score = compute_background_score(model_psd, target_psd, peak_mask)
-    
-    # Weight peak 2x stronger than background (2:1 ratio)
-    return 1.0 * peak_score + 0.5 * background_score
-end
-
-
-"""
-    metric_maes(model_psd, target_psd, freqs, harmonic_mask)
-
-Weighted Mean Absolute Error for SSVEP task.
-Harmonics of stimulation frequency are weighted 2x stronger than background.
-Reuses compute_peak_score and compute_background_score from losses.jl
-
-# Arguments
-- `model_psd`: Model power spectral density
-- `target_psd`: Target power spectral density
-- `freqs`: Frequency vector
-- `harmonic_mask`: Boolean mask indicating harmonic regions (computed using _harmonic_mask from losses.jl)
-"""
-function metric_maes(model_psd::Vector{Float64}, target_psd::Vector{Float64}, freqs::Vector{Float64}, harmonic_mask::AbstractVector{Bool})
-    # Use existing helper functions from losses.jl
-    harmonic_score = compute_peak_score(model_psd, target_psd, harmonic_mask)
-    background_score = compute_background_score(model_psd, target_psd, harmonic_mask)
-    
-    # Weight harmonics 2x stronger than background (2:1 ratio)
-    return 1.0 * harmonic_score + 0.5 * background_score
-end
-
-
-"""
-    metric_maef(model_psd, target_psd, freqs, data, loss_settings)
-
-Weighted Mean Absolute Error that automatically switches between rest and SSVEP tasks.
-For rest tasks, uses maer (peak weighted 2x).
-For SSVEP tasks, uses maes (harmonics weighted 2x).
-
-# Arguments
-- `model_psd`: Model power spectral density
-- `target_psd`: Target power spectral density
-- `freqs`: Frequency vector
-- `data`: TargetPSD object containing powers and peak_metadata  
-- `task_type`: String indicating the task type ("rest" or "ssvep")
-- `loss_settings`: Loss settings containing SSVEP parameters
-"""
-function metric_maef(model_psd::Vector{Float64}, data::TargetPSD, freqs::Vector{Float64}, task_type::String, loss_settings)
-    if task_type == "rest"
-        # Use maer: peak region weighted 2x
-        if data.peak_metadata !== nothing
-            peak_mask = data.peak_metadata.peak_mask
-        else
-            # Fallback to alpha band if no metadata
-            peak_mask = (freqs .>= 8.0) .& (freqs .<= 12.0)
-        end
-        return metric_maer(model_psd, data.powers, freqs, peak_mask)
-    elseif task_type == "ssvep"
-        # Use maes: harmonics weighted 2x
-        f0 = loss_settings.ssvep_stim_freq_hz
-        H = loss_settings.ssvep_n_harmonics
-        bw = loss_settings.ssvep_bandwidth_hz
-        harmonic_mask = _harmonic_mask(freqs, f0, H, bw; fmin=loss_settings.fmin, fmax=loss_settings.fmax)
-        return metric_maes(model_psd, data.powers, freqs, harmonic_mask)
-    else
-        error("Unknown task_type: $(task_type). Expected 'rest' or 'ssvep'")
-    end
-end
 
 
 """
@@ -375,50 +267,47 @@ end
 
 
 
-# calculate area between curves Integrated absolute error (area between curves)
-function l1_integral(a::Vector{Float64}, b::Vector{Float64}, freqs::Vector{Float64})
-    e = abs.(a .- b)
+# Compute weighted integrated absolute error using unified freq_peak_metadata
+function weighted_iae(model_psd::Vector{Float64}, target_psd::Vector{Float64},
+                      freqs::Vector{Float64}, data::Data)
+    """
+    Compute integrated absolute error (area between curves) using region weighting from freq_peak_metadata.
+    Weights ROI regions differently from background, consistent with loss computation.
+    """
+    e = abs.(model_psd .- target_psd)
     df = diff(freqs)
-    area = sum(0.5 .* (e[1:end-1] .+ e[2:end]) .* df)
-    return area
-end
-
-# Core: computes everything once (additive by construction)
-function iae_decomposed(a::Vector{Float64}, b::Vector{Float64},
-                        freqs::Vector{Float64}, task_type::String,
-                        loss_settings::LossSettings)
-
-    e    = abs.(a .- b)
-    df   = diff(freqs)
     trap = 0.5 .* (e[1:end-1] .+ e[2:end]) .* df
-
-    peak_point = if task_type == "rest"
-        (freqs .>= loss_settings.peak_min_frequency_hz) .&
-        (freqs .<= loss_settings.peak_max_frequency_hz)
-    elseif task_type == "ssvep"
-        f0 = loss_settings.ssvep_stim_freq_hz
-        H  = loss_settings.ssvep_n_harmonics
-        bw = loss_settings.ssvep_bandwidth_hz
-        _harmonic_mask(freqs, f0, H, bw; fmin=loss_settings.fmin, fmax=loss_settings.fmax)
-    else
-        error("Unknown task_type: $task_type")
+    
+    if data.freq_peak_metadata === nothing
+        # Fallback: unweighted total IAE if no metadata
+        return sum(trap)
     end
-
-    peak_interval = peak_point[1:end-1] .& peak_point[2:end]
-
-    fit_point    = (freqs .>= loss_settings.fmin) .& (freqs .<= loss_settings.fmax)
-    fit_interval = fit_point[1:end-1] .& fit_point[2:end]
-
-    peak_interval .&= fit_interval
-    back_interval = fit_interval .& .!peak_interval
-
-    iae_peak = sum(trap .* peak_interval)
-    iae_back = sum(trap .* back_interval)
-    iae_full = sum(trap .* fit_interval)
-
-    return (full = iae_full, peak = iae_peak, back = iae_back)
+    
+    pm = data.freq_peak_metadata
+    roi_mask = pm.roi_mask
+    bg_mask = pm.bg_mask
+    
+    # Compute IAE in each region
+    roi_iae = sum(trap .* roi_mask[1:end-1] .& roi_mask[2:end])
+    bg_iae = sum(trap .* bg_mask[1:end-1] .& bg_mask[2:end])
+    
+    # Weighted combination (same as loss: ROI 2x stronger than background)
+    roi_weight = pm.roi_weight
+    bg_weight = pm.bg_weight
+    total_weight = roi_weight + bg_weight
+    
+    if total_weight <= 0
+        # Fallback to equal weighting
+        return 0.5 * (roi_iae + bg_iae)
+    end
+    
+    return (roi_weight * roi_iae + bg_weight * bg_iae) / total_weight
 end
 
-# Optional wrappers, if you like keeping old names:
-l1_integral_peak(a,b,freqs,task,ls) = iae_decomposed(a,b,freqs,task,ls).peak
-l1_integral_background(a,b,freqs,task,ls) = iae_decomposed(a,b,freqs,task,ls).back
+
+
+function r2(psd_model, psd_data)
+    ss_res = sum((psd_data .- psd_model).^2)
+    ss_tot = sum((psd_data .- mean(psd_data)).^2)
+    return 1 - ss_res/ss_tot
+end

@@ -66,10 +66,14 @@ include("types/settings.jl")
 include("types/params.jl")
 include("types/variables.jl")
 include("types/network_types.jl")
+include("types/data.jl")
+include("types/optimization_types.jl")
 
 export Settings, GeneralSettings, NetworkSettings, SimulationSettings, OptimizationSettings
 export OptimizerSettings, SamplingSettings, DataSettings, LossSettings
 export Population, InputDynamics, SensoryInput, InternodeInput, InterpopulationInput
+export Data, OptLogEntry, ReparamSpec
+export ParamTransform, ParamReparamTransform, Affine01, ExpPos, SoftplusPos, SigmoidBound, TanhBound, Identity
 
 # Type management
 export update_param_minmax!, update_param_values!, update_param_tunability!
@@ -96,9 +100,7 @@ export print_vars_summary
 include("utils/utils.jl")
 include("utils/io.jl")
 include("utils/extract_brain_source.jl")
-include("utils/separate_psd_comps.jl")
 include("utils/spectral_transforms.jl")
-include("utils/smooth_norm.jl")
 
 export set_verbose, vwarn, vinfo, vprint, center
 export make_rng, haspropnn, set_task_settings, is_verbose
@@ -107,14 +109,10 @@ export settings_to_dict, print_settings_summary, load_data
 
 # Signal processing utilities
 export extract_brain_sources, extract_brain_source
-export separate_psd_components
 export WelchWorkspace, SpectrumWorkspace
 export calculate_spectra, calculate_spectrum
 export compute_cwt, compute_stft, compute_welch_pow_spectrum, compute_welch_pow_spectra
 export parse_psd_preproc_pipeline, psd_preproc_flags_from_spec
-export smooth_vector, smooth_df
-export normalize_timeseries, normalize_timeseries_df
-export detrend_vector, detrend_df
 export normalize_spectrum, normalize_spectra
 
 # ============================================================================
@@ -151,7 +149,7 @@ include("simulate/simulate_network.jl")
 
 export simulate_network
 export prepare_ode_problem, solve_ode_system
-export simulate_problem, safe_solve, get_solver, get_solver_kwargs
+export simulate_network, safe_solve, get_solver, get_solver_kwargs
 export solver_needs_dt, sol2df, save_params_and_inits, save_ts_data
 
 # ============================================================================
@@ -165,17 +163,18 @@ include("optimize/reparametrization.jl")
 include("optimize/optimize_network.jl")
 include("optimize/save_optimization_results.jl")
 include("optimize/evaluation.jl")
+include("optimize/hyperparameter_sweep.jl")
 
 export compute_loss, compute_loss_from_simulation
 export optimize_network, setup_optimization_problem
 export ObjectiveFunction
-export TargetPSD, prepare_data!, ReparamSpec
+export prepare_data!
 export get_metric_function, get_loss_function
 export apply_subject_specific_peak_range!
 export detect_peak_windows, build_broad_peak_metadata
 export estimate_sigma_init, estimate_sigma_floor
 export maybe_initialize_std_measured_noise!
-export findpeaks, compute_peak_score, compute_background_score
 export save_optimization_results
+export run_hyperparameter_sweep
 
 end  # module ENEEGMA

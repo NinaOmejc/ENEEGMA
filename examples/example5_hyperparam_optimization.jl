@@ -25,6 +25,9 @@ settings = create_default_settings();
 # settings.data_settings.data_file = "path/to/your/data.csv"
 print_settings_summary(settings; section="data_settings")
 data = prepare_data!(settings);
+# using Plots
+# plot(data.times, data.signal, title="Target EEG Signal", xlabel="Time (s)", ylabel="Amplitude")
+# plot(data.freqs, data.powers, title="Target PSD", xlabel="Frequency (Hz)", ylabel="Power")
 
 # ============================================================================
 # Step 3: Load candidate models from grammar sampling CSV
@@ -65,37 +68,10 @@ set_all_params_tunable!(net.params)
 # Configuration options:
 #   - population_grid: Vector of population sizes to test [e.g., [20, 40, 80]]
 #   - sigma_grid: Vector of initial step sizes [e.g., [0.5, 1.0, 2.0]]
-#   - restart_grid: Vector of restart counts [e.g., [1, 2, 3]]
-#   - param_range_levels: Loss function target types ["all", "peak", "background"]
-#   - save_results: "all", "best", or "none" (where to save results)
-#
-# Example JSON configuration (in your settings JSON file):
-# "hyperparameter_sweep": {
-#   "population_grid": [20, 40, 80],
-#   "sigma_grid": [0.5, 1.0, 2.0],
-#   "restart_grid": [2, 3],
-#   "save_results": "best"
-# }
-
-# For this example, we use default sweep settings (empty sweep = single optimization)
-# To enable hyperparameter sweep, configure the settings JSON file with the options above
-
 print_settings_summary(settings; section="optimization_settings")
 
 # ============================================================================
 # Step 6: Run Hyperparameter Sweep
 # ============================================================================
 # The sweep will run optimization for each hyperparameter combination
-# Results are saved automatically based on sweep_settings.save_results
-
-println("\n" * "="^70)
-println("STARTING HYPERPARAMETER SWEEP")
-println("="^70)
-
-run_hyperparameter_sweep(settings, data; max_runs=nothing, force_model_idx=model_idx)
-
-println("\n" * "="^70)
-println("HYPERPARAMETER SWEEP COMPLETED")
-println("="^70)
-println("\nResults saved to: $(settings.general_settings.path_out)")
-println("Check the output directory for optimization results across all hyperparameter combinations.")
+run_hyperparameter_sweep(settings, data)

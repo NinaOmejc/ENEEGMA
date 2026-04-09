@@ -1,52 +1,11 @@
 # ---------------------------------------------------------------------------
 # Parameter reparametrization utilities
+#
+# Type definitions (ParamTransform, ParamReparamTransform) are defined in
+# src/types/optimization_types.jl and exported there.
 # ---------------------------------------------------------------------------
 
-abstract type ParamTransform end
-
-struct Affine01 <: ParamTransform
-    min::Float64
-    max::Float64
-end
-
-struct ExpPos <: ParamTransform
-    scale::Float64
-end
-
-struct SoftplusPos <: ParamTransform
-    scale::Float64
-end
-
-struct SigmoidBound <: ParamTransform
-    min::Float64
-    max::Float64
-end
-
-struct TanhBound <: ParamTransform
-    scale::Float64
-end
-
-struct Identity <: ParamTransform end
-
-"""
-    ParamReparamTransform
-
-Container that stores the per-dimension mappings needed to map parameter bounds
-from their native range to a shared target range (default [-5, 5]).
-"""
-struct ParamReparamTransform
-    transforms::Vector{ParamTransform}
-    target_min::Float64
-    target_max::Float64
-
-    function ParamReparamTransform(transforms::Vector{ParamTransform}; target_min::Float64=-5.0, target_max::Float64=5.0)
-        target_min < target_max || error("Target minimum must be smaller than target maximum.")
-        return new(copy(transforms), target_min, target_max)
-    end
-end
-
-Base.length(transform::ParamReparamTransform) = length(transform.transforms)
-
+# Helper dispatch functions for to_phys/to_opt transformations
 to_phys(z::Real, tr::ParamTransform, ::Float64, ::Float64) = throw(ArgumentError("Unknown transform $(typeof(tr))"))
 to_opt(x::Real, tr::ParamTransform, ::Float64, ::Float64) = throw(ArgumentError("Unknown transform $(typeof(tr))"))
 
@@ -121,25 +80,7 @@ function to_opt(x::Real, tr::TanhBound, target_min::Float64, target_max::Float64
     return clamp(atanh(y), target_min, target_max)
 end
 
-
-"""
-    ReparamSpec
-
-Lightweight container describing how a block of decision variables should be
-re-parameterized. Stores the optional transform and block length.
-"""
-struct ReparamSpec
-    transform::Union{ParamReparamTransform, Nothing}
-    n::Int
-    function ReparamSpec(transform::Union{ParamReparamTransform, Nothing}, n::Integer)
-        return new(transform, Int(n))
-    end
-end
-
-ReparamSpec(n::Integer) = ReparamSpec(nothing, Int(n))
-
-Base.length(spec::ReparamSpec) = spec.n
-
+# ReparamSpec struct is defined in src/types/optimization_types.jl
 
 """
     build_param_reparam_transform(mins, maxs; target_bounds=(-5.0, 5.0), types=nothing, strategy=:typed)

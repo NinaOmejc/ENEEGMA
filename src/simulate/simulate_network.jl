@@ -1,57 +1,41 @@
-function simulate_network(net::Network)
+"""
+    simulate_network(prob::SciMLBase.AbstractDEProblem; 
+                     new_params::Union{Nothing, NamedTuple}=nothing, 
+                     new_inits::Union{Nothing, Vector{Float64}}=nothing,
+                     new_tspan::Union{Nothing, Tuple{Float64, Float64}}=nothing,
+                     solver::SciMLBase.AbstractDEAlgorithm=Rodas5(),
+                     solver_kwargs::NamedTuple=NamedTuple())::SciMLBase.AbstractODESolution
+
+Simulate a network problem with optional parameter/initial condition overrides.
+
+This is the main simulation entry point. It handles problem remapping with custom parameters,
+initial conditions, and time spans, then solves using the specified solver and kwargs.
+
+# Arguments
+- `prob::SciMLBase.AbstractDEProblem`: The differential equation problem to solve
+- `new_params::Union{Nothing, NamedTuple}`: Override parameters (if nothing, use original)
+- `new_inits::Union{Nothing, Vector{Float64}}`: Override initial conditions (if nothing, use original)
+- `new_tspan::Union{Nothing, Tuple{Float64, Float64}}`: Override time span (if nothing, use original)
+- `solver::SciMLBase.AbstractDEAlgorithm`: Solver algorithm (default: Rodas5())
+- `solver_kwargs::NamedTuple`: Solver configuration kwargs
+
+# Returns
+- `sol::SciMLBase.AbstractODESolution`: Solution object from the solver
+"""
+function simulate_network(prob::SciMLBase.AbstractDEProblem; 
+                     new_params::Union{Nothing, NamedTuple}=nothing, 
+                     new_inits::Union{Nothing, Vector{Float64}}=nothing,
+                     new_tspan::Union{Nothing, Tuple{Float64, Float64}}=nothing,
+                     solver::SciMLBase.AbstractDEAlgorithm=Rodas5(),
+                     solver_kwargs::NamedTuple=NamedTuple())::SciMLBase.AbstractODESolution
     
-    gs = net.settings.general_settings
-    ss = net.settings.simulation_settings
-    default_prob = net.problem;
-
-    solver = get_solver(default_prob, ss)
-    solver_kwargs = get_solver_kwargs(default_prob, ss)
-
-    dfs = Vector{DataFrame}()
-    for irun = 1:ss.n_runs
-
-        new_inits = sample_inits(net.vars; return_type="named_tuple")
-        save_params_and_inits(new_inits, net, gs, irun)
-        
-        if isa(new_inits, NamedTuple)
-            new_inits = collect(values(new_inits))
-        end
-
-        sol = simulate_problem(default_prob; new_inits=new_inits, solver=solver, solver_kwargs=solver_kwargs)
-
-        if sol.retcode != :Success
-            @warn "Simulation failed for run $(irun) with return code: $(sol.retcode). Skipping to next run."
-            push!(dfs, DataFrame())  # Push an empty DataFrame to maintain run count
-            continue
-        end
-
-        df = sol2df(sol, net)
-        push!(dfs, df)
-        save_ts_data(df, net, gs, irun)
-
-        if gs.verbosity_level > 0
-            println("Run $(irun) completed for network $(net.name).")
-        end
-    end
-
-    return dfs;
-end
-
-
-function simulate_problem(prob::SciMLBase.AbstractDEProblem; 
-                          new_params::Union{Nothing, NamedTuple}=nothing, 
-                          new_inits::Union{Nothing, Vector{Float64}}=nothing,
-                          new_tspan::Union{Nothing, Tuple{Float64, Float64}}=nothing,
-                          solver::SciMLBase.AbstractDEAlgorithm=Rodas5(),
-                          solver_kwargs::NamedTuple=NamedTuple())::SciMLBase.AbstractODESolution
-
-    # Start with empty NamedTuple
+    # Start with empty NamedTuple to collect remake parameters
     remake_kwargs = NamedTuple()
 
-    # Helper to add a field
+    # Helper to add a field to NamedTuple
     add(nt, k, v) = merge(nt, NamedTuple{(k,)}((v,)))
 
-    # Add only fields that are present
+    # Add only fields that are specified (not nothing)
     if new_params !== nothing
         remake_kwargs = add(remake_kwargs, :p, new_params)
     end
@@ -62,10 +46,10 @@ function simulate_problem(prob::SciMLBase.AbstractDEProblem;
         remake_kwargs = add(remake_kwargs, :tspan, new_tspan)
     end
 
-    # Remake problem with all specified parameters (or return original if none specified)
+    # Remake problem with specified overrides (or return original if none specified)
     prob_remade = isempty(remake_kwargs) ? prob : remake(prob; remake_kwargs...)
 
-    # Solve the problem safely
+    # Solve the problem safely with callbacks for instability detection
     sol = safe_solve(prob_remade, solver; solver_kwargs=solver_kwargs)
 
     return sol
@@ -290,15 +274,10 @@ function save_params_and_inits(inits::NamedTuple, net::Network, gs::GeneralSetti
     
     # Generate filename and save; Create directory if it doesn't exist
     # Output directory: path_out / exp_name / [candidate_NAME/]
-    output_dir = joinpath(gs.path_out, gs.exp_name)
-    if !isnothing(gs.candidate_name)
-        output_dir = joinpath(output_dir, "candidate_$(gs.candidate_name)")
-    end
-    mkpath(output_dir)
+    output_dir = construct_output_dir(gs)
     filename = joinpath(output_dir, "$(net.name)$(fname_suffix)_params_inits_run$(irun).csv")
     CSV.write(filename, df)
     return nothing
-    
 end
 
 
@@ -311,11 +290,7 @@ function save_ts_data(df::DataFrame, net::Network, gs::GeneralSettings, irun::In
     end
     
     # Output directory: path_out / exp_name / [candidate_NAME/]
-    output_dir = joinpath(gs.path_out, gs.exp_name)
-    if !isnothing(gs.candidate_name)
-        output_dir = joinpath(output_dir, "candidate_$(gs.candidate_name)")
-    end
-    mkpath(output_dir)
+    output_dir = construct_output_dir(gs)
     filename = joinpath(output_dir, "$(net.name)$(fname_suffix)_ts_data_run$(irun).csv")
     CSV.write(filename, df)
 

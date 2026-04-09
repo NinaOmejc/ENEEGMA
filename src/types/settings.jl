@@ -78,8 +78,8 @@ mutable struct GeneralSettings <: AbstractSettings
         end
 
         # Get verbosity level (0=silent, 1=minimal, 2=detailed)
-        raw_level = get(gendict, "verbosity_level", 1)
-        verbosity_level = _coerce_level(raw_level, 1)
+        raw_level = get(gendict, "verbosity_level", 2)
+        verbosity_level = _coerce_level(raw_level, 2)
         gendict["verbosity_level"] = verbosity_level
 
         candidate_name = get(gendict, "candidate_name", nothing)
@@ -346,10 +346,9 @@ end
 # PSD preprocessing helpers shared across loss settings and utilities
 # ------------------------------------------------------------------
 
+# PSD preprocessing: minimal token parsing for log support
 const _PSD_PREPROC_SPLIT_REGEX = r"[\,\s\-\|>]+"
-const _LOSSSET_PSD_NORM_TOKENS = Set(["relative", "relative_db", "zscore", "minmax", "percent", "db"])
 const _LOSSSET_PSD_LOG_TOKENS = Set(["log", "log10", "log2", "ln"])
-const _LOSSSET_PSD_SMOOTH_TOKENS = Set(["savitzky_golay", "savitzkygolay", "savgol", "gaussian", "moving_avg", "movingavg", "ma"])
 
 function _psd_preproc_tokens(spec::Union{Nothing, AbstractString})
     spec === nothing && return String[]
@@ -373,10 +372,8 @@ function _canonicalize_psd_preproc_string(spec::Union{Nothing, AbstractString})
 end
 
 function _psd_preproc_tokens_flags(tokens::Vector{String})
-    has_norm = any(token -> token in _LOSSSET_PSD_NORM_TOKENS, tokens)
     has_log = any(token -> token in _LOSSSET_PSD_LOG_TOKENS, tokens)
-    has_smooth = any(token -> token in _LOSSSET_PSD_SMOOTH_TOKENS, tokens)
-    return has_norm, has_log, has_smooth
+    return has_log
 end
 
 function _losssettings_ensure_dict(val)::Union{Dict{String, Any}, Nothing}
@@ -384,30 +381,7 @@ function _losssettings_ensure_dict(val)::Union{Dict{String, Any}, Nothing}
     return Dict{String, Any}(val)
 end
 
-function _losssettings_map_normalize_tail(tail::String)
-    tail in ("relative_total", "relative", "rel", "relative_power") && return "relative"
-    tail in ("relative_db", "reldb", "db") && return "relative_db"
-    tail in ("zscore", "z", "z_score") && return "zscore"
-    tail in ("minmax", "min_max") && return "minmax"
-    tail in ("percent", "pct") && return "percent"
-    tail in ("none", "off") && return "none"
-    return tail
-end
 
-function _losssettings_map_smooth_tail(tail::String)
-    tail in ("sgolay", "savitzky_golay", "savgol", "sgol") && return "savitzky_golay"
-    tail in ("gauss", "gaussian") && return "gaussian"
-    tail in ("ma", "movingavg", "moving_avg") && return "moving_avg"
-    tail in ("none", "off") && return "none"
-    return tail
-end
-
-function _losssettings_map_log_tail(tail::String)
-    tail in ("10", "log10") && return "log10"
-    tail in ("2", "log2") && return "log2"
-    tail in ("e", "ln", "log", "natural") && return "log"
-    return tail
-end
 
 function _losssettings_as_bool(val, default::Bool=true)
     val === nothing && return default
@@ -425,45 +399,10 @@ function _losssettings_as_bool(val, default::Bool=true)
     return default
 end
 
-function _losssettings_normalize_preproc_entry(entry)::Union{String, Nothing}
-    token = lowercase(strip(String(entry)))
-    isempty(token) && return nothing
-    if occursin(":", token)
-        parts = split(token, ":"; limit=2)
-        head = strip(parts[1])
-        tail = length(parts) > 1 ? strip(parts[2]) : ""
-        if head in ("normalize", "norm")
-            return _losssettings_map_normalize_tail(tail)
-        elseif head in ("smooth", "smoothing", "filter")
-            return _losssettings_map_smooth_tail(tail)
-        elseif head in ("log", "logarithm")
-            return _losssettings_map_log_tail(tail)
-        end
-        tail != "" && return tail
-        return head
-    end
-    return token
-end
 
-function _losssettings_preproc_value_to_string(value)::Union{String, Nothing}
-    value === nothing && return nothing
-    if value isa AbstractVector
-        @warn "psd.preproc no longer accepts arrays; please provide a single hyphen-separated string" value=value
-        return nothing
-    end
-    spec = String(value)
-    tokens = _psd_preproc_tokens(spec)
-    mapped = String[]
-    for entry in tokens
-        mapped_token = _losssettings_normalize_preproc_entry(entry)
-        mapped_token === nothing && continue
-        push!(mapped, mapped_token)
-    end
-    isempty(mapped) && return spec
-    return join(mapped, "-")
-end
 
 function normalize_loss_settings_dict!(lossdict::Dict{String, Any})
+    # Minimal parsing: extract Welch/noise parameters from nested psd/time_noise sections if present
     psd = _losssettings_ensure_dict(get(lossdict, "psd", nothing))
     if psd !== nothing
         if haskey(psd, "fmin")
@@ -471,21 +410,6 @@ function normalize_loss_settings_dict!(lossdict::Dict{String, Any})
         end
         if haskey(psd, "fmax")
             lossdict["fmax"] = Float64(psd["fmax"])
-        end
-        if haskey(psd, "fbands") && psd["fbands"] isa AbstractVector
-            lossdict["fbands"] = String.(psd["fbands"])
-        end
-        preproc_val = _losssettings_preproc_value_to_string(get(psd, "preproc", nothing))
-        preproc_val !== nothing && (lossdict["psd_preproc"] = preproc_val)
-        normalize = _losssettings_ensure_dict(get(psd, "normalize", nothing))
-        if normalize !== nothing && haskey(normalize, "eps")
-            lossdict["psd_rel_eps"] = Float64(normalize["eps"])
-        end
-        smooth = _losssettings_ensure_dict(get(psd, "smooth", nothing))
-        if smooth !== nothing
-            haskey(smooth, "window_bins") && (lossdict["psd_window_size"] = Int(smooth["window_bins"]))
-            haskey(smooth, "poly_order") && (lossdict["psd_poly_order"] = Int(smooth["poly_order"]))
-            haskey(smooth, "sigma") && (lossdict["psd_smooth_sigma"] = Float64(smooth["sigma"]))
         end
         welch = _losssettings_ensure_dict(get(psd, "welch", nothing))
         if welch !== nothing
@@ -497,52 +421,11 @@ function normalize_loss_settings_dict!(lossdict::Dict{String, Any})
         haskey(psd, "noise_avg_reps") && (lossdict["psd_noise_avg_reps"] = Int(psd["noise_avg_reps"]))
     end
 
-    peakbg = _losssettings_ensure_dict(get(lossdict, "peakbg", nothing))
-    fspb = _losssettings_ensure_dict(get(lossdict, "fspb", nothing))
-    if fspb !== nothing
-        peak_det = _losssettings_ensure_dict(get(fspb, "peak_detection", nothing))
-        if peak_det !== nothing
-            lossdict["peak_detection_empty"] = isempty(peak_det)
-            haskey(peak_det, "max_windows") && (lossdict["max_peak_windows"] = Int(peak_det["max_windows"]))
-            haskey(peak_det, "bandwidth_hz") && (lossdict["peak_bandwidth_hz"] = Float64(peak_det["bandwidth_hz"]))
-            haskey(peak_det, "prominence") && (lossdict["peak_prominence_db"] = Float64(peak_det["prominence"]))
-            haskey(peak_det, "baseline_window_hz") && (lossdict["peak_baseline_window_hz"] = Float64(peak_det["baseline_window_hz"]))
-            haskey(peak_det, "baseline_quantile") && (lossdict["peak_baseline_quantile"] = Float64(peak_det["baseline_quantile"]))
-        else
-            lossdict["peak_detection_empty"] = false
-        end
-        haskey(fspb, "min_frequency_hz") && (lossdict["peak_min_frequency_hz"] = Float64(fspb["min_frequency_hz"]))
-        haskey(fspb, "max_frequency_hz") && (lossdict["peak_max_frequency_hz"] = Float64(fspb["max_frequency_hz"]))
-        lossdict["fspb_enabled"] = _losssettings_as_bool(get(fspb, "enabled", true), true)
-    end
-
-    ssvep = _losssettings_ensure_dict(get(lossdict, "ssvep", nothing))
-    if ssvep !== nothing
-        lossdict["ssvep_enabled"] = _losssettings_as_bool(get(ssvep, "enabled", true), true)
-        haskey(ssvep, "stim_freq_hz") && (lossdict["ssvep_stim_freq_hz"] = Float64(ssvep["stim_freq_hz"]))
-        haskey(ssvep, "n_harmonics") && (lossdict["ssvep_n_harmonics"] = Int(ssvep["n_harmonics"]))
-        haskey(ssvep, "bandwidth_hz") && (lossdict["ssvep_bandwidth_hz"] = Float64(ssvep["bandwidth_hz"]))
-        haskey(ssvep, "harmonic_decay") && (lossdict["ssvep_harmonic_decay"] = Float64(ssvep["harmonic_decay"]))
-    end
-
-    if haskey(lossdict, "weight_fspb")
-        lossdict["weight_fspb"] = Float64(lossdict["weight_fspb"])
-    end
-    if haskey(lossdict, "weight_ssvep")
-        lossdict["weight_ssvep"] = Float64(lossdict["weight_ssvep"])
-    end
-    if haskey(lossdict, "weight_background")
-        lossdict["weight_background"] = Float64(lossdict["weight_background"])
-    end
-
-    # _normalize_fspb_ssvep_weights_dict!(lossdict)
-
     noise = _losssettings_ensure_dict(get(lossdict, "time_noise", nothing))
     if noise !== nothing
-        if haskey(noise, "sigma_meas")
-            lossdict["sigma_meas"] = Float64(noise["sigma_meas"])
+        if haskey(noise, "measurement_noise_std")
+            lossdict["measurement_noise_std"] = Float64(noise["measurement_noise_std"])
         end
-        haskey(noise, "auto_initialize") && (lossdict["auto_initialize_sigma_meas"] = _losssettings_as_bool(noise["auto_initialize"], true))
         if haskey(noise, "loss_noise_seed")
             raw_seed = noise["loss_noise_seed"]
             if raw_seed === nothing || raw_seed == ""
@@ -556,82 +439,32 @@ function normalize_loss_settings_dict!(lossdict::Dict{String, Any})
     return lossdict
 end
 
-function _normalize_fspb_ssvep_weights_dict!(lossdict::Dict{String, Any})
-    has_f = haskey(lossdict, "weight_fspb")
-    has_s = haskey(lossdict, "weight_ssvep")
-    has_b = haskey(lossdict, "weight_background")
-    (has_f || has_s || has_b) || return
-
-    wf = max(Float64(get(lossdict, "weight_fspb", 0.0)), 0.0)
-    ws = max(Float64(get(lossdict, "weight_ssvep", 0.0)), 0.0)
-    wb = if has_b
-        max(Float64(get(lossdict, "weight_background", 0.0)), 0.0)
-    elseif has_f && has_s
-        max(1.0 - wf - ws, 0.0)
-    else
-        0.0
-    end
-
-    total = wf + ws + wb
-    total > 0 || return
-
-    lossdict["weight_fspb"] = wf / total
-    lossdict["weight_ssvep"] = ws / total
-    lossdict["weight_background"] = wb / total
-    return nothing
-end
-
 mutable struct LossSettings <: AbstractSettings
-    fmin::Float64
-    fmax::Float64
-    fbands::Vector{String}
-    psd_preproc::String
-    psd_window_size::Int
-    psd_poly_order::Int
-    psd_rel_eps::Float64
-    psd_smooth_sigma::Float64
-    psd_welch_window_sec::Float64
-    psd_welch_overlap::Float64
-    psd_welch_nperseg::Int
-    psd_welch_nfft::Int
-    psd_noise_avg_reps::Int
-    sigma_meas::Float64
-    auto_initialize_sigma_meas::Bool
-    loss_noise_seed::Union{Nothing, Int}
-    peak_bandwidth_hz::Float64
-    peak_prominence_db::Float64
-    max_peak_windows::Int
-    weight_background::Float64
-    fspb_enabled::Bool
-    peak_detection_empty::Bool
-    peak_baseline_window_hz::Float64
-    peak_baseline_quantile::Float64
-    peak_min_frequency_hz::Float64
-    peak_max_frequency_hz::Float64
-    weight_fspb::Float64
-    weight_ssvep::Float64
-    ssvep_enabled::Bool
-    ssvep_stim_freq_hz::Float64
-    ssvep_n_harmonics::Int
-    ssvep_bandwidth_hz::Float64
-    ssvep_harmonic_decay::Float64
-    max_abs_signal::Float64
-    max_rms_growth::Float64
-    psd_preproc_ops::Any
-    psd_preproc_ops_cache_key::Any
-    psd_workspace::Any
+    # PSD computation settings
+    psd_preproc::String                    # preprocessing pipeline: "log10", "relative", etc.
+    psd_welch_window_sec::Float64          # Welch window duration in seconds
+    psd_welch_overlap::Float64             # Welch window overlap (0-1)
+    psd_welch_nperseg::Int                 # Welch segment length (0=auto)
+    psd_welch_nfft::Int                    # FFT length (0=auto)
+    psd_noise_avg_reps::Int                # averaging reps for noisy PSD
+    
+    # Frequency analysis range
+    fmin::Float64                          # minimum frequency (Hz)
+    fmax::Float64                          # maximum frequency (Hz)
+    
+    # Noise modeling
+    measurement_noise_std::Float64         # estimated standard deviation
+    loss_noise_seed::Union{Nothing, Int}   # for reproducible noise
+    
+    # Region weighting (for roi vs background loss)
+    roi_weight::Float64                    # weight for region of interest
+    bg_weight::Float64                     # weight for background
 
     function LossSettings(dict::Dict{String, Any})::LossSettings
         cooked = Dict{String, Any}(dict)
         normalize_loss_settings_dict!(cooked)
         dict = cooked
-        fmin = Float64(get(dict, "fmin", 1.0))
-        fmax = Float64(get(dict, "fmax", 48.0))
-        fbands = string.(get(dict, "fbands", ["delta", "theta", "alpha", "betalow", "betahigh"]))
-        psd_window_size = Int(get(dict, "psd_window_size", 5))
-        psd_poly_order = Int(get(dict, "psd_poly_order", 2))
-        psd_rel_eps = Float64(get(dict, "psd_rel_eps", 1e-12))
-        psd_smooth_sigma = Float64(get(dict, "psd_smooth_sigma", 1.0))
+        
         psd_welch_window_sec = max(Float64(get(dict, "psd_welch_window_sec", 2.0)), 0.0)
         psd_welch_overlap = clamp(Float64(get(dict, "psd_welch_overlap", 0.5)), 0.0, 0.99)
         psd_welch_nperseg = max(Int(get(dict, "psd_welch_nperseg", 0)), 0)
@@ -641,79 +474,30 @@ mutable struct LossSettings <: AbstractSettings
         raw_preproc = get(dict, "psd_preproc", nothing)
         psd_preproc = _canonicalize_psd_preproc_string(raw_preproc === nothing ? "log10" : String(raw_preproc))
 
-        auto_initialize_sigma = _losssettings_as_bool(get(dict, "auto_initialize_sigma_meas", true), true)
-        sigma_meas = max(Float64(get(dict, "sigma_meas", 0.0)), 0.0)
+        fmin = Float64(get(dict, "fmin", 1.0))
+        fmax = Float64(get(dict, "fmax", 48.0))
+        
+        measurement_noise_std = max(Float64(get(dict, "measurement_noise_std", 0.0)), 0.0)
 
         loss_noise_seed_val = get(dict, "loss_noise_seed", nothing)
         loss_noise_seed = loss_noise_seed_val === nothing ? nothing : _coerce_settings_idx_value(loss_noise_seed_val)
 
-        peak_bandwidth_hz = max(Float64(get(dict, "peak_bandwidth_hz", 6.0)), eps())
-        peak_prominence_db = Float64(get(dict, "peak_prominence_db", 0.5))
-        max_peak_windows = max(Int(get(dict, "max_peak_windows", 2)), 0)
-        weight_background = max(Float64(get(dict, "weight_background", 0.4)), 0.0)
-        fspb_enabled = _losssettings_as_bool(get(dict, "fspb_enabled", true), true)
-        peak_detection_empty = _losssettings_as_bool(get(dict, "peak_detection_empty", false), false)
-        peak_baseline_window_hz = max(Float64(get(dict, "peak_baseline_window_hz", 6.0)), 0.5)
-        peak_baseline_quantile = clamp(Float64(get(dict, "peak_baseline_quantile", 0.2)), 0.0, 1.0)
-        peak_min_frequency_hz = max(Float64(get(dict, "peak_min_frequency_hz", 5.0)), 0.0)
-        peak_max_frequency_hz = max(Float64(get(dict, "peak_max_frequency_hz", 45.0)), 0.0)
-        weight_fspb = max(Float64(get(dict, "weight_fspb", 1.0)), 0.0)
-        weight_ssvep = max(Float64(get(dict, "weight_ssvep", 1.0)), 0.0)
-        ssvep_enabled = _losssettings_as_bool(get(dict, "ssvep_enabled", true), true)
-        ssvep_stim_freq_hz = max(Float64(get(dict, "ssvep_stim_freq_hz", 5.0)), 0.0)
-        ssvep_n_harmonics = max(Int(get(dict, "ssvep_n_harmonics", 3)), 1)
-        ssvep_bandwidth_hz = max(Float64(get(dict, "ssvep_bandwidth_hz", 0.5)), 0.0)
-        ssvep_harmonic_decay = max(Float64(get(dict, "ssvep_harmonic_decay", 0.7)), 0.0)
-        max_abs_signal = max(Float64(get(dict, "max_abs_signal", 100.0)), 0.0)
-        max_rms_growth = max(Float64(get(dict, "max_rms_growth", 100.0)), 0.0)
+        roi_weight = max(Float64(get(dict, "roi_weight", 1.0)), 0.0)
+        bg_weight = max(Float64(get(dict, "bg_weight", 0.4)), 0.0)
 
-        psd_preproc_ops = nothing
-        psd_preproc_ops_cache_key = nothing
-        psd_workspace = nothing
-
-        new(fmin,
-            fmax,
-            fbands,
-            psd_preproc,
-            psd_window_size,
-            psd_poly_order,
-            psd_rel_eps,
-            psd_smooth_sigma,
+        new(psd_preproc,
             psd_welch_window_sec,
             psd_welch_overlap,
             psd_welch_nperseg,
             psd_welch_nfft,
             psd_noise_avg_reps,
-            sigma_meas, auto_initialize_sigma, loss_noise_seed,
-            peak_bandwidth_hz, peak_prominence_db, max_peak_windows,
-            weight_background, fspb_enabled, peak_detection_empty,
-            peak_baseline_window_hz, peak_baseline_quantile, peak_min_frequency_hz, peak_max_frequency_hz,
-            weight_fspb, weight_ssvep,
-            ssvep_enabled, ssvep_stim_freq_hz, ssvep_n_harmonics, ssvep_bandwidth_hz,
-            ssvep_harmonic_decay,
-            max_abs_signal, max_rms_growth,
-            psd_preproc_ops, psd_preproc_ops_cache_key,
-            psd_workspace)
+            fmin,
+            fmax,
+            measurement_noise_std,
+            loss_noise_seed,
+            roi_weight,
+            bg_weight)
     end
-end
-
-function normalize_fspb_ssvep_weights!(ls::LossSettings; background_auto::Bool=false)
-    wf = max(ls.weight_fspb, 0.0)
-    ws = max(ls.weight_ssvep, 0.0)
-    wb = max(ls.weight_background, 0.0)
-
-    if background_auto
-        wb = max(1.0 - wf - ws, 0.0)
-        ls.weight_background = wb
-    end
-
-    total = wf + ws + wb
-    total > 0 || return ls
-
-    ls.weight_fspb = wf / total
-    ls.weight_ssvep = ws / total
-    ls.weight_background = wb / total
-    return ls
 end
 
 function losssettings_psd_flags(ls::LossSettings)
@@ -721,7 +505,7 @@ function losssettings_psd_flags(ls::LossSettings)
 end
 
 function losssettings_psd_has_log(ls::LossSettings)
-    _, has_log, _ = losssettings_psd_flags(ls)
+    has_log = losssettings_psd_flags(ls)
     return has_log
 end
 
@@ -802,7 +586,6 @@ mutable struct HyperparameterSweepSettings <: AbstractSettings
     restart_grid::Vector{Int}
     base_reparam_scales::Dict{Symbol, Float64}
     hyperparameter_axes::Vector{HyperparameterAxis}
-    save_results::String
 
     function HyperparameterSweepSettings(raw_section_any,
                                          param_range_level::String,
@@ -815,17 +598,14 @@ mutable struct HyperparameterSweepSettings <: AbstractSettings
         base_scales = isempty(reparam_type_scales) ? Dict{Symbol, Float64}() : deepcopy(reparam_type_scales)
         scale_sets = _build_scale_sets(lowered, base_scales)
         range_levels = _parse_param_range_levels(lowered, _normalize_range_level(param_range_level))
-        pop_fallback = opt_settings.population_size > 0 ? opt_settings.population_size : max(opt_settings.λ, 32)
         pop_values, pop_found = _parse_int_list(lowered, ["population_sizes", "population_grid", "cmaes_population"]; min_value=1)
-        population_grid = pop_found ? pop_values : [pop_fallback]
+        population_grid = pop_found ? pop_values : [40, 80]
         restart_values, restart_found = _parse_int_list(lowered, ["n_restarts", "restart_counts", "restart_grid"]; min_value=1)
         restart_fallback = n_restarts > 0 ? n_restarts : 1
         restart_grid = restart_found ? restart_values : [restart_fallback]
         sigma_values, sigma_found = _parse_float_list(lowered, ["sigma0_values", "sigma0", "sigma_grid"]; min_value=eps())
-        sigma_override = sigma_found ? sigma_values : nothing
+        sigma_override = sigma_found ? sigma_values : [2.0, 8.0]
         axes = _parse_hyperparameter_axes(raw_section)
-        save_pref = lowercase(String(get(lowered, "save_results", "best")))
-        save_pref in ("all", "best", "none") || (save_pref = "best")
         return new(sigma_mode,
                    range_levels,
                    scale_sets,
@@ -833,8 +613,7 @@ mutable struct HyperparameterSweepSettings <: AbstractSettings
                    sigma_override,
                    restart_grid,
                    base_scales,
-                   axes,
-                   save_pref)
+                   axes)
     end
 end
 
@@ -845,13 +624,11 @@ Settings for network parameter optimization.
 
 # Fields
 - `method::String`: Optimization method. **Currently only "CMAES" is supported.**
-- `loss::String`: Loss function specification
 - `n_restarts::Int64`: Number of optimization restarts
 - Additional fields for loss configuration, reparameterization, and hyperparameter sweeping
 """
 mutable struct OptimizationSettings <: AbstractSettings
     method::String
-    loss::String
     loss_abstol::Float64
     loss_reltol::Float64
     abs_target_loss::Float64
@@ -860,7 +637,6 @@ mutable struct OptimizationSettings <: AbstractSettings
     empirical_lb_col::String
     empirical_ub_col::String
     save_optimization_history::Bool
-    save_all_optim_restarts_results::Bool
     save_modeled_psd::Bool
     reparametrize::Bool
     reparam_strategy::Symbol
@@ -892,10 +668,6 @@ mutable struct OptimizationSettings <: AbstractSettings
         loss_section = get_section("loss_settings")
         lossset = LossSettings(loss_section)
         optz = OptimizerSettings(get_section("optimizer_settings"))
-        loss_name = String(get(loss_section, "loss", get(optdict, "loss", "fspb")))
-#=         if lowercase(loss_name) in ("fspb+ssvep", "peakbg+ssvep", "fspb_ssvep", "fspb-ssvep")
-            normalize_fspb_ssvep_weights!(lossset; background_auto=false)
-        end =#
         loss_abstol = Float64(get(loss_section, "loss_abstol", get(optdict, "loss_abstol", get(optdict, "loss_limit", 1e-5))))
         loss_reltol = Float64(get(loss_section, "loss_reltol", get(optdict, "loss_reltol", get(optdict, "rel_diff_convergence", 1e-5))))
         abs_target_loss = max(Float64(get(optdict, "abs_target_loss", 0.01)), 0.0)
@@ -935,7 +707,6 @@ mutable struct OptimizationSettings <: AbstractSettings
         empirical_ub_col = String(get(optdict, "empirical_ub_col", "q3"))
         
         save_optimization_history = _losssettings_as_bool(get(optdict, "save_optimization_history", false), false)
-        save_all_restarts = _losssettings_as_bool(get(optdict, "save_all_optim_restarts_results", true), true)
         save_modeled_psd = _losssettings_as_bool(get(optdict, "save_modeled_psd", false), false)
         n_restarts = Int64(get(optdict, "n_restarts", 1))
         raw_sweep_section = begin
@@ -949,7 +720,6 @@ mutable struct OptimizationSettings <: AbstractSettings
 
     new(
             method,
-            loss_name,
             loss_abstol,
             loss_reltol,
             abs_target_loss,
@@ -958,7 +728,6 @@ mutable struct OptimizationSettings <: AbstractSettings
             empirical_lb_col,
             empirical_ub_col,
             save_optimization_history,
-            save_all_restarts,
             save_modeled_psd,
             reparam_flag,
             reparam_strategy,
@@ -1114,6 +883,10 @@ mutable struct DataSettings <: AbstractSettings
     task_type::Union{String, Nothing}
     fs::Union{Float64, Nothing}
     data_columns::Union{Vector{String}, Nothing}
+    estimate_measurement_noise::Bool
+    region_definition_mode::Symbol  # :auto or :manual
+    auto_peak_sensitivity::Float64  # 0.0-1.0, higher=looser peak detection
+    manual_frequency_regions::Vector{Tuple{Float64, Float64}}  # [(fmin, fmax), ...] for manual mode
 
     function DataSettings(dict::Dict{String, Any})::DataSettings
         # Handle data_file: can be absolute or relative path
@@ -1145,8 +918,25 @@ mutable struct DataSettings <: AbstractSettings
         task_type = haskey(dict, "task_type") ? (dict["task_type"] === nothing ? nothing : String(dict["task_type"])) : "rest"
         fs = haskey(dict, "fs") ? (dict["fs"] === nothing ? nothing : Float64(dict["fs"])) : 256.0
         data_columns = haskey(dict, "data_columns") ? (dict["data_columns"] === nothing ? nothing : Vector{String}(dict["data_columns"])) : nothing
+        estimate_measurement_noise = _losssettings_as_bool(get(dict, "estimate_measurement_noise", true), true)
+        
+        # Region definition settings
+        region_mode_raw = get(dict, "region_definition_mode", "auto")
+        region_definition_mode = Symbol(lowercase(String(region_mode_raw)))
+        region_definition_mode in (:auto, :manual) || (region_definition_mode = :auto)
+        
+        auto_peak_sensitivity = clamp(Float64(get(dict, "auto_peak_sensitivity", 0.3)), 0.0, 1.0)
+        manual_frequency_regions = get(dict, "manual_frequency_regions", [])
+        if manual_frequency_regions isa Vector
+            manual_frequency_regions = Vector{Tuple{Float64, Float64}}(
+                [(Float64(r[1]), Float64(r[2])) for r in manual_frequency_regions]
+            )
+        else
+            manual_frequency_regions = Tuple{Float64, Float64}[]
+        end
 
-        return new(data_file, target_channel, task_type, fs, data_columns)
+        return new(data_file, target_channel, task_type, fs, data_columns, estimate_measurement_noise,
+                   region_definition_mode, auto_peak_sensitivity, manual_frequency_regions)
     end
 end
 

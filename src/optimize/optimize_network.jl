@@ -2,25 +2,29 @@
 
 function optimize_network(
     net::Network,
-    data::TargetPSD,
+    data::Data,
     settings::Settings;
     hyperparam_combo::Union{Nothing, Tuple}=nothing,
     hyperparam_idx::Union{Nothing, Int}=nothing,
     hyperparam_keys::Union{Nothing, Vector{String}}=nothing
     )
 
-    vprint("--- STARTING OPTIMIZATION ")
+    vprint("--- STARTING OPTIMIZATION "; level=1)
     ss = settings.simulation_settings
     os = settings.optimization_settings
     ls = os.loss_settings
-
-    tspan = ss.tspan
-    tspan === nothing && error("SimulationSettings.tspan must be specified for optimization.")
+    
+    # Ensure output directories exist and save settings (only if not already saved)
+    exp_path = construct_output_dir(settings.general_settings)
+    settings_file = joinpath(exp_path, "settings.json")
+    if !isfile(settings_file)
+        save_settings(settings)
+    end
 
     # get some optimization components
     solver = get_solver(net.problem, ss)
     solver_kwargs = get_solver_kwargs(net.problem, ss)
-    loss_fun = get_loss_function(os.loss)
+    loss_fun = get_loss_function()  # Unified region-weighted MAE loss
     optimizer = get_optimizer(os)
     
     blocks = prepare_optimization_blocks(net, os)
@@ -51,7 +55,7 @@ function optimize_network(
     args = (
         prob=net.problem, data=data, setter=setter,
         all_params=all_params,
-        tspan=tspan, loss_settings=ls,
+        tspan=ss.tspan, loss_settings=ls,
         brain_source_idx=brain_source_idx,
         solver=solver, solver_kwargs=solver_kwargs,
     )
@@ -80,20 +84,26 @@ function optimize_network(
             best_optsol = optsol
         end
         
-        if settings.optimization_settings.save_all_optim_restarts_results && optsol !== nothing
-            save_optimization_results(optsol, runlog, setter, net, data, settings; blocks=blocks, restart_idx=irestart,
-                                              hyperparam_combo=hyperparam_combo, hyperparam_idx=hyperparam_idx, hyperparam_keys=hyperparam_keys)
+        # Optionally save results for this restart
+        if optsol !== nothing
+            save_optimization_results(optsol, runlog, setter, net, data, settings; 
+                                    blocks=blocks, 
+                                    restart_idx=irestart,
+                                    hyperparam_combo=hyperparam_combo, 
+                                    hyperparam_idx=hyperparam_idx, 
+                                    hyperparam_keys=hyperparam_keys)
         end
 
-        vprint("Completed restart $irestart/$(os.n_restarts), current best loss: $best_loss. \n")
+        vprint("Completed restart $irestart/$(os.n_restarts), current best loss: $best_loss. \n"; level=1)
         flush(stdout)
 
         if best_loss <= os.abs_target_loss
-            vprint("Target loss $(os.abs_target_loss) reached. Ending optimization early.")
+            vprint("Target loss $(os.abs_target_loss) reached. Ending optimization early."; level=1)
             break
         end
     end
 
+    # Save best solution results
     if best_optsol === nothing
         detail = isempty(failure_reasons) ? "" : "\nLast failure:\n" * failure_reasons[end]
         max_len = 1200

@@ -15,6 +15,7 @@ function load_data(ds::DataSettings)
     !isfile(ds.data_file) && error("Data file not found: $(ds.data_file)")
     
     data = CSV.read(ds.data_file, DataFrame)
+    vinfo("Data loaded from: $(ds.data_file)", level=2)
     return data
 end
 
@@ -38,11 +39,41 @@ function load_settings_from_file(filepath::String)::Dict{String, Any}
     !endswith(filepath, ".json") && error("Settings file must be .json format")
     
     settings = JSON.parsefile(filepath; dicttype=Dict{String, Any})
-    vinfo("Settings loaded from: $filepath")
+    vinfo("Settings loaded from: $filepath", level=2)
     return settings
 end
 
+"""
+    construct_output_dir(gs::GeneralSettings)::String
 
+Construct and create the output directory path based on GeneralSettings.
+
+Builds hierarchical directory: `path_out / exp_name / [candidate_NAME/]`
+If candidate_name is set, it creates a subdirectory for that candidate.
+The directory is created if it doesn't already exist.
+
+# Arguments
+- `gs::GeneralSettings`: General settings containing path_out, exp_name, and optional candidate_name
+
+# Returns
+String: The full path to the output directory
+
+# Example
+```julia
+output_dir = construct_output_dir(settings.general_settings)
+# Returns: "./results/MyExperiment/" or "./results/MyExperiment/candidate_Model1/"
+```
+"""
+function construct_output_dir(gs::GeneralSettings)::String
+    output_dir = joinpath(gs.path_out, gs.exp_name)
+    if !isnothing(gs.candidate_name)
+        output_dir = joinpath(output_dir, "candidate_$(gs.candidate_name)")
+    end
+    if !isdir(output_dir)
+        mkpath(output_dir)
+    end
+    return output_dir
+end
 
 """
     create_default_settings()::Settings
@@ -148,54 +179,29 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
     
     d["optimization_settings"] = Dict(
         "method" => os.method,
-        "loss" => os.loss,
         "loss_abstol" => os.loss_abstol,
         "loss_reltol" => os.loss_reltol,
         "abs_target_loss" => os.abs_target_loss,
         "param_range_level" => os.param_range_level,
         "save_optimization_history" => os.save_optimization_history,
-        "save_all_optim_restarts_results" => os.save_all_optim_restarts_results,
         "save_modeled_psd" => os.save_modeled_psd,
         "reparametrize" => os.reparametrize,
         "n_restarts" => os.n_restarts,
         "maxiters" => os.maxiters,
         "time_limit_minutes" => os.time_limit_minutes,
         "loss_settings" => Dict(
-            "fmin" => ls.fmin,
-            "fmax" => ls.fmax,
-            "fbands" => ls.fbands,
             "psd_preproc" => ls.psd_preproc,
-            "psd_window_size" => ls.psd_window_size,
-            "psd_poly_order" => ls.psd_poly_order,
-            "psd_rel_eps" => ls.psd_rel_eps,
-            "psd_smooth_sigma" => ls.psd_smooth_sigma,
             "psd_welch_window_sec" => ls.psd_welch_window_sec,
             "psd_welch_overlap" => ls.psd_welch_overlap,
             "psd_welch_nperseg" => ls.psd_welch_nperseg,
             "psd_welch_nfft" => ls.psd_welch_nfft,
             "psd_noise_avg_reps" => ls.psd_noise_avg_reps,
-            "sigma_meas" => ls.sigma_meas,
-            "auto_initialize_sigma_meas" => ls.auto_initialize_sigma_meas,
+            "fmin" => ls.fmin,
+            "fmax" => ls.fmax,
+            "measurement_noise_std" => ls.measurement_noise_std,
             "loss_noise_seed" => ls.loss_noise_seed,
-            "peak_bandwidth_hz" => ls.peak_bandwidth_hz,
-            "peak_prominence_db" => ls.peak_prominence_db,
-            "max_peak_windows" => ls.max_peak_windows,
-            "weight_background" => ls.weight_background,
-            "fspb_enabled" => ls.fspb_enabled,
-            "peak_detection_empty" => ls.peak_detection_empty,
-            "peak_baseline_window_hz" => ls.peak_baseline_window_hz,
-            "peak_baseline_quantile" => ls.peak_baseline_quantile,
-            "peak_min_frequency_hz" => ls.peak_min_frequency_hz,
-            "peak_max_frequency_hz" => ls.peak_max_frequency_hz,
-            "weight_fspb" => ls.weight_fspb,
-            "weight_ssvep" => ls.weight_ssvep,
-            "ssvep_enabled" => ls.ssvep_enabled,
-            "ssvep_stim_freq_hz" => ls.ssvep_stim_freq_hz,
-            "ssvep_n_harmonics" => ls.ssvep_n_harmonics,
-            "ssvep_bandwidth_hz" => ls.ssvep_bandwidth_hz,
-            "ssvep_harmonic_decay" => ls.ssvep_harmonic_decay,
-            "max_abs_signal" => ls.max_abs_signal,
-            "max_rms_growth" => ls.max_rms_growth
+            "roi_weight" => ls.roi_weight,
+            "bg_weight" => ls.bg_weight
         ),
         "optimizer_settings" => Dict(
             "population_size" => opt_s.population_size,
@@ -203,6 +209,19 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
             "K" => opt_s.K,
             "n_samples" => opt_s.n_samples,
             "learning_rate" => opt_s.learning_rate
+        ),
+        "hyperparameter_sweep" => Dict(
+            "sigma_mode" => os.hyperparameter_sweep.sigma_mode,
+            "param_range_levels" => os.hyperparameter_sweep.param_range_levels,
+            "scale_sets" => os.hyperparameter_sweep.scale_sets,
+            "population_grid" => os.hyperparameter_sweep.population_grid,
+            "sigma_values_override" => os.hyperparameter_sweep.sigma_values_override,
+            "restart_grid" => os.hyperparameter_sweep.restart_grid,
+            "base_reparam_scales" => os.hyperparameter_sweep.base_reparam_scales,
+            "hyperparameter_axes" => [Dict(
+                "hyperparameter" => axis.hyperparameter,
+                "values" => axis.values
+            ) for axis in os.hyperparameter_sweep.hyperparameter_axes]
         )
     )
     
@@ -444,7 +463,6 @@ function print_section_short(section::String, settings_dict::Dict)
         os = get(settings_dict, "optimization_settings", Dict())
         println("\n[Optimization Settings]")
         println("  method: $(get(os, "method", "CMAES"))")
-        println("  loss: $(get(os, "loss", "fspb"))")
         println("  abs_target_loss: $(get(os, "abs_target_loss", 0.01))")
         println("  reparametrize: $(get(os, "reparametrize", true))")
         println("  param_range_level: $(get(os, "param_range_level", "high"))")
@@ -455,6 +473,14 @@ function print_section_short(section::String, settings_dict::Dict)
         ls = get(os, "loss_settings", Dict())
         println("  loss_settings.fmin: $(get(ls, "fmin", 1.0))")
         println("  loss_settings.fmax: $(get(ls, "fmax", 48.0))")
+        
+        hs = get(os, "hyperparameter_sweep", Dict())
+        if !isempty(hs)
+            println("  hyperparameter_sweep.sigma_mode: $(get(hs, "sigma_mode", :auto))")
+            println("  hyperparameter_sweep.population_grid: $(get(hs, "population_grid", []))")
+            println("  hyperparameter_sweep.restart_grid: $(get(hs, "restart_grid", []))")
+            println("  hyperparameter_sweep.sigma_values_override: $(get(hs, "sigma_values_override", nothing))") 
+        end
     end
     
     if should_print("sampling_settings")
@@ -602,8 +628,6 @@ function print_section_long(section::String, settings_dict::Dict)
         println("\n[Optimization Settings]")
         println("  method                :: String   | Optimizer: CMAES (only option)")
         println("    → $(get(os, "method", "CMAES"))")
-        println("  loss                  :: String   | Loss function: fspb, psd_iae, etc.")
-        println("    → $(get(os, "loss", "fspb"))")
         println("  abs_target_loss       :: Float    | Absolute loss target")
         println("    → $(get(os, "abs_target_loss", 0.01))")
         println("  reparametrize         :: Bool     | Use reparametrization strategy")
@@ -622,8 +646,6 @@ function print_section_long(section::String, settings_dict::Dict)
         println("    → $(get(os, "loss_reltol", 1e-5))")
         println("  save_optimization_history :: Bool | Save optimization trajectory")
         println("    → $(get(os, "save_optimization_history", false))")
-        println("  save_all_optim_restarts_results :: Bool | Automatically save all restart results")
-        println("    → $(get(os, "save_all_optim_restarts_results", true))")
         println("  save_modeled_psd      :: Bool     | Save modeled PSD output")
         println("    → $(get(os, "save_modeled_psd", false))")
         
@@ -635,40 +657,19 @@ function print_section_long(section::String, settings_dict::Dict)
         println("      → fbands          → $(join(get(ls, "fbands", ["delta", "theta", "alpha", "betalow", "betahigh"]), ", "))")
         println("    psd_settings")
         println("      → preproc         → $(get(ls, "psd_preproc", "log10"))")
-        println("      → window_size     → $(get(ls, "psd_window_size", 5))")
-        println("      → poly_order      → $(get(ls, "psd_poly_order", 2))")
-        println("      → rel_eps         → $(get(ls, "psd_rel_eps", 1e-12))")
-        println("      → smooth_sigma    → $(get(ls, "psd_smooth_sigma", 1.0))")
         println("      → welch_window    → $(get(ls, "psd_welch_window_sec", 2.0)) sec")
         println("      → welch_overlap   → $(get(ls, "psd_welch_overlap", 0.5))")
         println("      → welch_nperseg   → $(get(ls, "psd_welch_nperseg", 0))")
         println("      → noise_avg_reps  → $(get(ls, "psd_noise_avg_reps", 1))")
-        println("    fspb_settings (peak tracking)")
-        println("      → enabled         → $(get(ls, "fspb_enabled", true))")
-        println("      → min_frequency   → $(get(ls, "peak_min_frequency_hz", 5.0)) Hz")
-        println("      → max_frequency   → $(get(ls, "peak_max_frequency_hz", 45.0)) Hz")
-        println("      → bandwidth       → $(get(ls, "peak_bandwidth_hz", 6.0)) Hz")
-        println("      → prominence      → $(get(ls, "peak_prominence_db", 0.5)) dB")
-        println("      → max_windows     → $(get(ls, "max_peak_windows", 2))")
-        println("      → baseline_window → $(get(ls, "peak_baseline_window_hz", 6.0)) Hz")
-        println("      → baseline_quantile → $(get(ls, "peak_baseline_quantile", 0.2))")
-        println("      → weight          → $(get(ls, "weight_fspb", 1.0))")
+        println("    frequency_range")
+        println("      → fmin            → $(get(ls, "fmin", 1.0)) Hz")
+        println("      → fmax            → $(get(ls, "fmax", 48.0)) Hz")
         println("    noise_settings")
-        println("      → sigma_meas      → $(get(ls, "sigma_meas", 0.0))")
-        println("      → auto_initialize → $(get(ls, "auto_initialize_sigma_meas", true))")
+        println("      → measurement_noise → $(get(ls, "measurement_noise_std", 0.0))")
         println("      → seed            → $(get(ls, "loss_noise_seed", nothing))")
-        println("    ssvep_settings")
-        println("      → enabled         → $(get(ls, "ssvep_enabled", true))")
-        println("      → stim_freq       → $(get(ls, "ssvep_stim_freq_hz", 5.0)) Hz")
-        println("      → n_harmonics     → $(get(ls, "ssvep_n_harmonics", 3))")
-        println("      → bandwidth       → $(get(ls, "ssvep_bandwidth_hz", 0.5)) Hz")
-        println("      → harmonic_decay  → $(get(ls, "ssvep_harmonic_decay", 0.7))")
-        println("      → weight          → $(get(ls, "weight_ssvep", 1.0))")
-        println("    loss_weights")
-        println("      → weight_background → $(get(ls, "weight_background", 0.4))")
-        println("    signal_bounds")
-        println("      → max_abs_signal  → $(get(ls, "max_abs_signal", 100.0))")
-        println("      → max_rms_growth  → $(get(ls, "max_rms_growth", 100.0))")
+        println("    region_weighting")
+        println("      → roi_weight      → $(get(ls, "roi_weight", 1.0))")
+        println("      → bg_weight       → $(get(ls, "bg_weight", 0.4))")
         
         os_set = get(os, "optimizer_settings", Dict())
         println("\n  [Optimizer Settings (CMAES)]")
@@ -682,6 +683,41 @@ function print_section_long(section::String, settings_dict::Dict)
         println("      → $(get(os_set, "n_samples", 100))")
         println("    learning_rate       :: Float    | Adam learning rate")
         println("      → $(get(os_set, "learning_rate", 0.1))")
+        
+        hs = get(os, "hyperparameter_sweep", Dict())
+        if !isempty(hs)
+            println("\n  [Hyperparameter Sweep Settings]")
+            println("    sigma_mode              :: Symbol   | Sigma mode (auto, manual, etc.)")
+            println("      → $(get(hs, "sigma_mode", :auto))")
+            println("    param_range_levels      :: Vector   | Parameter range levels (high/medium/low)")
+            println("      → $(get(hs, "param_range_levels", []))")
+            println("    scale_sets              :: Vector   | Scale sets for reparametrization")
+            println("      → $(get(hs, "scale_sets", []))")
+            println("    population_grid         :: Vector   | Population sizes to test")
+            println("      → $(get(hs, "population_grid", []))")
+            println("    sigma_values_override   :: Vector?  | Override sigma values (nothing=auto)")
+            println("      → $(get(hs, "sigma_values_override", nothing))")
+            println("    restart_grid            :: Vector   | Number of restarts to test")
+            println("      → $(get(hs, "restart_grid", []))")
+            println("    base_reparam_scales     :: Dict     | Base reparametrization scales")
+            println("      → $(get(hs, "base_reparam_scales", Dict()))")
+            println("    sigma_values_override   :: Vector?  | Override sigma values ([2.0, 8.0]=default)") 
+            println("      → $(get(hs, "sigma_values_override", [2.0, 8.0]))") 
+            axes = get(hs, "hyperparameter_axes", [])
+            if !isempty(axes)
+                println("    hyperparameter_axes     :: Vector   | Custom sweep axes")
+                for (i, axis) in enumerate(axes)
+                    hp_names = get(axis, "hyperparameter", [])
+                    values = get(axis, "values", [])
+                    println("      → Axis $i: $(join(hp_names, ", "))")
+                    for (j, v) in enumerate(values)
+                        println("         Value $j: $v")
+                    end
+                end
+            else
+                println("    hyperparameter_axes     :: Vector   | Custom sweep axes (empty)")
+            end
+        end
     end
     
     if should_print("data_settings")

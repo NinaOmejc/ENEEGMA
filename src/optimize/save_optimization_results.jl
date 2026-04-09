@@ -3,7 +3,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
                                     optlogger::Vector{OptLogEntry},       
                                     setter::Function,  
                                     net::Network, 
-                                    target_data::TargetPSD,
+                                    target_data::Data,
                                     settings::Settings;
                                     blocks::Union{Nothing, Any}=nothing,
                                     restart_idx::Union{Int, Nothing}=nothing,
@@ -24,20 +24,29 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     param_range_entries, init_range_entries = native_range_entries(net, blocks)
     best_loss = min(optsol.minimum, min_optlogger_loss)
 
+    # Organize outputs by candidate model - use universal function
+    candidate_path = construct_output_dir(general_settings)
+    
+    # Create timestamped optimization subdirectory to allow multiple runs without overwriting
+    timestamp_str = Dates.format(now(), "yyyymmdd_HHMMSS")
+    optimization_path = joinpath(candidate_path, "optimization_$(timestamp_str)")
+    mkpath(optimization_path)
+
     restart_str = restart_idx === nothing ? "" : "_r$(restart_idx)"
     hyperparam_str = hyperparam_idx === nothing ? "" : "_h$(hyperparam_idx)"
-    base_prefix = "$(net.name)$(hyperparam_str)$(restart_str)"
+    candidate_name = something(general_settings.candidate_name, "candidate")
+    base_prefix = "$(net.name)_$(candidate_name)$(hyperparam_str)$(restart_str)"
 
     fname_loss = "$(base_prefix)_loss_over_iterations.png"
-    path_loss = joinpath(general_settings.path_out, fname_loss)
+    path_loss = joinpath(optimization_path, fname_loss)
     plot_loss_over_iterations(optlogger, general_settings, path_loss)
-    save_optlogger(optlogger, settings; fullfname_csv=joinpath(general_settings.path_out, "$(base_prefix)_optlogger.csv"))
+    save_optlogger(optlogger, settings; fullfname_csv=joinpath(optimization_path, "$(base_prefix)_optlogger.csv"))
 
-    # Simulate and evaluate model with best parameters using centralized function
+    # Simulate and evaluate model with best parameters using centralized evaluate_model function
     opt_params = setter(net.problem.p, params_native)
     result = evaluate_model(
         net, opt_params, inits_native, target_data, settings;
-        compute_metrics=["loss", "iae", "fsmae", "maef"],
+        evaluation_metrics=["loss", "r2", "iae"],
         demean=true
     )
     
@@ -52,22 +61,22 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     modeled_powers = result.model_psd
     
     save_modeled_psd(modeled_powers, freqs, settings; 
-                                fullfname_csv=joinpath(general_settings.path_out, "$(base_prefix)_modeled_psd.csv"))
+                                fullfname_csv=joinpath(optimization_path, "$(base_prefix)_modeled_psd.csv"))
 
     fname_obs_ts = "$(base_prefix)_plot_obs_vs_mod_ts.png"
-    path_obs_ts = joinpath(general_settings.path_out, fname_obs_ts)
+    path_obs_ts = joinpath(optimization_path, fname_obs_ts)
     plot_observed_vs_modelled_ts_windows(sol, target_data, general_settings, net;
                                                 fullfname_fig=path_obs_ts)
 
     fname_obs_freq = "$(base_prefix)_plot_obs_vs_mod_freq.png"
-    path_obs_freq = joinpath(general_settings.path_out, fname_obs_freq)
+    path_obs_freq = joinpath(optimization_path, fname_obs_freq)
     plot_observed_vs_modelled_psd(modeled_powers, target_data.powers, freqs;
                                    fullfname_fig=path_obs_freq,
                                    general_settings=general_settings)
 
     # PLOT: Parameter exploration
     fname_param = "$(base_prefix)_param_exploration.png"
-    path_param = joinpath(general_settings.path_out, fname_param)
+    path_param = joinpath(optimization_path, fname_param)
     plot_param_exploration(optlogger, net; 
                                 true_parameters=true_parameters,
                                 loss_settings=loss_settings,
@@ -77,8 +86,8 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     # PLOT: Frequency spectra evolution
     fname_freq_plot = "$(base_prefix)_freq_sweep.png"
     fname_freq_anim = "$(base_prefix)_freq_sweep.gif"
-    freq_plot_path = joinpath(general_settings.path_out, fname_freq_plot)
-    freq_anim_path = joinpath(general_settings.path_out, fname_freq_anim)
+    freq_plot_path = joinpath(optimization_path, fname_freq_plot)
+    freq_anim_path = joinpath(optimization_path, fname_freq_anim)
     plot_psd_spetra_evolution(optlogger, net, setter;
                     target_data=target_data,
                     general_settings=general_settings,
@@ -89,61 +98,84 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
 
     # Use metrics from evaluate_model for consistency with local re-runs
     recomputed_loss = result.success ? get(result.metrics, "loss", best_loss) : best_loss
-    r2 = result.success ? get(result.metrics, "r2", NaN) : NaN
-    fsmae = result.success ? get(result.metrics, "fsmae", NaN) : NaN
-    iae = result.success ? get(result.metrics, "iae", NaN) : NaN
-    maef_raw = result.success ? get(result.metrics, "maef", NaN) : NaN
-    maef = isnan(maef_raw) ? NaN : round(maef_raw, digits=2)
+    r2_metric = result.success ? get(result.metrics, "r2", NaN) : NaN
+    iae_metric = result.success ? get(result.metrics, "iae", NaN) : NaN
     
-    # Also compute legacy r2 for verification (can be removed later)
-    r2_legacy = metric_r2(modeled_powers, target_data.powers)
-    if abs(r2 - r2_legacy) > 1e-6
-        vprint("Warning: R² mismatch (new=$(r2), legacy=$(r2_legacy))", level=2)
-    end
-    
+    # For display/output use the canonical metrics only
     vprint("Best loss (from optimization): $(best_loss)", level=2)
     vprint("Recomputed loss (from eval): $(recomputed_loss)", level=2)
-    vprint("FS-MAE: $fsmae", level=2)
-    vprint("MAE-F: $maef", level=2)
-    vprint("IAE: $iae", level=2)
+    vprint("R²: $r2_metric", level=2)
+    vprint("IAE: $iae_metric", level=2)
+    
+    # Build best_params dict with normalized names
     best_opt_params_named = OrderedDict{String, Any}()
     if !isempty(blocks.tunable_params_symbols)
         for (sym, val) in zip(blocks.tunable_params_symbols, params_native)
-            best_opt_params_named[String(sym)] = val
+            normalized_name = normalize_parameter_name(String(sym))
+            best_opt_params_named[normalized_name] = val
         end
+    end
+    
+    # Build initial_states dict with normalized state variable names
+    init_names = if net.problem.u0 isa NamedTuple
+        String.(keys(net.problem.u0))
+    else
+        ["state_$(i)" for i in 1:length(net.problem.u0)]
+    end
+    initial_states_dict = OrderedDict{String, Any}()
+    for (init_name, init_val) in zip(init_names, inits_native)
+        normalized_name = normalize_parameter_name(init_name)
+        initial_states_dict[normalized_name] = init_val
     end
 
     duration_sec = (optlogger[end].time - optlogger[1].time).value
-    # node_name = isempty(settings.network_settings.node_names) ? "" : join(settings.network_settings.node_names, ",")
-    node_models = isempty(settings.network_settings.node_models) ? "" : join(settings.network_settings.node_models, ",")
-    task_type = data_settings === nothing ? "" : something(data_settings.task_type, "")
-
-    results = OrderedDict(
-        "net_name" => settings.general_settings.exp_name,
-        "brain_source" => net.nodes[1].brain_source,
-        "exp_name" => general_settings.exp_name,
-        "candidate_name" => something(general_settings.candidate_name, "none"),
-        "data_file" => something(data_settings.data_file, ""),
-        "data_sub" => match(r"sub-\d+", data_settings.data_file) !== nothing ? match(r"sub-\d+", data_settings.data_file).match : "",
-        "data_ic" => data_settings.target_channel,
-        "restart_idx" => restart_idx,
-        "node_models" => node_models,
-        "task_type" => task_type,
-        "loss" => recomputed_loss,  # Use recomputed loss for consistency
-        "loss_best_optim" => best_loss,  # Keep original optimization loss for reference
-        "iae" => iae,
-        "fsmae" => fsmae,
-        "maef" => maef,
+    
+    # Build metadata section with settings file reference
+    timestamp_str = Dates.format(Dates.now(), "yyyy-mm-ddTHH:MM:SSZ")
+    # Settings file is saved in the experiment folder (exp_name subfolder)
+    settings_path = joinpath(general_settings.path_out, general_settings.exp_name, "settings.json")
+    # Convert to forward slashes for cross-platform JSON compatibility
+    settings_path_normalized = replace(settings_path, "\\" => "/")
+    
+    metadata = OrderedDict(
+        "settings_file" => settings_path_normalized,
+        "timestamp" => timestamp_str,
         "duration_seconds" => duration_sec,
-        "retcode" => optsol.retcode,
-        "best_params" => best_opt_params_named,
-        "initial_states" => inits_native,
+        "restart_idx" => restart_idx,
+        "hyperparam_idx" => hyperparam_idx
     )
-
+    
+    # Build optimization_results section with all loss metrics
+    optimization_results_dict = OrderedDict(
+        "best_loss" => best_loss,
+        "loss_final_recomputed" => recomputed_loss,
+        "r2" => r2_metric,
+        "iae" => iae_metric,
+        "retcode" => string(optsol.retcode),
+        "iterations_completed" => length(optlogger)
+    )
+    
+    # Build hyperparam_adaptation section (empty dict if no hyperparams)
+    hyperparam_adaptation_dict = OrderedDict{String, Any}()
     if hyperparam_combo !== nothing
+        # Map hyperparam keys to values
+        for (key, val) in zip(hyperparam_keys, hyperparam_combo)
+            hyperparam_adaptation_dict[key] = val
+        end
+    end
+
+    # Build main results structure with metadata, optimization_results, and other sections
+    results = OrderedDict{String, Any}(
+        "metadata" => metadata,
+        "optimization_results" => optimization_results_dict,
+        "best_parameters" => best_opt_params_named,
+        "initial_states" => initial_states_dict,
+        "hyperparam_adaptation" => hyperparam_adaptation_dict,
+    )
+    
+    # Add hyperparam_idx to results if present
+    if hyperparam_idx !== nothing
         results["hyperparam_idx"] = hyperparam_idx
-        results["hyperparam_combo"] = hyperparam_combo
-        results["hyperparam_keys"] = hyperparam_keys
     end
 
     if restart_idx === nothing
@@ -152,9 +184,16 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     end
 
     fname_results = "$(base_prefix)_optimization_results.json"
-    results_path = joinpath(general_settings.path_out, fname_results)
+    results_path = joinpath(optimization_path, fname_results)
     write_compact_json(results_path, results)
 
+end
+
+function normalize_parameter_name(name::String)::String
+    # Convert naming convention: __[letter] → _x
+    # Example: N1__c11 → N1_x11
+    # This handles parameter names with double underscores followed by a single letter
+    return replace(name, r"__[a-z]" => "_x")
 end
 
 function best_params_inits(optsol::SciMLBase.OptimizationSolution,
@@ -384,7 +423,7 @@ function plot_observed_vs_modelled_psd(data_modeled::Union{Vector{Float64}, Matr
 end
 
 function plot_observed_vs_modelled_psd(data_modeled::Union{Vector{Float64}, Matrix{Float64}},
-                                        target_data::TargetPSD;
+                                        target_data::Data;
                                         fullfname_fig::String="obs_vs_mod_freq.png",
                                         general_settings::Union{Nothing, GeneralSettings}=nothing
     )::Nothing
@@ -522,7 +561,7 @@ measurement-noise parameter by injecting noise prior to PSD computation.
 function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
                               net::Network,
                               setter::Function;
-                              target_data::Union{TargetPSD, Vector{Float64}, Matrix{Float64}, DataFrame}=Float64[],
+                              target_data::Union{Data, Vector{Float64}, Matrix{Float64}, DataFrame}=Float64[],
                               general_settings::Union{Nothing, GeneralSettings}=nothing,
                               simulation_settings::Union{Nothing, SimulationSettings}=nothing,
                               loss_settings::Union{Nothing, LossSettings}=nothing,
@@ -557,10 +596,10 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
 
         param_block = params_vec[1:n_params]
         init_block = params_vec[n_params + 1 : n_params + n_state_vars]
-        sigma_val = loss.sigma_meas
+        sigma_val = loss.measurement_noise_std
         new_params = setter(net.problem.p, param_block)
         try
-            sol = simulate_problem(net.problem; new_params=new_params, new_inits=init_block,
+            sol = simulate_network(net.problem; new_params=new_params, new_inits=init_block,
                                    solver=solver, solver_kwargs=solver_kwargs)
             df = DataFrame(sol)
             if size(df, 2) < 2
@@ -646,7 +685,7 @@ end
 
 
 function compute_r2_for_params(net::Network,
-                               target_data::TargetPSD,
+                               target_data::Data,
                                param_symbols::Vector{Symbol},
                                params_native::Vector{Float64},
                                inits_native::Vector{Float64})::Float64
@@ -657,7 +696,7 @@ function compute_r2_for_params(net::Network,
 
     setter = make_namedtuple_setter(Tuple(param_symbols))
     opt_params = setter(net.problem.p, params_native)
-    sol = simulate_problem(net.problem;
+    sol = simulate_network(net.problem;
                                   new_params=opt_params,
                                   new_inits=inits_native,
                                   solver=solver,
@@ -675,7 +714,7 @@ function compute_r2_for_params(net::Network,
     if target_curve === nothing || length(target_curve) != length(modeled_powers)
         return NaN
     end
-    return metric_r2(modeled_powers, target_curve)
+    return r2(modeled_powers, target_curve)
 end
 
 function native_range_entries(net::Network, blocks)
@@ -716,13 +755,13 @@ function plot_loss_over_iterations(optlogger::Vector{OptLogEntry},
 end
 
 function plot_observed_vs_modelled_ts_windows(sol::SciMLBase.AbstractODESolution,
-                                              target_data::Union{TargetPSD, Vector{Float64}, Matrix{Float64}, DataFrame},
+                                              target_data::Union{Data, Vector{Float64}, Matrix{Float64}, DataFrame},
                                               general_settings::GeneralSettings,
                                               net::Network;
                                               zoom_window::Tuple{Float64, Float64}=(2.0, 5.0),
                                               fullfname_fig::Union{Nothing, AbstractString}=nothing)
     general_settings.make_plots || return nothing
-    target_data isa TargetPSD || return nothing
+    target_data isa Data || return nothing
 
     df = DataFrame(sol)
     size(df, 2) >= 2 || return nothing

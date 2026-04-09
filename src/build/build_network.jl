@@ -701,7 +701,6 @@ function node_signature(n::Node)
 end
 
 function set_network_signature!(net::Network)::Network
-    
     return net
 end
 
@@ -716,11 +715,7 @@ function export_network(net::Network)
     fname_out = "$(net.name)$(fname_suffix)_equations"
     
     # Construct output directory: path_out / exp_name / [candidate_NAME/]
-    output_dir = joinpath(gs.path_out, gs.exp_name)
-    if !isnothing(gs.candidate_name)
-        output_dir = joinpath(output_dir, "candidate_$(gs.candidate_name)")
-    end
-    !isdir(output_dir) && mkpath(output_dir)
+    output_dir = construct_output_dir(gs)
     
     if "tex" in gs.save_model_formats
         eqs = vcat(net.dynamics, net.diffusion_dynamics)

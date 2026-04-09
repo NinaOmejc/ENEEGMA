@@ -349,14 +349,7 @@ function get_indices(param_syms, all_params_tuple)
 end
 
 
-struct OptLogEntry
-    irestart::Int64
-    iter::Int64
-    loss::Float64
-    time::Second
-    params::Union{Nothing, Vector{Float64}}  # tunable params, state inits, optional measurement noise
-end
-
+# OptLogEntry struct is defined in src/types/optimization_types.jl
 
 """
     LossTimingTracker(limit=10)

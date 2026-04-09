@@ -73,7 +73,7 @@
         1.0,
         50.0
       ],
-      "sigma_meas": 0.0,
+      "measurement_noise_std": 0.0,
       "loss_noise_seed": null,
       "psd_window_size": 5,
       "psd_poly_order": 2,

@@ -51,20 +51,16 @@ function _get_combo_at(combos, idx::Int)
 end
 
 function _run_single_combo!(settings::Settings,
-                            data::TargetPSD,
+                            data::Data,
                             combo::Tuple,
                             combo_keys::Vector{String},
                             combo_idx::Int)
 
     os = settings.optimization_settings
     update_settings!(settings, combo, combo_keys)
-    # normalize_fspb_ssvep_weights!(settings.optimization_settings.loss_settings; background_auto=true)
-    if settings.data_settings.task_type == "ssvep"
-        settings.optimization_settings.loss_settings.weight_fspb = settings.optimization_settings.loss_settings.weight_background
-        println(" Weight for ssvep: $(settings.optimization_settings.loss_settings.weight_ssvep)")
-    end
-    println(" Weight for fsbp: $(settings.optimization_settings.loss_settings.weight_fspb)")
-    println(" Weight for background: $(settings.optimization_settings.loss_settings.weight_background)")
+    # Loss settings are now simplified: only region weighting (roi_weight, bg_weight) is used
+    println(" ROI weight: $(settings.optimization_settings.loss_settings.roi_weight)")
+    println(" Background weight: $(settings.optimization_settings.loss_settings.bg_weight)")
     flush(stdout)
     
     net = build_network(settings)
@@ -91,28 +87,23 @@ function count_decision_variables(net::Network, os::OptimizationSettings)::Int
 end
 
 """
-    run_hyperparameter_sweep(settings_path::String; max_runs=nothing, overrides=[], force_model_idx=nothing)
+    run_hyperparameter_sweep(settings::Settings, data::Data; combo_idx=nothing, max_runs=nothing)
 
 Run a systematic hyperparameter sweep for neural mass model optimization.
 
 # Arguments
-- `settings_path`: Path to JSON settings file
+- `settings::Settings`: Settings object with hyperparameter sweep configuration
+- `data::Data`: Target PSD data for optimization
+- `combo_idx`: Optional specific combination index to run
 - `max_runs`: Optional limit on number of hyperparameter combinations to run
-- `overrides`: Vector of KEY=>VALUE pairs to override settings
-- `force_model_idx`: Override model index from CSV (if using pre-sampled models)
 
 """
 function run_hyperparameter_sweep(settings::Union{Nothing, Settings},
-                                  data::TargetPSD;
+                                  data::Data;
                                   combo_idx::Union{Nothing, Int}=nothing,
-                                  max_runs::Union{Nothing, Int}=nothing,
-                                  force_model_idx::Union{Nothing, Int}=nothing)
+                                  max_runs::Union{Nothing, Int}=nothing)
 
-    os = settings.optimization_settings
-    sweep_settings = os.hyperparameter_sweep
-    save_mode = sweep_settings.save_results
-
-    println("\n--- RUNNING HYPERPARAMETER SWEEP ---\n")
+    vprint("\n--- RUNNING HYPERPARAMETER SWEEP ---\n", level=1)
     combo_keys, combos = build_sweep_combos(settings)
     total = length(combos)
 
@@ -126,7 +117,7 @@ function run_hyperparameter_sweep(settings::Union{Nothing, Settings},
 
     if max_runs !== nothing
         combos = combos[1:min(total, max_runs)]
-        vprint("Limiting hyperparameter sweep to $(length(combos)) runs (max_runs=$(max_runs)). Check settings.")
+        vprint("Limiting hyperparameter sweep to $(length(combos)) runs (max_runs=$(max_runs)). Check settings.", level=1)
     end
 
     for (i, combo) in enumerate(combos)

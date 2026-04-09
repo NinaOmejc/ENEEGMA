@@ -5,14 +5,15 @@
 # 2. Load candidate models from grammar sampling results
 # 3. Select and build a network from one candidate
 # 4. Optimize network parameters to fit target data
+
+using Revise 
 using ENEEGMA
 using CSV
 using DataFrames
 using JSON
-using Revise 
 
 # ============================================================================
-# Step 1: Create Settings
+# Step 1: Create or Load Settings
 # ============================================================================
 settings = create_default_settings();
 
@@ -52,12 +53,20 @@ settings.general_settings.candidate_name = model_name
 # ============================================================================
 # Step 5: Build Network
 # ============================================================================
-net = build_network(settings)
-println("Network built successfully")
-println("System size: $(length(net.dynamics)) equations")
+net = build_network(settings);
 
 # Make all parameters tunable for optimization
-set_all_params_tunable!(net.params)
+set_all_params_tunable!(net.params);
+
+# Alternatively, you can specify which parameters to tune, e.g.
+# set_params_tunable!(net.params, ["J", "tau_e", "tau_i"])
+
+# Additionaly, you can modify the parameter default values or bounds here if desired, e.g.
+# update_param_default_value!(net.params, "J", 1.0)
+# update_param_minmax!(net.params, "J", 0.5, 2.0)
+
+# Additionally, you can modify initial values or bounds for state variables if desired, e.g.
+# update_var_inits!(net.vars, "E", 0.1, 0.5)
 
 # ============================================================================
 # Step 7: Run Optimization (commented - uncomment when ready)
