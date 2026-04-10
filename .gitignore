@@ -37,7 +37,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Environment
+# Environmentk
 .env
 .venv
 venv/

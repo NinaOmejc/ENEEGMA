@@ -1,4 +1,71 @@
 """
+    simulate_network(net::Network; 
+                     new_params::Union{Nothing, NamedTuple}=nothing,
+                     new_inits::Union{Nothing, Vector{Float64}}=nothing,
+                     new_tspan::Union{Nothing, Tuple{Float64, Float64}}=nothing)::DataFrame
+
+Run a single simulation for a network and return results as a DataFrame.
+
+Executes one simulation of the network problem using solvers and parameters
+defined in net.settings.simulation_settings. This is the high-level entry point
+for simulating a network. For multiple runs, users should loop manually.
+
+Results are returned as a DataFrame with properly named columns: `:time` followed 
+by all state variable names in sorted order. If EEG output is specified in network 
+settings, it can be computed from the state variables after retrieving the DataFrame.
+
+# Arguments
+- `net::Network`: The network object to simulate
+- `new_params::Union{Nothing, NamedTuple}`: Override parameters (if nothing, use original)
+- `new_inits::Union{Nothing, Vector{Float64}}`: Override initial conditions (if nothing, use original)
+- `new_tspan::Union{Nothing, Tuple{Float64, Float64}}`: Override time span (if nothing, use original)
+
+# Returns
+- `df::DataFrame`: Solution as DataFrame with columns: `:time` + state variable names
+
+# Example
+```julia
+net = build_network(settings)
+
+# Single simulation with defaults
+df = simulate_network(net)
+# Columns: time, N1₊x11, N1₊x21, ...
+
+# With custom initial conditions
+new_inits = sample_inits(net.vars; seed=1234)
+df = simulate_network(net; new_inits=new_inits)
+
+# For multiple runs with different seeds/parameters:
+dfs = [simulate_network(net; new_inits=sample_inits(net.vars; seed=s)) for s in 1:10]
+```
+"""
+function simulate_network(net::Network; 
+                         new_params::Union{Nothing, NamedTuple}=nothing,
+                         new_inits::Union{Nothing, Vector{Float64}}=nothing,
+                         new_tspan::Union{Nothing, Tuple{Float64, Float64}}=nothing)::DataFrame
+    simsett = net.settings.simulation_settings
+    
+    # Get solver and kwargs from settings
+    solver = get_solver(net.problem, simsett)
+    solver_kwargs = get_solver_kwargs(net.problem, simsett)
+    
+    # Run single simulation with optional parameter overrides
+    solution = simulate_network(net.problem; 
+                               new_params=new_params, 
+                               new_inits=new_inits,
+                               new_tspan=new_tspan,
+                               solver=solver, 
+                               solver_kwargs=solver_kwargs)
+    
+    vinfo("Network $(net.name) simulation completed successfully.", level=1)
+    
+    # Convert solution to DataFrame with proper column names
+    df = sol2df(solution, net)
+    
+    return df
+end
+
+"""
     simulate_network(prob::SciMLBase.AbstractDEProblem; 
                      new_params::Union{Nothing, NamedTuple}=nothing, 
                      new_inits::Union{Nothing, Vector{Float64}}=nothing,
@@ -8,7 +75,7 @@
 
 Simulate a network problem with optional parameter/initial condition overrides.
 
-This is the main simulation entry point. It handles problem remapping with custom parameters,
+This is the low-level simulation entry point. It handles problem remapping with custom parameters,
 initial conditions, and time spans, then solves using the specified solver and kwargs.
 
 # Arguments
@@ -101,7 +168,7 @@ function get_solver_kwargs(prob::SciMLBase.AbstractDEProblem, ss::SimulationSett
     if haspropnn(ss, :dt)
         kws = add(kws, :dt, ss.dt)
     elseif solver_needs_dt(ss.solver, prob_is_stochastic)
-        @warn "Solver requires a dt parameter, but ss.dt is not defined. Using default dt=1e-4."
+        vwarn("Solver requires a dt parameter, but ss.dt is not defined. Using default dt=1e-4."; level=2)
         kws = add(kws, :dt, 1e-4)
     end
 
@@ -195,11 +262,11 @@ function get_solver(prob::SciMLBase.AbstractDEProblem, ss::SimulationSettings)::
         if haskey(solvers, ss.solver)
             solver = solvers[ss.solver]
         else
-            @warn "Solver '$(ss.solver)' specified in settings is not valid for the problem type '$(typeof(prob).name.wrapper)'. Falling back to the default solver: $(default_solver_name)."
+            vwarn("Solver '$(ss.solver)' specified in settings is not valid for the problem type '$(typeof(prob).name.wrapper)'. Falling back to the default solver: $(default_solver_name)."; level=2)
             solver = solvers[default_solver_name]
         end
     else
-        vprint("Solver not specified in settings. Using default solver: $(default_solver_name) for problem type '$(typeof(prob).name.wrapper)'.", level=2)
+        vinfo("Solver not specified in settings. Using default solver: $(default_solver_name)"; level=2)
         solver = solvers[default_solver_name]
     end
     
@@ -233,20 +300,57 @@ end
 
 
 function sol2df(sol::SciMLBase.AbstractTimeseriesSolution, net::Network)::DataFrame
+    """
+        sol2df(sol::AbstractTimeseriesSolution, net::Network)::DataFrame
     
+    Convert ODE solution to DataFrame with properly named columns.
+    
+    Converts the raw solution object to a DataFrame where column names correspond to 
+    semantically meaningful variable names instead of generic u[:1], u[:2], etc.
+    
+    # Arguments
+    - `sol::AbstractTimeseriesSolution`: Solution from differential equation solver
+    - `net::Network`: Network object (provides variable information for naming)
+    
+    # Returns
+    - `df::DataFrame`: Time series data with columns: `:time` + sorted state variable names
+    
+    # Column Naming
+    - Column 1 (index): `:time` - simulation time points
+    - Columns 2+ : State variable names in sorted order (e.g., `:N1₊x11`, `:N1₊x21`, ...)
+    
+    # Example
+    ```julia
+    sol = simulate_network(net.problem; ...)
+    df = sol2df(sol, net)
+    
+    # Access results by name
+    t = df.time
+    x11_values = df[Symbol("N1₊x11")]
+    ```
+    """
     df = DataFrame(sol)
     
-    # Generate new column names: timestamp and state variables
-    state_vars = get_symbols(get_state_vars(net.vars))
-    new_names = [:time]
-    append!(new_names, [Symbol(name) for name in state_vars])
+    # Extract state variable names in consistent sorted order
+    state_vars = get_symbols(get_state_vars(net.vars); sort=true)
     
-    # Check if the column count matches
-    if length(new_names) == ncol(df)
-        rename!(df, new_names)
-    else
-        @warn "Column count mismatch: $(ncol(df)) columns in data vs $(length(new_names)) variable names"
+    # Build column names: time + all state variables
+    new_names = Symbol[:time]
+    append!(new_names, Symbol.(state_vars))
+    
+    # Validate column count
+    if ncol(df) != length(new_names)
+        @error """
+        Column count mismatch in sol2df:
+          Solution has $(ncol(df)) columns
+          Expected $(length(new_names)) columns: 1 time + $(length(state_vars)) state variables
+          State variables: $(join(state_vars, ", "))
+        """
+        error("Cannot convert solution to DataFrame: column count mismatch")
     end
+    
+    # Rename columns with semantic names
+    rename!(df, new_names)
     
     return df
 end
@@ -265,33 +369,19 @@ function save_params_and_inits(inits::NamedTuple, net::Network, gs::GeneralSetti
         push!(df, (name="sensory_input_func", value=net.sensory_input_str))
     end
 
-    # Include candidate name if present
-    fname_suffix = if !isnothing(gs.candidate_name)
-        "_$(gs.candidate_name)"
-    else
-        ""
-    end
-    
     # Generate filename and save; Create directory if it doesn't exist
-    # Output directory: path_out / exp_name / [candidate_NAME/]
-    output_dir = construct_output_dir(gs)
-    filename = joinpath(output_dir, "$(net.name)$(fname_suffix)_params_inits_run$(irun).csv")
+    # Output directory: path_out / exp_name / network_name/
+    output_dir = construct_output_dir(gs, net.settings.network_settings)
+    filename = joinpath(output_dir, "$(net.name)_params_inits_run$(irun).csv")
     CSV.write(filename, df)
     return nothing
 end
 
 
 function save_ts_data(df::DataFrame, net::Network, gs::GeneralSettings, irun::Int64=1)::Nothing
-    # Include candidate name if present
-    fname_suffix = if !isnothing(gs.candidate_name)
-        "_$(gs.candidate_name)"
-    else
-        ""
-    end
-    
-    # Output directory: path_out / exp_name / [candidate_NAME/]
-    output_dir = construct_output_dir(gs)
-    filename = joinpath(output_dir, "$(net.name)$(fname_suffix)_ts_data_run$(irun).csv")
+    # Output directory: path_out / exp_name / network_name/
+    output_dir = construct_output_dir(gs, net.settings.network_settings)
+    filename = joinpath(output_dir, "$(net.name)_ts_data_run$(irun).csv")
     CSV.write(filename, df)
 
     return nothing

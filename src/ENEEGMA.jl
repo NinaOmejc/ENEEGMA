@@ -77,6 +77,7 @@ export ParamTransform, ParamReparamTransform, Affine01, ExpPos, SoftplusPos, Sig
 
 # Type management
 export update_param_minmax!, update_param_values!, update_param_tunability!
+export update_param_defaults!, update_param_bounds!
 export get_param_minmax_values, get_param_default_values, get_param_tunability, get_param_type
 export sample_param_values, needs_tscale, MIN_PARAM_VAL, MAX_PARAM_VAL
 export print_params_summary, set_all_params_tunable!
@@ -102,9 +103,9 @@ include("utils/io.jl")
 include("utils/extract_brain_source.jl")
 include("utils/spectral_transforms.jl")
 
-export set_verbose, vwarn, vinfo, vprint, center
-export make_rng, haspropnn, set_task_settings, is_verbose
-export create_default_settings, load_settings_from_file, save_settings, load_settings_file
+export set_verbose, vwarn, vinfo, verror, center
+export make_rng, haspropnn, get_eeg_signal, set_task_settings, is_verbose
+export create_default_settings, load_settings_from_file, save_settings, load_settings
 export settings_to_dict, print_settings_summary, load_data
 
 # Signal processing utilities

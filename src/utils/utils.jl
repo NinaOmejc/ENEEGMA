@@ -59,21 +59,25 @@ end
 
 function vwarn(msg; level::Int=1)
     is_verbose(level) || return
-    println("[warn] " * _as_string(msg))
+    prefix = level == 1 ? "⚠ WARNING" : "  ⚠"
+    println(prefix * ": " * _as_string(msg))
 end
 
 function vinfo(msg; level::Int=1)
     is_verbose(level) || return
-    println("[info] " * _as_string(msg))
+    if level == 1
+        # Level 1: High visibility for major milestones
+        println("=== " * _as_string(msg) * " ===")
+    else
+        # Level 2: Compact format for details
+        println("--- " * _as_string(msg) * " ---")
+    end
 end
 
-function vprint(msg; level::Int=1)
+function verror(msg; level::Int=1)
     is_verbose(level) || return
-    println(_as_string(msg))
-end
-
-function vprint(flag::Bool, msg)
-    flag && println(_as_string(msg))
+    prefix = level == 1 ? "❌ ERROR" : "  ❌"
+    println(prefix * ": " * _as_string(msg))
 end
 
 # make_rng: create a RNG from maybe_seed
@@ -130,5 +134,35 @@ Check if an object has a property and if that property is not `nothing`.
 """
 function haspropnn(obj, prop::Symbol)::Bool
     return hasproperty(obj, prop) && getproperty(obj, prop) !== nothing
+end
+
+
+"""
+    get_eeg_signal(settings::Settings, df::DataFrame)::String
+
+Get the signal name to plot from settings.
+
+Returns the EEG output specification if defined in settings, otherwise returns
+the name of the first state variable (second column after :time).
+
+# Arguments
+- `settings::Settings`: Settings object containing eeg_output specification
+- `df::DataFrame`: DataFrame with time series data (columns: time + state variables)
+
+# Returns
+- `String`: Signal name to use for plotting
+
+# Example
+```julia
+signal = get_eeg_signal(settings, df)
+plot(df.time, df[!, Symbol(signal)])
+```
+"""
+function get_eeg_signal(settings::Settings, df::DataFrame)::String
+    if isempty(settings.network_settings.eeg_output)
+        return names(df)[2]  # Default: First state variable (second column after :time)
+    else
+        return settings.network_settings.eeg_output
+    end
 end
 

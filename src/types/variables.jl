@@ -75,7 +75,7 @@ function StateVar(; name::String, eq_idx::Int64,
                   sends_internode_output::Bool=false,
                   sends_interpop_output::Bool=false,
                   sends_intrapop_output::Bool=false,
-                  init_min::Float64=-100., init_max::Float64=100.,
+                  init_min::Float64=-10., init_max::Float64=10.,
                   unit::String="", description::String="")
     # States use a standard symbolic variable
     sym = string2num(name)
@@ -339,16 +339,27 @@ function get_symbols(varset::VarSet; sort::Bool=true)
 end
 
 """
-    sample_inits(network_vars::VarSet; subset::Vector{Num}=Num[], return_type::String="vector", sort::Bool=true)
+    sample_inits(network_vars::VarSet; subset::Vector{Num}=Num[], 
+                 return_type::String="vector", sort::Bool=true,
+                 seed::Union{Int, Nothing}=nothing)
 
 Efficiently sample initial conditions for the given network variables.
-- `subset`: Optional vector of variable symbols to restrict sampling (only state vars are sampled).
-- `return_type`: "vector" or "named_tuple".
-- `sort`: If true, sorts variables for reproducibility.
 
-Returns a vector or named tuple of initial state values.
+# Arguments
+- `network_vars::VarSet`: Variable set to sample from
+- `subset::Vector{Num}`: Optional vector of variable symbols to restrict sampling (only state vars)
+- `return_type::String`: "vector" or "named_tuple"
+- `sort::Bool`: If true, sorts variables for reproducibility
+- `seed::Union{Int, Nothing}`: Random seed for reproducibility (if nothing, uses global RNG)
+
+Returns a vector or named tuple of initial state values, respecting init_min/init_max bounds.
 """
-function sample_inits(network_vars::VarSet; subset::Vector{Num}=Num[], return_type::String="vector", sort::Bool=true)
+function sample_inits(network_vars::VarSet; subset::Vector{Num}=Num[], 
+                     return_type::String="vector", sort::Bool=true,
+                     seed::Union{Int, Nothing}=nothing)
+    # Use provided seed or global RNG
+    rng = seed === nothing ? Random.GLOBAL_RNG : MersenneTwister(seed)
+    
     # target only state variables
     state_syms = get_symbols(get_state_vars(network_vars); sort=true)
     if isempty(subset)
@@ -364,15 +375,22 @@ function sample_inits(network_vars::VarSet; subset::Vector{Num}=Num[], return_ty
             # ignore non-state entries in subset, if any
             continue
         end
-        if v.init_min > -Inf && v.init_max < Inf
-            init = v.init_min + (v.init_max - v.init_min) * rand()
-        elseif v.init_min > -Inf
-            init = v.init_min + rand() * 2.0
-        elseif v.init_max < Inf
-            init = v.init_max - rand() * 2.0
+        
+        # Sample respecting bounds strictly
+        if isfinite(v.init_min) && isfinite(v.init_max)
+            # Both bounds finite: uniform in [init_min, init_max]
+            init = v.init_min + (v.init_max - v.init_min) * rand(rng)
+        elseif isfinite(v.init_min) && !isfinite(v.init_max)
+            # Lower bound only: sample in [init_min, init_min + 10]
+            init = v.init_min + 10.0 * rand(rng)
+        elseif !isfinite(v.init_min) && isfinite(v.init_max)
+            # Upper bound only: sample in [init_max - 10, init_max]
+            init = v.init_max - 10.0 * rand(rng)
         else
-            init = randn()
+            # Unbounded: standard normal
+            init = randn(rng)
         end
+        
         push!(names, Symbol(name(v)))
         push!(values, Float64(init))
     end
@@ -386,7 +404,7 @@ function sample_inits(network_vars::VarSet; subset::Vector{Num}=Num[], return_ty
     end
 end
 
-function update_var_inits!(varset::VarSet, new_values::Union{Dict{String, Tuple{Float64, Float64}}, OrderedDict{String, Tuple{Float64, Float64}}})::VarSet
+function update_var_inits!(varset::VarSet, new_values::AbstractDict)::VarSet
     for (nm, (lo, hi)) in new_values
         try
             v = get_var_by_name(varset, nm)
@@ -394,12 +412,44 @@ function update_var_inits!(varset::VarSet, new_values::Union{Dict{String, Tuple{
                 v.init_min = lo
                 v.init_max = hi
             else
-                @warn "Var '$nm' is not a StateVar. Skipping init update."
+                vwarn("Var '$nm' is not a StateVar. Skipping init update."; level=2)
             end
         catch e
-            @warn "Var '$nm' not found in VarSet. Skipping update."
+            vwarn("Var '$nm' not found in VarSet. Skipping update."; level=2)
             continue
         end
+    end
+    return varset
+end
+
+
+"""
+    update_var_inits!(varset::VarSet, var_name::String, init_min::Real, init_max::Real)
+
+Update initialization bounds for a single state variable.
+
+# Arguments
+- `varset::VarSet`: Variable set to update
+- `var_name::String`: Name of the state variable to update
+- `init_min::Real`: New minimum initialization value
+- `init_max::Real`: New maximum initialization value
+
+# Examples
+```julia
+update_var_inits!(net.vars, "E", 0.1, 0.5)
+```
+"""
+function update_var_inits!(varset::VarSet, var_name::String, init_min::Real, init_max::Real)::VarSet
+    try
+        v = get_var_by_name(varset, var_name)
+        if v isa StateVar
+            v.init_min = Float64(init_min)
+            v.init_max = Float64(init_max)
+        else
+            vwarn("Var '$var_name' is not a StateVar. Skipping init update."; level=2)
+        end
+    catch e
+        vwarn("Var '$var_name' not found in VarSet. Skipping update."; level=2)
     end
     return varset
 end
@@ -564,6 +614,10 @@ function Base.show(io::IO, vs::VarSet)
     print(io, "VarSet($(length(vs.vars)) vars)")
 end
 
+function Base.length(vs::VarSet)
+    return length(vs.vars)
+end
+
 function Base.show(io::IO, ::MIME"text/plain", vs::VarSet)
     names = getfield.(getfield.(vs.vars, :base), :name)
     preview = length(names) <= 6 ? names : vcat(names[1:5], "…", names[end])
@@ -618,4 +672,5 @@ function print_vars_summary(varset::VarSet; format_type::String="short")
             end
         end
     end
+    println()  # Add extra newline for separation
 end

@@ -103,26 +103,26 @@ function run_hyperparameter_sweep(settings::Union{Nothing, Settings},
                                   combo_idx::Union{Nothing, Int}=nothing,
                                   max_runs::Union{Nothing, Int}=nothing)
 
-    vprint("\n--- RUNNING HYPERPARAMETER SWEEP ---\n", level=1)
+    vinfo("RUNNING HYPERPARAMETER SWEEP"; level=1)
+    vinfo("$(length(combos)) hyperparameter combinations to test\n"; level=2)
     combo_keys, combos = build_sweep_combos(settings)
     total = length(combos)
 
     if combo_idx !== nothing
-        vprint("\n[Hyperparameter Sweep $(combo_idx) / $(length(combos))]", level=1)
+        vinfo("\n[Hyperparameter Sweep $(combo_idx) / $(length(combos))]"; level=1)
         combo = _get_combo_at(combos, combo_idx)
-        vprint("Hyperparameter combination: $(combo)\n", level=1)
+        vinfo("Hyperparameter combination: $(combo)\n"; level=1)
         _run_single_combo!(settings, data, combo, combo_keys, combo_idx)
         return nothing
     end
 
     if max_runs !== nothing
         combos = combos[1:min(total, max_runs)]
-        vprint("Limiting hyperparameter sweep to $(length(combos)) runs (max_runs=$(max_runs)). Check settings.", level=1)
+        vinfo("Hyperparameter sweep limited to $(length(combos)) runs (max_runs=$(max_runs))"; level=1)
     end
 
     for (i, combo) in enumerate(combos)
-        vprint("\n[Hyperparameter Sweep $(i) / $(length(combos))]", level=1)
-        vprint("Hyperparameter combination: $(combo)\n", level=1)
+        vinfo("[Hyperparameter sweep $(combo_idx)/$(length(combos))]: $(combo)"; level=1)
 
         combo = _get_combo_at(combos, i)
         _run_single_combo!(settings, data, combo, combo_keys, i)

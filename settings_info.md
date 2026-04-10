@@ -28,7 +28,7 @@ Top-level experiment and output configuration.
 | `path_out` | String | `"./results"` | Valid file path | Directory where all outputs are saved. Created if it doesn't exist. |
 | `verbosity_level` | Int | `1` | `0`, `1`, `2` | Logging verbosity: 0=silent, 1=minimal, 2=detailed. |
 | `seed` | Int or null | `null` | Any integer or `null` | Master random seed. Sets Julia's global RNG state for reproducibility. If `null`, behavior is non-deterministic. |
-| `make_plots` | Bool | `false` | `true`, `false` | Whether to generate visualization plots during simulation/optimization. |
+| `make_plots` | Bool | `true` | `true`, `false` | Whether to generate visualization plots during simulation/optimization. |
 | `save_model_formats` | Array[String] | `["tex"]` | `"tex"`, `"pdf"`, `"png"` | Output formats for exporting network equations and diagrams. |
 
 ---
@@ -49,6 +49,7 @@ Neural network topology and dynamics configuration.
 | `sensory_input_conn` | Array[Int] | Length must equal `n_nodes` | `ones(n_nodes)` | Binary vector indicating which nodes receive sensory input (1=receives, 0=no input). |
 | `sensory_input_func` | String | Valid Julia expression | `"rand(Normal(0.0, 1.0))"` | Function string for sensory input (e.g., `"sin(t)"`, `"randn()"`). Can reference time `t`. |
 | `sensory_seed` | Int or null | Any integer or `null` | `null` | Random seed for sensory input generation. If `null`, uses global seed or non-deterministic. |
+| `init_seed` | Int or null | Any integer or `null` | `null` | Random seed for initial condition sampling. If `null`, uses global seed or non-deterministic. Allows independent control of initialization randomness separate from sensory input randomness. |
 | `eeg_output` | String | Valid Julia expression or empty | `""` | EEG measurement function (e.g., which states to record). Empty string means no EEG output. |
 
 ---
@@ -59,7 +60,6 @@ ODE solver and time-stepping configuration.
 
 | Setting | Type | Constraints | Default | Description |
 |---------|------|-------------|---------|-------------|
-| `n_runs` | Int | > 0 | `1` | Number of independent simulation runs with different initial conditions. |
 | `tspan` | Array[Float, Float] | `[t_start, t_end]`, `t_start < t_end` | `[0.0, 10.0]` | Simulation time span in milliseconds. |
 | `dt` | Float or null | > 0 or `null` | `0.001` | Fixed time step (ms). Required for stochastic solvers. `null` for adaptive solvers. |
 | `saveat` | Float | > 0 | `0.001` | Output sampling rate (ms). Solutions recorded at this interval. |
@@ -150,7 +150,7 @@ Loss function configuration for optimization.
 | `psd_welch_nfft` | Int | > 0 or 0 | `0` | FFT size. 0=auto. |
 | `psd_noise_avg_reps` | Int | ≥ 1 | `1` | Number of noise averages for loss. |
 | `measurement_noise_std` | Float | ≥ 0 | `0.0` | Measurement noise standard deviation. 0=no noise. |
-| `loss_noise_seed` | Int or null | Any integer or `null` | `null` | Random seed for loss measurement noise. If `null`, non-deterministic. |
+| `loss_noise_seed` | Int or null | Any integer or `null` | `42` | Random seed for loss measurement noise. Deterministic by default (42). Set to `null` for non-deterministic results. |
 | `peak_bandwidth_hz` | Float | > 0 | `6.0` | Frequency bandwidth for peak detection (Hz). |
 | `peak_prominence_db` | Float | Any | `0.5` | Prominence threshold for peak detection (dB). |
 | `peak_min_frequency_hz` | Float | ≥ 0 | `5.0` | Minimum frequency for peak detection (Hz). |

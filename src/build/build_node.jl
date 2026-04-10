@@ -535,7 +535,7 @@ function print_network_nodes_info(net::Network)
     is_verbose(1) || return
     total_nodes = length(net.nodes)
     total_pops = sum(length(node.populations) for node in net.nodes)
-    vprint("\nNetwork $(net.name): $(total_nodes) nodes, $(total_pops) populations"; level=2)
+    vinfo("Network $(net.name): $(total_nodes) nodes, $(total_pops) populations"; level=2)
     for node in net.nodes
         node_states = max(length(node.vars.vars), sum(max(pop.n_state_vars, length(pop.dynamics)) for pop in node.populations))
         # Convert RuleTree to string for display if necessary
@@ -544,7 +544,7 @@ function print_network_nodes_info(net::Network)
         else
             serialize_rule_tree(node.build_setts.model)
         end
-        vprint("  • $(node.name) ($model_display): pops=$(node.n_pops), states=$(node_states)"; level=2)
+        vinfo("  - $(node.name) ($model_display): pops=$(node.n_pops), states=$(node_states)"; level=2)
         for pop in node.populations
             state_count = pop.n_state_vars > 0 ? pop.n_state_vars : length(pop.dynamics)
             input_spec = isempty(pop.build_setts.input_dynamics_spec) ? "none" : join(unique(pop.build_setts.input_dynamics_spec), "/")
@@ -554,9 +554,9 @@ function print_network_nodes_info(net::Network)
             pop.build_setts.gets_sensory_input && push!(inputs, "sensory")
             pop.build_setts.gets_internode_input && push!(inputs, "internode")
             input_desc = isempty(inputs) ? "no external inputs" : join(inputs, "/")
-            vprint("      - Pop $(pop.id): states=$(state_count) input=$(input_spec) output=$(output_spec) conn=$(conn_spec) ($(input_desc))"; level=2)
+            vinfo("      - Pop $(pop.id): states=$(state_count) input=$(input_spec) output=$(output_spec) conn=$(conn_spec) ($(input_desc))"; level=2)
             if is_verbose(2)
-                vprint("         vars=$(length(pop.vars.vars)) params=$(length(pop.params.params)) dyn=$(length(pop.dynamics))"; level=2)
+                vinfo("         vars=$(length(pop.vars.vars)) params=$(length(pop.params.params)) dyn=$(length(pop.dynamics))"; level=2)
             end
         end
     end

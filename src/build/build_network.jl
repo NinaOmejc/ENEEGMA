@@ -12,7 +12,7 @@ function build_network(settings::Settings)::Network
     ENEEGMA.set_network_signature!(net);
     ENEEGMA.export_network(net);
 
-    vprint("--- NETWORK $(net.name) SUCCESSFULLY BUILT"; level=1)
+    vinfo("Network $(net.name) successfully built."; level=1)
     return net;
 end
 
@@ -77,29 +77,18 @@ function construct_internode_conn_dynamics!(net::Network)::Network
 end
 
 function print_internode_conn_info(net::Network, target_node::Node, target_pop_id::Int, internode_conn_substitute_term, gs::GeneralSettings)
-    width = 60
-    vprint("\n--- INTERNODE CONNECTION DETAILS ---"; level=2)
-    vprint("\n🔗 Target Node $(target_node.id): $(target_node.name)"; level=2)
-    vprint("   ├─ Population ID: $(target_pop_id)"; level=2)
-    vprint("   ├─ Receives from:"; level=2)
+    vinfo("Internode connection configured for node $(target_node.id): $(target_node.name)"; level=2)
     for source_node in net.nodes
         if  source_node.id == target_node.id || net.conn[target_node.id, source_node.id] == 0.
             continue
         end
-        vprint("   │   $(source_node.name) → $(target_node.name)"; level=2)
+        vinfo("  Receives from: $(source_node.name) → $(target_node.name)"; level=2)
     end
-    vprint("   ├─ Substitute term for internode input: NI -> $(internode_conn_substitute_term)"; level=2)
     conn_params = filter(p -> p.type == :node_coupling && p.parent_pop.parent_node.id == target_node.id,
                          net.params.params)
     if !isempty(conn_params)
-        vprint("   └─ Connection Parameters:"; level=2)
-        for param in conn_params
-            vprint("       $(param.name) [default: $(param.default), descr: $(param.description)]"; level=2)
-        end
-    else
-        vprint("   └─ No internode connection parameters."; level=2)
+        vinfo("  Connection parameters added: $(length(conn_params))"; level=2)
     end
-    vprint(repeat("-", width); level=2)
 end
 
 function construct_sensory_input_dynamics!(net::Network)::Network
@@ -148,12 +137,8 @@ function construct_sensory_input_dynamics!(net::Network)::Network
     end
 
     net.sensory_input_func = LinearInterpolation(t_values, s_values, extrapolation_bc=Interpolations.Flat())
-    width = 60
-    vprint("\n--- SENSORY INPUT DYNAMICS ---"; level=2)
-    vprint("   ├─ Sensory Input Function: $(si)"; level=2)
-    vprint("   ├─ Time Span: $(ss.tspan[1]) to $(ss.tspan[2])"; level=2)
-    vprint("   └─ Sample Points: $(n_points)"; level=2)
-    vprint(repeat("-", width); level=2)
+    vinfo("Sensory input dynamics configured: $(si)"; level=2)
+    vinfo("  Time span: $(ss.tspan[1]) to $(ss.tspan[2]), $(n_points) sample points"; level=2)
     return net
 end
 
@@ -254,13 +239,9 @@ function construct_network_diffusion_dynamics!(net::Network)::Network
     end
     net.diffusion_dynamics = diffusion_eqs
 
-    width = 60
-    vprint("\n--- NETWORK DIFFUSION DYNAMICS ---"; level=2)
-    vprint("   ├─ Number of Diffusion Equations: $(length(diffusion_eqs))"; level=2)
-    for eq in diffusion_eqs
-        vprint("   │   $(eq)"; level=2)
+    if !isempty(diffusion_eqs)
+        vinfo("Network diffusion dynamics configured: $(length(diffusion_eqs)) equations"; level=2)
     end
-    vprint(repeat("-", width); level=2)
     return net
 end
 
@@ -286,7 +267,7 @@ function update_network_parameters!(net::Network;
                                 default=0.1, min=0., max=1000.,
                                 isdelay=true, description="Delay for history variable $(hv.symbol)")
             if param_in_paramset(net.params, delay_param)
-                @warn "Delay parameter $(delay_param.name) already exists in network parameters. Skipping addition."
+                vwarn("Delay parameter $(delay_param.name) already exists in network parameters. Skipping addition."; level=2)
                 continue
             else
                 add_param!(net.params, delay_param)
@@ -329,7 +310,8 @@ function construct_network_problem!(net::Network)::Network
 
     state_vars = get_symbols(get_state_vars(net.vars); sort=true)
     state_vars_symbols = [Symbol(s) for s in state_vars]
-    inits = sample_inits(net.vars; subset=state_vars, return_type="vector", sort=true)
+    inits = sample_inits(net.vars; subset=state_vars, return_type="vector", sort=true, 
+                        seed=net.settings.network_settings.init_seed)
     params_tuple = get_param_default_values(net.params; return_type="named_tuple", sort=true)
 
     if get_sensory_input_var(net.vars) !== nothing
@@ -434,14 +416,6 @@ function make_ode_problem_from_strings(rhs_strings, state_vars, param_vars, u0, 
         push!(eq_assignments, :(du[$i] = $parsed_eq))
     end
     
-    vprint("Generated function will have:"; level=2)
-    vprint("State assignments: $(state_assignments)"; level=2)
-    vprint("Parameter assignments: $(param_assignments)"; level=2)
-    vprint("Equation assignments: $(eq_assignments)"; level=2)
-    vprint("\nActual values:"; level=2)
-    vprint("State variables: $(state_vars) (u0 = $(u0))"; level=2)
-    vprint("Right-hand sides: $(rhs_strings)"; level=2)
-    
     function_expr = quote
         function f(du, u, p, t)
             # Assign state variables
@@ -454,9 +428,6 @@ function make_ode_problem_from_strings(rhs_strings, state_vars, param_vars, u0, 
             return nothing
         end
     end
-    
-    vprint("\nComplete generated function:"; level=2)
-    vprint(string(function_expr); level=2)
     
     drift_f = eval(function_expr)
 
@@ -492,12 +463,6 @@ function make_sde_problem_from_strings(drift_strings, diffusion_strings, state_v
         push!(diffusion_assignments, :(du[$i] = $parsed_eq))
     end
     
-    vprint("Generated SDE functions will have:"; level=2)
-    vprint("State assignments: $(state_assignments)"; level=2)
-    vprint("Parameter assignments: $(param_assignments)"; level=2)
-    vprint("Drift equations: $(drift_strings)"; level=2)
-    vprint("Diffusion equations: $(diffusion_strings)"; level=2)
-    
     drift_expr = quote
         function f(du, u, p, t)
             # Assign state variables
@@ -526,11 +491,6 @@ function make_sde_problem_from_strings(drift_strings, diffusion_strings, state_v
     
     drift_f = eval(drift_expr)
     diffusion_g = eval(diffusion_expr)
-    
-    vprint("\nComplete generated drift function:"; level=2)
-    vprint(string(drift_expr); level=2)
-    vprint("\nComplete generated diffusion function:"; level=2)
-    vprint(string(diffusion_expr); level=2)
 
     drift_wrapped = let drift_f = drift_f
         function (du, u, p, t)
@@ -572,11 +532,7 @@ function make_sdde_problem_from_strings(drift_strings, diffusion_strings, state_
         end
         base_var_name = Symbol(base_var_name_str[3:end])
         
-        vprint("Base variable name extracted: $(base_var_name) from $(hist_var_sym)"; level=2)
-        vprint("Type of base_var_name: $(typeof(base_var_name))"; level=2)
-        vprint("Type of state_vars: $(typeof(state_vars))"; level=2)
-        vprint("State variables: $(state_vars)"; level=2)
-        vprint("Type of state_vars elements: $(typeof(state_vars[1]))"; level=2)
+
         
         idx_in_state_vars = findfirst(x -> x == base_var_name, state_vars)
         if idx_in_state_vars === nothing
@@ -605,13 +561,6 @@ function make_sdde_problem_from_strings(drift_strings, diffusion_strings, state_
         parsed_eq = Meta.parse(eq_str)
         push!(diffusion_assignments, :(du[$i] = $parsed_eq))
     end
-    
-    vprint("Generated SDE functions will have:"; level=2)
-    vprint("State assignments: $(state_assignments)"; level=2)
-    vprint("Parameter assignments: $(param_assignments)"; level=2)
-    vprint("Delayed variable assignments: $(delayed_assignments)"; level=2)
-    vprint("Drift equations: $(drift_strings)"; level=2)
-    vprint("Diffusion equations: $(diffusion_strings)"; level=2)
     
     drift_expr = quote
         function f(du, u, h, p, t)
@@ -645,9 +594,6 @@ function make_sdde_problem_from_strings(drift_strings, diffusion_strings, state_
 
     drift_f = eval(drift_expr)
     diffusion_g = eval(diffusion_expr)
-
-    vprint("Drift function: $(drift_f)"; level=2)
-    vprint("Diffusion function: $(diffusion_g)"; level=2)
 
     drift_wrapped = let drift_f = drift_f
         function (du, u, h, p, t)
@@ -705,22 +651,17 @@ function set_network_signature!(net::Network)::Network
 end
 
 function export_network(net::Network)
-    gs = net.settings.general_settings;
-    # Include candidate name in filename if present
-    fname_suffix = if !isnothing(gs.candidate_name)
-        "_$(gs.candidate_name)"
-    else
-        ""
-    end
-    fname_out = "$(net.name)$(fname_suffix)_equations"
-    
-    # Construct output directory: path_out / exp_name / [candidate_NAME/]
-    output_dir = construct_output_dir(gs)
+    gs = net.settings.general_settings
+    ns = net.settings.network_settings
+    # Generate filename with network name
+    fname_out = "$(net.name)_equations"
+    output_dir = construct_output_dir(gs, ns)
     
     if "tex" in gs.save_model_formats
         eqs = vcat(net.dynamics, net.diffusion_dynamics)
         path_tex = joinpath(output_dir, "$(fname_out).tex")
         transform2latex(eqs, show_plot=false, path_tex=path_tex)
+        vinfo("LaTeX equations exported to: $path_tex"; level=2)
     end
     if "txt" in gs.save_model_formats
         recipe_raw = net.settings.network_settings.node_models[1]
@@ -734,6 +675,7 @@ function export_network(net::Network)
         open(path_txt, "w") do io
             write(io, "Recipe: $(recipe)\n\n")
         end
+        vinfo("Recipe exported to: $path_txt"; level=2)
     end
     return
 end

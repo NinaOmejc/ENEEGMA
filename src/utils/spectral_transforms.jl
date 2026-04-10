@@ -1098,7 +1098,7 @@ function extract_frequency_band_powers(freqs::Vector{Float64}, powers::Vector{Fl
             band_power = sum(powers[band_indices])
             band_powers[band_name] = band_power
         else
-            @warn "No frequencies found in band $band_name ($fmin-$fmax Hz)"
+            vwarn("No frequencies found in band $band_name ($fmin-$fmax Hz)"; level=2)
             band_powers[band_name] = 0.0
         end
     end
@@ -1150,7 +1150,7 @@ function extract_frequency_band_powers(fr_data::DataFrame;
                 band_power = sum(powers[band_indices])
                 band_powers[band_name] = band_power
             else
-                @warn "No frequencies found in band $band_name ($fmin-$fmax Hz) for signal $signal_col"
+                vwarn("No frequencies found in band $band_name ($fmin-$fmax Hz) for signal $signal_col"; level=2)
                 band_powers[band_name] = 0.0
             end
         end

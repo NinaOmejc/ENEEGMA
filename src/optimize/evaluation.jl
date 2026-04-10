@@ -56,7 +56,7 @@ function simulate_and_extract(
         # Check solution status
         if !SciMLBase.successful_retcode(sol)
             error_msg = "Simulation failed with retcode: $(sol.retcode)"
-            vprint("Warning: $(error_msg)", level=2)
+            vwarn("$(error_msg)"; level=2)
             return sol, Float64[], false, error_msg
         end
         
@@ -73,7 +73,7 @@ function simulate_and_extract(
         
         if isempty(keep_idx)
             error_msg = "No simulation time points after transient period (t=$(transient_time)s)"
-            vprint("Warning: $(error_msg)", level=2)
+            vwarn("$(error_msg)"; level=2)
             return sol, Float64[], false, error_msg
         end
         
@@ -89,7 +89,7 @@ function simulate_and_extract(
         
     catch e
         error_msg = "Simulation error: $(e)"
-        vprint("Warning: $(error_msg)", level=2)
+        vwarn("$(error_msg)"; level=2)
         # Return empty solution-like object
         return nothing, Float64[], false, error_msg
     end
@@ -148,7 +148,7 @@ function evaluate_model(
     
     if !success || isempty(model_prediction)
         # Return zeros/empty results for failed simulation
-        vprint("Returning empty results due to simulation failure", level=2)
+        vinfo("Returning empty results due to simulation failure"; level=2)
         model_psd = zeros(length(data.powers))
         freqs = copy(data.freqs)
         
@@ -191,7 +191,7 @@ function evaluate_model(
                 error("Unknown evaluation metric: $metric_name. Supported metrics: loss, r2, iae")
             end
         catch e
-            vprint("Warning: Error computing metric '$(metric_name)': $(e)", level=2)
+            vwarn("Error computing metric '$(metric_name)': $(e)"; level=2)
             NaN
         end
         

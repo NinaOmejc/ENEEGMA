@@ -369,6 +369,7 @@ function save_parse_trees(trees::Vector{RuleTree}, filepath::AbstractString)
     # so parse_trees like "1{8{11,16,21,22,58},25,23,34}" become quoted in output:
     # G1,"1{8{11,16,21,22,58},25,23,34}"
     CSV.write(filepath, df)
+    vinfo("Parse trees saved to: $filepath"; level=2)
     return nothing
 end
 

@@ -46,11 +46,11 @@ model_idx = 1
 model_name = candidate_models.model_name[model_idx]
 parse_tree = candidate_models.parse_tree[model_idx]
 
-println("Building network with candidate: $(model_name)")
+println("Building network with model: $(model_name)")
 
 # Set the model in network settings (parse_tree can be used directly as String)
 settings.network_settings.node_models = [parse_tree]
-settings.general_settings.candidate_name = model_name
+settings.network_settings.name = model_name
 
 # Build Network
 net = build_network(settings)

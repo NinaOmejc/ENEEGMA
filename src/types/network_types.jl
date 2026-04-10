@@ -180,7 +180,7 @@ mutable struct Network
 
     function Network(settings::Settings;)
         network_settings = settings.network_settings
-        network_name = settings.general_settings.exp_name
+        network_name = network_settings.name
         network_conn = network_settings.network_conn
         sensory_input_conn = network_settings.sensory_input_conn
         sensory_input_func_string = network_settings.sensory_input_func
@@ -202,6 +202,72 @@ mutable struct Network
             internode_conn_eqs, internode_conn_params,
             "", "", settings)
     end
+end
+
+"""
+    show(io::IO, net::Network)
+
+Custom display for Network objects showing a concise summary.
+
+Displays:
+- Network name and node count
+- Dynamics (ODEs)
+- State variables with initial condition ranges
+- Parameters with defaults and ranges
+- Connectivity matrix
+- Sensory input configuration
+"""
+function Base.show(io::IO, net::Network)
+    println(io, "\n" * "="^80)
+    println(io, "Network: $(net.name) ($(length(net.nodes)) nodes)")
+    println(io, "="^80)
+    
+    # Dynamics
+    if length(net.dynamics) > 0
+        println(io, "\n[Dynamics]")
+        for (i, eq) in enumerate(net.dynamics)
+            println(io, "  $i. $eq")
+        end
+    end
+    
+    # State Variables with Initial Condition Ranges
+    state_vars = get_state_vars(net.vars)
+    if length(state_vars) > 0
+        println(io, "\n[State Variables (Init Ranges)]")
+        for var in state_vars.vars
+            init_min = var.init_min
+            init_max = var.init_max
+            println(io, "  $(var.symbol): [$init_min, $init_max]")
+        end
+    end
+    
+    # Parameters with Defaults and Ranges
+    if length(net.params.params) > 0
+        println(io, "\n[Parameters (Default, [Min, Max])]")
+        for param in net.params.params
+            default_val = param.default
+            min_val = param.min
+            max_val = param.max
+            println(io, "  $(param.symbol): $default_val [$min_val, $max_val]")
+        end
+    end
+    
+    # Connectivity
+    if size(net.conn, 1) > 0
+        println(io, "\n[Network Connectivity]")
+        println(io, "  Connection Matrix ($(size(net.conn, 1)) × $(size(net.conn, 2))):")
+        for (i, row) in enumerate(eachrow(net.conn))
+            println(io, "    Node $i → $(collect(row))")
+        end
+    end
+    
+    # Sensory Input
+    println(io, "\n[Sensory Input]")
+    println(io, "  Function: $(net.sensory_input_str)")
+    println(io, "  Connected nodes: $(findall(net.sensory_input_conn))")
+    println(io, "  Stochastic: $(net.sensory_randomness)")
+    
+    println(io, "="^80 * "\n")
 end
 
 function get_sensory_input(net::Network, time::Vector{Float64})::DataFrame

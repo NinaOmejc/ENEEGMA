@@ -225,29 +225,32 @@ end
 # Draw a white-noise template (N(0,1)) of requested length
 # If loss_noise_seed is nothing/null → use non-deterministic random noise
 # If loss_noise_seed is an integer → use deterministic seeded noise
-function _measurement_noise_template(len::Int, loss_settings::LossSettings)
+# Draw a white-noise template (N(0,1)) of requested length
+# If loss_noise_seed is nothing/null → use non-deterministic random noise
+# If loss_noise_seed is an integer → use deterministic seeded RNG
+# Note: Default loss_noise_seed is 42 (deterministic). Set to nothing for non-deterministic behavior.
+# The RNG is created once during loss setup and reused for all evaluations
+function _measurement_noise_template(len::Int, rng::Union{Random.AbstractRNG, Nothing})
     if len <= 0
         return Float64[]
     end
-    if loss_settings.loss_noise_seed === nothing
-        # No seed specified: use Julia's default random state (non-deterministic)
-        vprint("Applying measurement noise, but loss_noise_seed is null: note that results will vary between runs/calls", level=1)
+    if rng === nothing
+        # Non-deterministic RNG: use Julia's default random state
         return randn(len)
     else
-        # Seed specified: use deterministic seeded RNG
-        rng = Random.MersenneTwister(Int(loss_settings.loss_noise_seed))
+        # Use pre-created seeded RNG
         return randn(rng, len)
     end
 end
 
-function apply_measurement_noise!(data::AbstractVector, sigma, loss_settings::LossSettings)
+function apply_measurement_noise!(data::AbstractVector, sigma, rng::Union{Random.AbstractRNG, Nothing})
     sigma === nothing && return data
     if Base.iszero(sigma)
         return data
     end
     len = length(data)
     len == 0 && return data
-    noise = _measurement_noise_template(len, loss_settings)
+    noise = _measurement_noise_template(len, rng)
     @inbounds @simd for i in 1:len
         data[i] += sigma * noise[i]
     end
@@ -269,17 +272,19 @@ function _compute_noisy_psd_avg(model_prediction::AbstractVector{<:Real},
         return compute_preprocessed_welch_psd(model_prediction, fs; loss_settings=loss_settings)
     end
 
-    seed_backup = loss_settings.loss_noise_seed
+    seed_value = loss_settings.loss_noise_seed
     freqs = Float64[]
     accum = Float64[]
     for rep in 1:reps
-        if seed_backup === nothing
-            loss_settings.loss_noise_seed = nothing
+        # Create RNG for this repetition (or use nothing for non-deterministic)
+        rng = if seed_value === nothing
+            nothing  # Non-deterministic
         else
-            loss_settings.loss_noise_seed = Int(seed_backup) + rep - 1
+            Random.MersenneTwister(Int(seed_value) + rep - 1)
         end
+        
         noisy = Float64.(model_prediction)
-        apply_measurement_noise!(noisy, sigma_effective, loss_settings)
+        apply_measurement_noise!(noisy, sigma_effective, rng)
         freqs_rep, powers_rep = compute_preprocessed_welch_psd(noisy, fs; loss_settings=loss_settings)
         if isempty(freqs)
             freqs = freqs_rep
@@ -287,6 +292,5 @@ function _compute_noisy_psd_avg(model_prediction::AbstractVector{<:Real},
         end
         accum .+= powers_rep
     end
-    loss_settings.loss_noise_seed = seed_backup
     return freqs, accum ./ reps
 end

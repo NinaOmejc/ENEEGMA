@@ -44,31 +44,32 @@ function load_settings_from_file(filepath::String)::Dict{String, Any}
 end
 
 """
-    construct_output_dir(gs::GeneralSettings)::String
+    construct_output_dir(gs::GeneralSettings, ns::NetworkSettings)::String
 
-Construct and create the output directory path based on GeneralSettings.
+Construct and create the output directory path based on GeneralSettings and NetworkSettings.
 
-Builds hierarchical directory: `path_out / exp_name / [candidate_NAME/]`
-If candidate_name is set, it creates a subdirectory for that candidate.
+Builds hierarchical directory: `path_out / exp_name / network_name/`
+If network_name is set to a value other than "net1", it creates a subdirectory for that network.
 The directory is created if it doesn't already exist.
 
 # Arguments
-- `gs::GeneralSettings`: General settings containing path_out, exp_name, and optional candidate_name
+- `gs::GeneralSettings`: General settings containing path_out and exp_name
+- `ns::NetworkSettings`: Network settings containing network name
 
 # Returns
 String: The full path to the output directory
 
 # Example
 ```julia
-output_dir = construct_output_dir(settings.general_settings)
-# Returns: "./results/MyExperiment/" or "./results/MyExperiment/candidate_Model1/"
+gs = settings.general_settings
+ns = settings.network_settings
+output_dir = construct_output_dir(gs, ns)
+# Returns: "./results/default_exp/net1/" or "./results/my_exp/my_network/"
 ```
 """
-function construct_output_dir(gs::GeneralSettings)::String
+function construct_output_dir(gs::GeneralSettings, ns::NetworkSettings)::String
     output_dir = joinpath(gs.path_out, gs.exp_name)
-    if !isnothing(gs.candidate_name)
-        output_dir = joinpath(output_dir, "candidate_$(gs.candidate_name)")
-    end
+    output_dir = joinpath(output_dir, ns.name)
     if !isdir(output_dir)
         mkpath(output_dir)
     end
@@ -103,7 +104,10 @@ A fully initialized `Settings` object with default values for:
 - Data and sampling settings with sensible defaults
 """
 function create_default_settings()::Settings
-    return Settings(Dict{String, Any}())
+    s = Settings(Dict{String, Any}())
+    set_task_settings(s)  # Store settings in task-local storage and set verbosity
+    vinfo("Default settings created successfully."; level=1)
+    return s
 end
 
 """
@@ -119,10 +123,10 @@ Useful for saving and inspecting configuration.
 Dictionary representation of the Settings object
 """
 function settings_to_dict(settings::Settings)::Dict{String, Any}
-    d = Dict{String, Any}()
+    d = OrderedDict{String, Any}()
     
     # General settings
-    d["general_settings"] = Dict(
+    d["general_settings"] = OrderedDict(
         "exp_name" => settings.general_settings.exp_name,
         "path_out" => settings.general_settings.path_out,
         "verbosity_level" => settings.general_settings.verbosity_level,
@@ -135,7 +139,8 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
     ns = settings.network_settings
     # Serialize node_models: convert RuleTree to string representation
     node_models_serialized = [m isa String ? m : serialize_rule_tree(m) for m in ns.node_models]
-    d["network_settings"] = Dict(
+    d["network_settings"] = OrderedDict(
+        "name" => ns.name,
         "n_nodes" => ns.n_nodes,
         "node_names" => ns.node_names,
         "node_models" => node_models_serialized,
@@ -146,13 +151,27 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
         "sensory_input_conn" => ns.sensory_input_conn,
         "sensory_input_func" => ns.sensory_input_func,
         "sensory_seed" => ns.sensory_seed,
+        "init_seed" => ns.init_seed,
         "eeg_output" => ns.eeg_output
     )
     
+    # Sampling settings
+    samp_s = settings.sampling_settings
+    d["sampling_settings"] = if samp_s !== nothing
+        OrderedDict(
+            "grammar_file" => samp_s.grammar_file,
+            "n_samples" => samp_s.n_samples,
+            "only_unique" => samp_s.only_unique,
+            "max_resample_attempts" => samp_s.max_resample_attempts,
+            "grammar_seed" => samp_s.grammar_seed
+        )
+    else
+        OrderedDict()
+    end
+    
     # Simulation settings
     ss = settings.simulation_settings
-    d["simulation_settings"] = Dict(
-        "n_runs" => ss.n_runs,
+    d["simulation_settings"] = OrderedDict(
         "tspan" => collect(ss.tspan),
         "dt" => ss.dt,
         "solver" => ss.solver
@@ -161,7 +180,7 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
     # Data settings
     data_s = settings.data_settings
     d["data_settings"] = if data_s !== nothing
-        Dict(
+        OrderedDict(
             "data_file" => data_s.data_file,
             "target_channel" => data_s.target_channel,
             "task_type" => data_s.task_type,
@@ -169,7 +188,7 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
             "data_columns" => data_s.data_columns
         )
     else
-        Dict()
+        OrderedDict()
     end
     
     # Optimization settings with nested loss and optimizer
@@ -177,7 +196,7 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
     ls = os.loss_settings
     opt_s = os.optimizer_settings
     
-    d["optimization_settings"] = Dict(
+    d["optimization_settings"] = OrderedDict(
         "method" => os.method,
         "loss_abstol" => os.loss_abstol,
         "loss_reltol" => os.loss_reltol,
@@ -189,7 +208,7 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
         "n_restarts" => os.n_restarts,
         "maxiters" => os.maxiters,
         "time_limit_minutes" => os.time_limit_minutes,
-        "loss_settings" => Dict(
+        "loss_settings" => OrderedDict(
             "psd_preproc" => ls.psd_preproc,
             "psd_welch_window_sec" => ls.psd_welch_window_sec,
             "psd_welch_overlap" => ls.psd_welch_overlap,
@@ -203,14 +222,14 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
             "roi_weight" => ls.roi_weight,
             "bg_weight" => ls.bg_weight
         ),
-        "optimizer_settings" => Dict(
+        "optimizer_settings" => OrderedDict(
             "population_size" => opt_s.population_size,
             "sigma0" => opt_s.sigma0,
             "K" => opt_s.K,
             "n_samples" => opt_s.n_samples,
             "learning_rate" => opt_s.learning_rate
         ),
-        "hyperparameter_sweep" => Dict(
+        "hyperparameter_sweep" => OrderedDict(
             "sigma_mode" => os.hyperparameter_sweep.sigma_mode,
             "param_range_levels" => os.hyperparameter_sweep.param_range_levels,
             "scale_sets" => os.hyperparameter_sweep.scale_sets,
@@ -218,28 +237,91 @@ function settings_to_dict(settings::Settings)::Dict{String, Any}
             "sigma_values_override" => os.hyperparameter_sweep.sigma_values_override,
             "restart_grid" => os.hyperparameter_sweep.restart_grid,
             "base_reparam_scales" => os.hyperparameter_sweep.base_reparam_scales,
-            "hyperparameter_axes" => [Dict(
+            "hyperparameter_axes" => [OrderedDict(
                 "hyperparameter" => axis.hyperparameter,
                 "values" => axis.values
             ) for axis in os.hyperparameter_sweep.hyperparameter_axes]
         )
     )
     
-    # Sampling settings
-    samp_s = settings.sampling_settings
-    d["sampling_settings"] = if samp_s !== nothing
-        Dict(
-            "grammar_file" => samp_s.grammar_file,
-            "n_samples" => samp_s.n_samples,
-            "only_unique" => samp_s.only_unique,
-            "max_resample_attempts" => samp_s.max_resample_attempts,
-            "grammar_seed" => samp_s.grammar_seed
-        )
-    else
-        Dict()
+    return d
+end
+
+"""
+    format_json_with_indent(json_str::String; indent=2)
+
+Format a compact JSON string with proper indentation while preserving key order.
+"""
+function format_json_with_indent(json_str::String; indent=2)
+    result = String[]
+    current_indent = 0
+    i = 1
+    in_array = false
+    array_depth = 0
+    
+    while i <= length(json_str)
+        c = json_str[i]
+        
+        if c == '{'
+            push!(result, "{")
+            current_indent += indent
+            # Check if next non-whitespace is }
+            j = i + 1
+            while j <= length(json_str) && json_str[j] in (' ', '\t', '\n', '\r')
+                j += 1
+            end
+            if j <= length(json_str) && json_str[j] != '}'
+                push!(result, "\n" * " "^current_indent)
+            end
+        elseif c == '}'
+            current_indent -= indent
+            if !isempty(result) && result[end] != "{"
+                push!(result, "\n" * " "^current_indent)
+            end
+            push!(result, "}")
+        elseif c == '['
+            push!(result, "[")
+            array_depth += 1
+        elseif c == ']'
+            array_depth -= 1
+            push!(result, "]")
+        elseif c == ','
+            push!(result, ",")
+            # Only add newline if we're not inside an array
+            if array_depth == 0
+                j = i + 1
+                while j <= length(json_str) && json_str[j] in (' ', '\t', '\n', '\r')
+                    j += 1
+                end
+                if j <= length(json_str) && json_str[j] != '}'
+                    push!(result, "\n" * " "^current_indent)
+                end
+            else
+                # In array: add space after comma only if not followed by newline
+                j = i + 1
+                while j <= length(json_str) && json_str[j] in ('\t', '\n', '\r')
+                    j += 1
+                end
+                if j <= length(json_str) && json_str[j] == ' '
+                    push!(result, " ")
+                    i = j
+                    continue
+                end
+            end
+        elseif c in (' ', '\t', '\n', '\r')
+            # Skip whitespace, we'll add our own
+            # Exception: preserve space after comma in arrays
+            if !isempty(result) && result[end] == ","
+                # Skip, we handled it above
+            end
+        else
+            push!(result, string(c))
+        end
+        
+        i += 1
     end
     
-    return d
+    return join(result)
 end
 
 """
@@ -272,6 +354,11 @@ save_settings(settings_dict, "config.json")  # filepath required for Dict
 ```
 """
 function save_settings(settings::Union{Settings, Dict}, filepath::Union{String, Nothing}=nothing; overwrite::Bool=true)::String
+    # Set verbosity from Settings if available (so vinfo() calls work correctly)
+    if settings isa Settings
+        set_verbose(settings.general_settings.verbosity_level)
+    end
+    
     # Determine filepath if not provided
     if filepath === nothing
         if settings isa Settings
@@ -293,12 +380,13 @@ function save_settings(settings::Union{Settings, Dict}, filepath::Union{String, 
     dir = dirname(filepath)
     isempty(dir) || mkpath(dir)
     
-    # Write JSON
+    # Write JSON with pretty formatting while preserving OrderedDict order
+    # Use JSON.print to preserve OrderedDict key order
     open(filepath, "w") do f
         JSON.print(f, settings_dict, 2)
     end
     
-    vinfo("Settings saved to: $filepath")
+    vinfo("Settings saved to: $filepath", level=2)
     return filepath
 end
 
@@ -332,6 +420,7 @@ function print_settings_summary(settings::Union{Settings, Dict}; section::String
     end
     
     print_section(section, settings_dict, format_type)
+    println()  # Add extra newline at end for readability
 end
 
 function print_section(section::String, settings_dict::Dict, format_type::String="short")
@@ -354,18 +443,26 @@ function print_section_short(section::String, settings_dict::Dict)
         println("  path_out: $(get(gs, "path_out", "N/A"))")
         println("  verbosity_level: $(get(gs, "verbosity_level", 1))")
         println("  seed: $(get(gs, "seed", nothing))")
-        println("  make_plots: $(get(gs, "make_plots", false))")
+        println("  make_plots: $(get(gs, "make_plots", true))")
         println("  save_model_formats: $(get(gs, "save_model_formats", ["tex"]))")
     end
     
     if should_print("network_settings")
         ns = get(settings_dict, "network_settings", Dict())
         println("\n[Network Settings]")
+        println("  name: $(get(ns, "name", "net1"))")
         println("  n_nodes: $(get(ns, "n_nodes", "N/A"))")
         println("  node_names: $(join(get(ns, "node_names", []), ", "))")
         # Handle both String and RuleTree node models
         node_models_raw = get(ns, "node_models", [])
-        node_models_display = if all(x -> x isa String for x in node_models_raw)
+        is_all_strings = true
+        for x in node_models_raw
+            if !isa(x, String)
+                is_all_strings = false
+                break
+            end
+        end
+        node_models_display = if is_all_strings
             join(node_models_raw, ", ")
         else
             join([x isa String ? x : serialize_rule_tree(x) for x in node_models_raw], ", ")
@@ -434,6 +531,7 @@ function print_section_short(section::String, settings_dict::Dict)
         println("  sensory_input_conn: $(join(get(ns, "sensory_input_conn", []), ", "))")
         println("  sensory_input_func: $(get(ns, "sensory_input_func", "none"))")
         println("  sensory_seed: $(get(ns, "sensory_seed", nothing))")
+        println("  init_seed: $(get(ns, "init_seed", nothing))")
         println("  eeg_output: $(get(ns, "eeg_output", "default"))")
     end
     
@@ -444,7 +542,6 @@ function print_section_short(section::String, settings_dict::Dict)
         t1 = (tspan_val isa Vector) ? tspan_val[1] : tspan_val[1]
         t2 = (tspan_val isa Vector) ? tspan_val[2] : tspan_val[2]
         println("  tspan: [$t1, $t2]")
-        println("  n_runs: $(get(ss, "n_runs", 1))")
         println("  dt: $(get(ss, "dt", "N/A"))")
         println("  saveat: $(get(ss, "saveat", "N/A"))")
         println("  solver: $(get(ss, "solver", "Tsit5"))")
@@ -509,7 +606,7 @@ function print_section_long(section::String, settings_dict::Dict)
         println("  seed                  :: Int?        | Random seed (nothing=random)")
         println("    → $(get(gs, "seed", nothing))")
         println("  make_plots            :: Bool        | Generate plot output (PNG)")
-        println("    → $(get(gs, "make_plots", false))")
+        println("    → $(get(gs, "make_plots", true))")
         println("  save_model_formats    :: Vector      | Formats for saving models (tex only, tvb coming)")
         println("    → $(get(gs, "save_model_formats", ["tex"]))")
     end
@@ -517,6 +614,8 @@ function print_section_long(section::String, settings_dict::Dict)
     if should_print("network_settings")
         ns = get(settings_dict, "network_settings", Dict())
         println("\n[Network Settings]")
+        println("  name                  :: String   | Network identifier")
+        println("    → $(get(ns, "name", "net1"))")
         println("  n_nodes               :: Int      | Number of nodes in network")
         println("    → $(get(ns, "n_nodes", "N/A"))")
         println("  node_names            :: Vector   | Names of each node")
@@ -524,7 +623,14 @@ function print_section_long(section::String, settings_dict::Dict)
         println("  node_models           :: Vector   | Model per node (Unknown=grammar-sampled)")
         # Handle both String and RuleTree node models
         node_models_raw = get(ns, "node_models", [])
-        node_models_display = if all(x -> x isa String for x in node_models_raw)
+        is_all_strings = true
+        for x in node_models_raw
+            if !isa(x, String)
+                is_all_strings = false
+                break
+            end
+        end
+        node_models_display = if is_all_strings
             join(node_models_raw, ", ")
         else
             join([x isa String ? x : serialize_rule_tree(x) for x in node_models_raw], ", ")
@@ -596,6 +702,8 @@ function print_section_long(section::String, settings_dict::Dict)
         println("    → $(get(ns, "sensory_input_func", "none"))")
         println("  sensory_seed      :: Int?     | Seed for input randomization")
         println("    → $(get(ns, "sensory_seed", nothing))")
+        println("  init_seed         :: Int?     | Seed for initial condition sampling")
+        println("    → $(get(ns, "init_seed", nothing))")
         println("  eeg_output            :: String   | EEG recording specification")
         println("    → $(get(ns, "eeg_output", "default"))")
     end
@@ -608,8 +716,6 @@ function print_section_long(section::String, settings_dict::Dict)
         t2 = (tspan_val isa Vector) ? tspan_val[2] : tspan_val[2]
         println("  tspan                 :: Vector   | Time interval (ms): [start, end]")
         println("    → [$t1, $t2]")
-        println("  n_runs                :: Int      | Number of independent runs")
-        println("    → $(get(ss, "n_runs", 1))")
         println("  dt                    :: Float    | Time step (ms)")
         println("    → $(get(ss, "dt", "N/A"))")
         println("  saveat                :: Float    | Output save frequency (ms)")
@@ -750,7 +856,7 @@ function print_section_long(section::String, settings_dict::Dict)
 end
 
 """
-    load_settings_file(settings_path::String)::Settings
+    load_settings(settings_path::String)::Settings
 
 Load and initialize settings from a JSON file with workflow setup.
 
@@ -771,10 +877,10 @@ Fully initialized Settings object ready for use
 
 # Example
 ```julia
-settings = load_settings_file("experiments/my_settings.json")
+settings = load_settings("experiments/my_settings.json")
 ```
 """
-function load_settings_file(settings_path::String)::Settings
+function load_settings(settings_path::String)::Settings
     # Load settings from file
     settings = load_settings_from_file(settings_path)
 
@@ -807,11 +913,9 @@ function load_settings_file(settings_path::String)::Settings
     # Build Settings object from loaded settings dict
     # The Settings constructors handle all default values internally
     s = Settings(settings)
-    set_task_settings(s)  # Store settings in task-local storage
-    set_verbose(s.general_settings.verbosity_level) # Set global verbosity level based on settings
+    set_task_settings(s)  # Store settings in task-local storage and set verbosity
 
-    print_settings_summary(s; section="network_settings")
+    vinfo("Settings loaded and initialized from: $settings_path", level=1)
     flush(stdout)
-
     return s
 end

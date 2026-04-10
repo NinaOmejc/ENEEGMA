@@ -435,7 +435,7 @@ function update_param_values!(paramset::ParamSet, new_values::AbstractDict{<:Any
                 vwarn("Unsupported value type for parameter '$(param_name)': $(typeof(values)). Skipping update.")
             end
         catch
-            @warn "Param '$(param_name)' not found in ParamSet. Skipping update."
+            vwarn("Param '$(param_name)' not found in ParamSet. Skipping update."; level=2)
             continue
         end
     end
@@ -443,8 +443,7 @@ function update_param_values!(paramset::ParamSet, new_values::AbstractDict{<:Any
 end
 
 
-function update_param_tunability!(paramset::ParamSet, new_tunability::Union{Dict{String, Bool}, 
-                                                                    OrderedDict{String, Bool}})
+function update_param_tunability!(paramset::ParamSet, new_tunability::AbstractDict)
     for (name, tunable) in new_tunability
         try
             param = get_param_by_name(paramset, name)
@@ -467,6 +466,74 @@ override per-model defaults before running custom optimization routines.
 function set_all_params_tunable!(paramset::ParamSet)::ParamSet
     for param in paramset.params
         param.tunable = true
+    end
+    return paramset
+end
+
+
+"""
+    update_param_defaults!(paramset, dict::Dict{String, Real})
+
+Update default values for parameters using a Dict{String, Real} mapping.
+
+# Arguments
+- `paramset::ParamSet`: Parameters to update
+- `dict::Dict{String, Real}`: Dictionary mapping parameter names to default values
+
+# Examples
+```julia
+update_param_defaults!(net.params, Dict("J" => 1.5, "tau_e" => 2.0))
+```
+"""
+function update_param_defaults!(paramset::ParamSet, dict::AbstractDict)::ParamSet
+    for (name, value) in dict
+        try
+            param = get_param_by_name(paramset, name)
+            param.default = Float64(value)
+        catch
+            vwarn("Parameter '$name' not found in ParamSet. Skipping update.")
+        end
+    end
+    return paramset
+end
+
+
+"""
+    update_param_bounds!(paramset, dict::Dict{String, Vector})
+
+Update min/max bounds for parameters using a Dict{String, Vector} mapping.
+
+# Arguments
+- `paramset::ParamSet`: Parameters to update
+- `dict::Dict{String, Vector}`: Dictionary mapping parameter names to [min, max] bounds.
+    - Single element [val]: Uses val as reference, keeps type-based bounds
+    - Two elements [min, max]: Sets both bounds explicitly
+
+# Examples
+```julia
+update_param_bounds!(net.params, Dict(
+    "J" => [0.5, 2.0],
+    "tau_e" => [1.0, 3.0]
+))
+```
+"""
+function update_param_bounds!(paramset::ParamSet, dict::AbstractDict)::ParamSet
+    for (name, bounds) in dict
+        try
+            param = get_param_by_name(paramset, name)
+            if length(bounds) == 1
+                # Single value: set as default, keep existing bounds
+                param.default = Float64(bounds[1])
+            elseif length(bounds) == 2
+                # Two values: set min and max
+                param.min = Float64(bounds[1])
+                param.max = Float64(bounds[2])
+            else
+                vwarn("Parameter '$name' bounds should be [val] or [min,max]. Got length $(length(bounds)). Skipping.")
+            end
+        catch
+            vwarn("Parameter '$name' not found in ParamSet. Skipping update.")
+        end
     end
     return paramset
 end
@@ -618,13 +685,13 @@ function update_param_defaults!(paramset::ParamSet, settings)
        os.empirical_param_table_path !== nothing && os.empirical_param_table_path != ""
         try
             empirical_table = CSV.read(os.empirical_param_table_path, DataFrame)
-            vprint("Loaded empirical parameter table for defaults: $(os.empirical_param_table_path)"; level=2)
+            vinfo("Loaded empirical parameter table for defaults: $(os.empirical_param_table_path)"; level=2)
         catch e
-            @warn "Failed to load empirical parameter table from $(os.empirical_param_table_path): $e"
+            vwarn("Failed to load empirical parameter table from $(os.empirical_param_table_path): $e"; level=2)
             return paramset
         end
     else
-        @warn "param_range_level='empirical' requires empirical_param_table_path in settings"
+        vwarn("param_range_level='empirical' requires empirical_param_table_path in settings"; level=2)
         return paramset
     end
     
@@ -657,7 +724,7 @@ function set_param_bounds!(paramset::ParamSet, settings)
     os = settings.optimization_settings
     
     if os === nothing || !hasproperty(os, :param_range_level)
-        @warn "No optimization settings found, skipping bounds update"
+        vwarn("No optimization settings found, skipping bounds update"; level=2)
         return paramset
     end
     
@@ -672,7 +739,7 @@ function set_param_bounds!(paramset::ParamSet, settings)
            os.empirical_param_table_path !== nothing && os.empirical_param_table_path != ""
             try
                 empirical_table = CSV.read(os.empirical_param_table_path, DataFrame)
-                vprint("Loaded empirical parameter table for bounds: $(os.empirical_param_table_path)"; level=2)
+                vinfo("Loaded empirical parameter table for bounds: $(os.empirical_param_table_path)"; level=2)
             catch e
                 error("param_range_level='empirical' requires valid empirical_param_table_path: $e")
             end
@@ -692,13 +759,13 @@ function set_param_bounds!(paramset::ParamSet, settings)
         # Set all bounds to ±Inf (useful when relying entirely on reparametrization transforms)
         for param in paramset.params
             if is_verbose(2)
-                vprint(string("Current param: ", param.name, " | default: ", param.default,
+                vinfo(string("Current param: ", param.name, " | default: ", param.default,
                               " | min: ", param.min, " | max: ", param.max); level=2)
             end
             _apply_unbounded_range!(param)
             if is_verbose(2)
                 transform_name, eff_min, eff_max = _describe_type_based_transform(param; type_scales=type_scales)
-                vprint(string("Updated param: ", param.name, " | type: ", param.type,
+                vinfo(string("Updated param: ", param.name, " | type: ", param.type,
                               " | transform: ", transform_name, " | default: ", param.default,
                               " | min: ", round(eff_min; digits=6),
                               " | max: ", round(eff_max; digits=6)); level=2)
@@ -714,12 +781,12 @@ function set_param_bounds!(paramset::ParamSet, settings)
 
     for param in paramset.params
         if is_verbose(2)
-            vprint(string("Current param: ", param.name, " | default: ", param.default,
+            vinfo(string("Current param: ", param.name, " | default: ", param.default,
                           " | min: ", param.min, " | max: ", param.max); level=2)
         end
         _apply_multiplier_range!(param, lower_mult, upper_mult, zero_span)
         if is_verbose(2)
-            vprint(string("Updated param: ", param.name, " | type: ", param.type,
+            vinfo(string("Updated param: ", param.name, " | type: ", param.type,
                           " | strategy: multiplier | default: ", param.default,
                           " | min: ", param.min, " | max: ", param.max); level=2)
         end
@@ -741,7 +808,7 @@ function update_param_minmax!(paramset::ParamSet, param_range_level::String="med
                               empirical_table::Union{Nothing, DataFrame}=nothing,
                               task::Symbol=:rest,
                               bounds_task::Symbol=:global)
-    @warn "update_param_minmax! is deprecated. Use set_param_bounds!(paramset, settings) instead."
+    vwarn("update_param_minmax! is deprecated. Use set_param_bounds!(paramset, settings) instead."; level=2)
     
     # Create minimal settings-like structure for backwards compatibility
     # This is a hack to support old calling convention
@@ -1100,7 +1167,7 @@ function set_params_empirically!(x, joined_table::DataFrame;
                                         task::Symbol = :rest,
                                         bounds_task::Symbol = :global,
                                         kwargs...)
-    @warn "set_params_empirically! is deprecated. Use update_param_defaults! and set_param_bounds! separately."
+    vwarn("set_params_empirically! is deprecated. Use update_param_defaults! and set_param_bounds! separately."; level=2)
     
     ps = x isa ParamSet ? x : getfield(x, :params)
     _apply_empirical_defaults!(ps, joined_table; task=task, kwargs...)
@@ -1192,6 +1259,7 @@ function print_params_summary(paramset::ParamSet; format_type::String="short")
             println("    type: $(p.type), tunable: $(p.tunable)")
         end
     end
+    println()  # Add extra newline for separation
 end
 
 

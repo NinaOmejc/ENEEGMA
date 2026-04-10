@@ -8,18 +8,17 @@ function optimize_network(
     hyperparam_idx::Union{Nothing, Int}=nothing,
     hyperparam_keys::Union{Nothing, Vector{String}}=nothing
     )
-
-    vprint("--- STARTING OPTIMIZATION "; level=1)
+    gs = settings.general_settings
+    ns = settings.network_settings
     ss = settings.simulation_settings
     os = settings.optimization_settings
     ls = os.loss_settings
+    vinfo("Starting optimization of $(gs.exp_name) - $(net.name)"; level=1)
     
-    # Ensure output directories exist and save settings (only if not already saved)
-    exp_path = construct_output_dir(settings.general_settings)
-    settings_file = joinpath(exp_path, "settings.json")
-    if !isfile(settings_file)
-        save_settings(settings)
-    end
+    # Ensure output directories exist and save current settings
+    # Always save to capture any runtime modifications made before optimization started
+    exp_path = construct_output_dir(gs, ns)
+    save_settings(settings)
 
     # get some optimization components
     solver = get_solver(net.problem, ss)
@@ -34,7 +33,6 @@ function optimize_network(
     initial_values_native = blocks.initial_values_native
     inits_lb = blocks.init_lb
     inits_ub = blocks.init_ub
-
     param_spec = blocks.param_spec
     init_spec = blocks.init_spec
     use_reparam = os.reparametrize && os.reparam_strategy != :none
@@ -59,6 +57,9 @@ function optimize_network(
         brain_source_idx=brain_source_idx,
         solver=solver, solver_kwargs=solver_kwargs,
     )
+
+    # Generate timestamp once for all restarts
+    optimization_timestamp = Dates.format(now(), "yyyymmdd_HHMMSS")
 
     best_optsol = nothing
     best_loss = Inf
@@ -89,28 +90,27 @@ function optimize_network(
             save_optimization_results(optsol, runlog, setter, net, data, settings; 
                                     blocks=blocks, 
                                     restart_idx=irestart,
+                                    optimization_timestamp=optimization_timestamp,
                                     hyperparam_combo=hyperparam_combo, 
                                     hyperparam_idx=hyperparam_idx, 
                                     hyperparam_keys=hyperparam_keys)
         end
 
-        vprint("Completed restart $irestart/$(os.n_restarts), current best loss: $best_loss. \n"; level=1)
-        flush(stdout)
+        # vinfo("Completed restart $irestart/$(os.n_restarts), current best loss: $best_loss. \n"; level=1)
+        # flush(stdout)
 
         if best_loss <= os.abs_target_loss
-            vprint("Target loss $(os.abs_target_loss) reached. Ending optimization early."; level=1)
+            vinfo("Target loss $(os.abs_target_loss) reached. Ending optimization early."; level=1)
             break
         end
     end
 
-    # Save best solution results
+    # Validate that at least one optimization succeeded
     if best_optsol === nothing
         detail = isempty(failure_reasons) ? "" : "\nLast failure:\n" * failure_reasons[end]
         max_len = 1200
         detail = length(detail) > max_len ? string(detail[1:max_len], " … [truncated]") : detail
         error("All optimization attempts failed. Check solver settings and model stability." * detail)
-    else
-        save_optimization_results(best_optsol, optlogger, setter, net, data, settings; blocks=blocks)
     end
 
     return best_optsol, optlogger, setter, blocks
@@ -134,7 +134,7 @@ function singlerun_optimization(
     inits_ub::Vector{Float64}
 )
 
-    vprint("\n[Restart $irestart/$(os.n_restarts)]")
+    vinfo("\n[Restart $irestart/$(os.n_restarts)]"; level=1)
 
     optlogger = OptLogEntry[]
     failure_reason = nothing
@@ -166,37 +166,36 @@ function singlerun_optimization(
         )
 
         u_phys = materialize_logged_params(current_optsol.u, param_spec, init_spec)
-        vprint("Optimization completed with:")
-        vprint("  Return code: $(current_optsol.retcode)")
-        vprint("  Final loss: $(current_optsol.minimum)")
-        vprint("  Iterations: $(length(optlogger) > 0 ? optlogger[end].iter : 0)")
+        vinfo("Optimization completed with:"; level=1)
+        vinfo("  Return code: $(current_optsol.retcode)"; level=1)
+        vinfo("  Final loss: $(current_optsol.minimum)"; level=1)
         flush(stdout)
         
         # Check if final loss differs from best logged loss
         if !isempty(optlogger)
             best_logged_loss = minimum(entry.loss for entry in optlogger)
             if abs(current_optsol.minimum - best_logged_loss) > 1e-6
-                vprint("  ⚠ Best logged loss: $(round(best_logged_loss, digits=6)) (optimizer drifted from best)")
+                vinfo("  ⚠ Best logged loss: $(round(best_logged_loss, digits=6)) (optimizer drifted from best)"; level=2)
             end
         end
         
         if !isempty(initial_values_native)
             init_values_str = join(round.(initial_values_native; digits=3), ", ")
-            vprint("  Initial values: [$init_values_str]")
+            vinfo("  Initial values: [$init_values_str]"; level=2)
         end
         if u_phys !== nothing && !isempty(u_phys)
             params_str = join(round.(u_phys; digits=3), ", ")
-            vprint("  Native-space params: [$params_str]")
+            vinfo("  Native-space params: [$params_str]"; level=2)
         end
 
     catch e
         bt = catch_backtrace()
         failure_reason = sprint(showerror, e, bt)
-        vprint("Error during optimization: $(typeof(e))")
+        vwarn("Error during optimization: $(typeof(e))"; level=2)
         if hasfield(typeof(e), :msg)
-            vprint(e.msg)
+            vwarn("$(e.msg)"; level=2)
         else
-            vprint(e)
+            vwarn("$(e)"; level=2)
         end
         last_loss = length(optlogger) > 0 ? optlogger[end].loss : 1e9
         logged_params = current_optsol === nothing ? nothing : materialize_logged_params(current_optsol.u, param_spec, init_spec)
@@ -205,7 +204,7 @@ function singlerun_optimization(
                                      last_loss,
                                      Second(round(Dates.value((now() - start_time)) / 1000)),
                                      logged_params))
-        vprint("Optimization failed with error. Continuing with next restart.")
+        vwarn("Optimization failed with error. Continuing with next restart."; level=2)
         current_optsol = nothing
     end
 
@@ -253,7 +252,7 @@ function create_callback(start_time::Dates.DateTime,
         # time limit
         elapsed_time = Second(round(Dates.value((now() - start_time)) / 1000))
         if elapsed_time > Minute(os.time_limit_minutes)
-            vprint("Time limit reached: $(elapsed_time) minutes. Ending optimization.")
+            vwarn("Time limit reached: $(elapsed_time) minutes. Ending optimization."; level=2)
             return true
         end
 
@@ -272,7 +271,7 @@ function create_callback(start_time::Dates.DateTime,
         
         # print occasionally
         if rem(true_iter, print_every) == 0
-            vprint("Restart $irestart | Iteration $true_iter | Loss: $l | Elapsed time: $(elapsed_time)")
+            vinfo("Restart $irestart | Iteration $true_iter | Loss: $l | Elapsed time: $(elapsed_time)"; level=2)
         end
         
         return false

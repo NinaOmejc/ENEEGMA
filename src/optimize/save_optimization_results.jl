@@ -7,6 +7,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
                                     settings::Settings;
                                     blocks::Union{Nothing, Any}=nothing,
                                     restart_idx::Union{Int, Nothing}=nothing,
+                                    optimization_timestamp::Union{String, Nothing}=nothing,
                                     hyperparam_combo::Union{Tuple, Nothing}=nothing,
                                     hyperparam_idx::Union{Int, Nothing}=nothing,
                                     hyperparam_keys::Union{Vector{String}, Nothing}=nothing,
@@ -25,19 +26,20 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     best_loss = min(optsol.minimum, min_optlogger_loss)
 
     # Organize outputs by candidate model - use universal function
-    candidate_path = construct_output_dir(general_settings)
+    candidate_path = construct_output_dir(general_settings, settings.network_settings)
     
     # Create timestamped optimization subdirectory to allow multiple runs without overwriting
-    timestamp_str = Dates.format(now(), "yyyymmdd_HHMMSS")
+    # Use provided timestamp if available (shared across all restarts), otherwise generate new one
+    timestamp_str = optimization_timestamp === nothing ? Dates.format(now(), "yyyymmdd_HHMMSS") : optimization_timestamp
     optimization_path = joinpath(candidate_path, "optimization_$(timestamp_str)")
     mkpath(optimization_path)
 
     restart_str = restart_idx === nothing ? "" : "_r$(restart_idx)"
     hyperparam_str = hyperparam_idx === nothing ? "" : "_h$(hyperparam_idx)"
-    candidate_name = something(general_settings.candidate_name, "candidate")
-    base_prefix = "$(net.name)_$(candidate_name)$(hyperparam_str)$(restart_str)"
+    # Include exp_name at the beginning for all output files
+    base_prefix = "$(general_settings.exp_name)_$(net.name)$(hyperparam_str)$(restart_str)"
 
-    fname_loss = "$(base_prefix)_loss_over_iterations.png"
+    fname_loss = "$(base_prefix)_loss_evolution_over_iterations.png"
     path_loss = joinpath(optimization_path, fname_loss)
     plot_loss_over_iterations(optlogger, general_settings, path_loss)
     save_optlogger(optlogger, settings; fullfname_csv=joinpath(optimization_path, "$(base_prefix)_optlogger.csv"))
@@ -51,8 +53,8 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     )
     
     if !result.success
-        vprint("Warning: Failed to simulate model with best parameters: $(result.error_msg)")
-        vprint("Attempting to save results with fallback values...")
+        vwarn("Failed to simulate model with best parameters: $(result.error_msg)"; level=2)
+        vwarn("Attempting to save results with fallback values..."; level=2)
     end
     
     sol = result.sol
@@ -63,19 +65,19 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     save_modeled_psd(modeled_powers, freqs, settings; 
                                 fullfname_csv=joinpath(optimization_path, "$(base_prefix)_modeled_psd.csv"))
 
-    fname_obs_ts = "$(base_prefix)_plot_obs_vs_mod_ts.png"
+    fname_obs_ts = "$(base_prefix)_observed_vs_modeled_timeseries.png"
     path_obs_ts = joinpath(optimization_path, fname_obs_ts)
     plot_observed_vs_modelled_ts_windows(sol, target_data, general_settings, net;
                                                 fullfname_fig=path_obs_ts)
 
-    fname_obs_freq = "$(base_prefix)_plot_obs_vs_mod_freq.png"
+    fname_obs_freq = "$(base_prefix)_observed_vs_modeled_spectrum.png"
     path_obs_freq = joinpath(optimization_path, fname_obs_freq)
     plot_observed_vs_modelled_psd(modeled_powers, target_data.powers, freqs;
                                    fullfname_fig=path_obs_freq,
                                    general_settings=general_settings)
 
     # PLOT: Parameter exploration
-    fname_param = "$(base_prefix)_param_exploration.png"
+    fname_param = "$(base_prefix)_parameter_exploration.png"
     path_param = joinpath(optimization_path, fname_param)
     plot_param_exploration(optlogger, net; 
                                 true_parameters=true_parameters,
@@ -84,8 +86,8 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
                                 general_settings=general_settings)
 
     # PLOT: Frequency spectra evolution
-    fname_freq_plot = "$(base_prefix)_freq_sweep.png"
-    fname_freq_anim = "$(base_prefix)_freq_sweep.gif"
+    fname_freq_plot = "$(base_prefix)_spectrum_evolution.png"
+    fname_freq_anim = "$(base_prefix)_spectrum_evolution.gif"
     freq_plot_path = joinpath(optimization_path, fname_freq_plot)
     freq_anim_path = joinpath(optimization_path, fname_freq_anim)
     plot_psd_spetra_evolution(optlogger, net, setter;
@@ -101,12 +103,6 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     r2_metric = result.success ? get(result.metrics, "r2", NaN) : NaN
     iae_metric = result.success ? get(result.metrics, "iae", NaN) : NaN
     
-    # For display/output use the canonical metrics only
-    vprint("Best loss (from optimization): $(best_loss)", level=2)
-    vprint("Recomputed loss (from eval): $(recomputed_loss)", level=2)
-    vprint("R²: $r2_metric", level=2)
-    vprint("IAE: $iae_metric", level=2)
-    
     # Build best_params dict with normalized names
     best_opt_params_named = OrderedDict{String, Any}()
     if !isempty(blocks.tunable_params_symbols)
@@ -120,7 +116,9 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     init_names = if net.problem.u0 isa NamedTuple
         String.(keys(net.problem.u0))
     else
-        ["state_$(i)" for i in 1:length(net.problem.u0)]
+        # Get actual state variable names from the network
+        state_vars = get_state_vars(net.vars)
+        string.(get_symbols(state_vars))
     end
     initial_states_dict = OrderedDict{String, Any}()
     for (init_name, init_val) in zip(init_names, inits_native)
@@ -222,8 +220,7 @@ end
        round(best_optlog_iter.loss, digits=6) < round(optsol.minimum, digits=6)
         params_native = best_optlog_iter.params[1:n_params]
         inits_native = best_optlog_iter.params[n_params + 1 : n_params + n_state_vars]
-        vprint("Using best logged parameters (loss=$(round(best_optlog_iter.loss, digits=6))) instead of optsol.minimizer (loss=$(round(optsol.minimum, digits=6)))",
-               level=2)
+        vinfo("Using best logged parameters (loss=$(round(best_optlog_iter.loss, digits=6))) instead of optsol.minimizer (loss=$(round(optsol.minimum, digits=6)))"; level=2)
     end
     return params_native, inits_native, round(best_optlog_iter.loss, digits=6)
 end
@@ -253,7 +250,7 @@ function write_compact_json(path::AbstractString, data; digits::Int=3)
         JSON.print(io, prepared, 2)
         println(io)
     end
-    vprint("Saved optimization results to JSON: $path")
+    vinfo("Saved optimization results to JSON: $path"; level=2)
 end
 
 function _prepare_json_value(value, digits::Int)
@@ -352,7 +349,7 @@ function plot_observed_vs_modelled_ts(data_predicted::Matrix{Float64},
 
         savefig(p, fullfname_fig);        
     catch
-        vprint("\nSimulation failed. Could not plot observed vs modelled time series.\n")
+        vwarn("Simulation failed. Could not plot observed vs modelled time series."; level=2)
     end
 
     return nothing
@@ -394,8 +391,8 @@ function plot_observed_vs_modelled_psd(data_modeled::Union{Vector{Float64}, Matr
     n_observed = data_observed isa AbstractMatrix ? size(data_observed, 1) : length(data_observed)
 
     if n_modeled != n_observed || n_modeled != n_freqs
-        vprint("Cannot plot frequency comparison: dimension mismatch (modeled=$n_modeled, observed=$n_observed, freqs=$n_freqs)")
-        vprint("  This usually means the simulation was too short or failed. Skipping plot.")
+        vwarn("Cannot plot frequency comparison: dimension mismatch (modeled=$n_modeled, observed=$n_observed, freqs=$n_freqs)"; level=2)
+        vwarn("  This usually means the simulation was too short or failed. Skipping plot."; level=2)
         return nothing
     end
     # Create a figure
@@ -411,7 +408,8 @@ function plot_observed_vs_modelled_psd(data_modeled::Union{Vector{Float64}, Matr
 
     plot!(p, freqs, data_observed, 
             label="Observed", 
-            linewidth=1, 
+            linewidth=1,
+            color=:black, 
             alpha=1.)
     
     plot!(p, plot_title="Frequency Domain Comparison", titlefontsize=12)
@@ -469,7 +467,7 @@ function plot_param_exploration(optlogger::Vector{OptLogEntry},
     # Collect all sampled tunable params from logger
     has_params = [e.params !== nothing for e in optlogger]
     if !any(has_params)
-        vprint("Optlogger does not contain parameter samples; skipping param exploration plot.")
+        vinfo("Optlogger does not contain parameter samples; skipping param exploration plot."; level=2)
         return nothing
     end
 
@@ -480,7 +478,7 @@ function plot_param_exploration(optlogger::Vector{OptLogEntry},
     # Verify dimensions match
     expected_n_params = length(tunables_lb)
     if n_params != expected_n_params
-        @warn "Parameter dimension mismatch: optlogger has $n_params params, but network has $expected_n_params tunable params + inits. Plot may be incorrect."
+        vwarn("Parameter dimension mismatch: optlogger has $n_params params, but network has $expected_n_params tunable params + inits. Plot may be incorrect."; level=2)
         # Use minimum to avoid index errors
         n_params = min(n_params, expected_n_params)
     end
@@ -568,13 +566,19 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
                               fullfname_fig::Union{Nothing, String}=nothing,
                               fullfname_anim::Union{Nothing, String}=nothing,
                               max_entries::Int=typemax(Int))::Nothing
+
+    #println("Target data: $(target_data)")
+    # println("Target data powers: $(target_data.powers)")
+    println("Target data power size: $(length(target_data.powers))")
+    println("Modeled powers size: $(length(target_data.powers))")
+
     if general_settings !== nothing && !general_settings.make_plots
         return nothing
     end
 
     entries = [entry for entry in optlogger if entry.params !== nothing]
     if isempty(entries)
-        vprint("Optlogger does not contain parameter samples; skipping frequency-sweep plot.")
+        vinfo("Optlogger does not contain parameter samples; skipping param exploration plot."; level=2)
         return nothing
     end
 
@@ -614,25 +618,44 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
                                 freqs=freqs, powers=modeled_powers, sigma=sigma_val))
             end
         catch err
-            vprint("Unable to compute spectrum for iter $(entry.iter): $(err)")
+            vwarn("Unable to compute spectrum for iter $(entry.iter): $(err)"; level=2)
         end
     end
 
     if isempty(spectra)
-        vprint("No spectra computed from optlogger; skipping spectrum sweep plot.")
+        vinfo("No spectra computed from optlogger; skipping spectrum sweep plot."; level=2)
         return nothing
     end
 
     # Filter out any spectra with empty powers (safety check)
     spectra = filter(spec -> !isempty(spec.powers) && all(isfinite, spec.powers), spectra)
     if isempty(spectra)
-        vprint("All computed spectra had empty or invalid power values; skipping spectrum sweep plot.")
+        vinfo("All computed spectra had empty or invalid power values; skipping spectrum sweep plot."; level=2)
         return nothing
     end
 
-    target_freqs, target_curve = target_data.freqs, target_data.powers
-    matches_target = target_curve !== nothing && length(target_curve) == length(spectra[1].freqs)
-    overlay_freqs = target_freqs === nothing ? spectra[1].freqs : target_freqs
+    target_freqs, target_curve = target_data isa Data ? (target_data.freqs, target_data.powers) : (nothing, nothing)
+    
+    # Interpolate target to model's frequency resolution (lower resolution) for plotting efficiency
+    plot_freqs = nothing
+    plot_target_curve = nothing
+    if target_freqs !== nothing && !isempty(target_curve) && length(target_freqs) != length(spectra[1].freqs)
+        # Downsample target to match model spectrum frequency grid via linear interpolation
+        if !isempty(spectra[1].freqs) && all(isfinite, target_curve)
+            interp_func = linear_interpolation(target_freqs, target_curve; extrapolation_bc=Flat())
+            plot_target_curve = interp_func.(spectra[1].freqs)
+            plot_freqs = spectra[1].freqs
+        else
+            plot_freqs = target_freqs
+            plot_target_curve = target_curve
+        end
+    else
+        plot_freqs = target_freqs
+        plot_target_curve = target_curve
+    end
+    
+    matches_target = plot_target_curve !== nothing && !isempty(plot_target_curve) && length(plot_target_curve) == length(spectra[1].freqs)
+    overlay_freqs = plot_freqs === nothing ? spectra[1].freqs : plot_freqs
 
     power_min = minimum(minimum(spec.powers) for spec in spectra)
     power_max = maximum(maximum(spec.powers) for spec in spectra)
@@ -645,16 +668,17 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
     upper_pad = 0.1 * span
     ylims_tuple = (power_min - lower_pad, power_max + upper_pad)
 
-    fig_path = isnothing(fullfname_fig) ? "$(gen.path_out)\\$(net.name)_$(gen.exp_name)_freq_sweep.png" : fullfname_fig
-    anim_path = isnothing(fullfname_anim) ? "$(gen.path_out)\\$(net.name)_$(gen.exp_name)_freq_sweep.gif" : fullfname_anim
+    fig_path = isnothing(fullfname_fig) ? "$(gen.path_out)\\$(gen.exp_name)_$(net.name)_freq_sweep.png" : fullfname_fig
+    anim_path = isnothing(fullfname_anim) ? "$(gen.path_out)\\$(gen.exp_name)_$(net.name)_freq_sweep.gif" : fullfname_anim
 
     p = plot(title="Frequency spectra evolution", xlabel="Frequency (Hz)", ylabel="Norm Log10 Power")
-    if matches_target
-        plot!(p, overlay_freqs, target_curve; label="Target", color=:black, linewidth=2)
-    end
     for (idx, spec) in enumerate(spectra)
         label = idx == length(spectra) ? "Iter $(spec.iter)" : ""
         plot!(p, spec.freqs, spec.powers; alpha=idx == length(spectra) ? 0.9 : 0.25, label=label)
+    end
+    # Plot target data last so it appears on top (black solid line, thicker)
+    if matches_target
+        plot!(p, overlay_freqs, plot_target_curve; label="Target", color=:black, linewidth=4, linestyle=:solid)
     end
     ylims!(p, ylims_tuple)
     savefig(p, fig_path)
@@ -669,14 +693,15 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
                        ylabel="Norm Log10 Power",
                        title="Restart $(spec.restart) • Iter $(spec.iter) • Loss $(round(spec.loss, digits=4)) • σ=$(round(spec.sigma, digits=4))",
                        ylims=ylims_tuple)
+            # Plot target data last so it appears on top (black solid line, thicker)
             if matches_target
-                plot!(plt, overlay_freqs, target_curve; label="Target", color=:black, linewidth=2, linestyle=:dash)
+                plot!(plt, overlay_freqs, plot_target_curve; label="Target", color=:black, linewidth=4, linestyle=:solid)
             end
         end
         try
             gif(anim, anim_path, fps=min(12, max(2, length(spectra) ÷ 10)), verbose=false)
         catch err
-            vprint("Unable to save spectrum animation: $(err)")
+            vwarn("Unable to save spectrum animation: $(err)"; level=2)
         end
     end
 
@@ -731,7 +756,9 @@ function native_range_entries(net::Network, blocks)
     init_names = if net.problem.u0 isa NamedTuple
         String.(keys(net.problem.u0))
     else
-        ["state_$(i)" for i in 1:length(net.problem.u0)]
+        # Get actual state variable names from the network
+        state_vars = get_state_vars(net.vars)
+        string.(get_symbols(state_vars))
     end
     init_ranges = OrderedDict{String, Any}[]
     for i in eachindex(blocks.init_lb)

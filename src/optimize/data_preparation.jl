@@ -245,7 +245,13 @@ function estimate_sigma_floor(data::AbstractVector, fs::Real, ls::LossSettings)
     S_data = median(data_psd[mask])
     (isfinite(S_data) && S_data > 0) || return nothing
 
-    unit = _measurement_noise_template(n, ls)   # deterministic N(0,1)
+    # Create appropriately seeded RNG for noise template
+    rng = if ls.loss_noise_seed !== nothing
+        Random.MersenneTwister(ls.loss_noise_seed)
+    else
+        nothing
+    end
+    unit = _measurement_noise_template(n, rng)   # deterministic N(0,1) if seed is set
     freqs2, unit_psd = compute_welch_pow_spectrum(Float64.(unit), fs; xlims=fspan, nperseg=nperseg_val, nfft=nfft_val, overlap=overlap_val)
     isempty(freqs2) && return nothing
 

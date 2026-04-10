@@ -36,7 +36,6 @@ mutable struct GeneralSettings <: AbstractSettings
     make_plots::Bool
     verbosity_level::Int64
     seed::Union{Int, Nothing}
-    candidate_name::Union{String, Nothing}
 
     function GeneralSettings(dict::Dict{String, Any})::GeneralSettings
 
@@ -44,7 +43,7 @@ mutable struct GeneralSettings <: AbstractSettings
         gendict = get(dict, "general_settings", Dict{String, Any}())
         
         # Get experiment name with explicit default
-        exp_name = String(get(gendict, "exp_name", "SimpleNetwork"))
+        exp_name = String(get(gendict, "exp_name", "example-exp"))
 
         # Handle path out: <path_out>/
         # All outputs go to a single base directory
@@ -78,29 +77,22 @@ mutable struct GeneralSettings <: AbstractSettings
         end
 
         # Get verbosity level (0=silent, 1=minimal, 2=detailed)
-        raw_level = get(gendict, "verbosity_level", 2)
-        verbosity_level = _coerce_level(raw_level, 2)
+        raw_level = get(gendict, "verbosity_level", 1)
+        verbosity_level = _coerce_level(raw_level, 1)
         gendict["verbosity_level"] = verbosity_level
-
-        candidate_name = get(gendict, "candidate_name", nothing)
-        if candidate_name === nothing || candidate_name == ""
-            candidate_name = nothing
-        else
-            candidate_name = String(candidate_name)
-        end
 
         new(exp_name,
             path_out,
             Vector{String}(get(gendict, "save_model_formats", ["tex"])),
-            Bool(get(gendict, "make_plots", false)),
+            Bool(get(gendict, "make_plots", true)),
             verbosity_level,
-            seed,
-            candidate_name
+            seed
         )
     end
 end
 
 mutable struct NetworkSettings <: AbstractSettings
+    name::String
     n_nodes::Int64
     node_names::Vector{String}
     node_models::Vector{Union{String, RuleTree}}
@@ -111,12 +103,16 @@ mutable struct NetworkSettings <: AbstractSettings
     sensory_input_conn::Vector{Int64}
     sensory_input_func::String
     sensory_seed::Union{Int, Nothing}
+    init_seed::Union{Int, Nothing}
     eeg_output::String
 
     # Constructor with validation built-in
     function NetworkSettings(settings::Dict{String, Any})::NetworkSettings
         # Get network settings dict
         netsett = get(settings, "network_settings", Dict{String, Any}())
+        
+        # Get network name with explicit default
+        name = String(get(netsett, "name", "example-net"))
         
         # n_nodes is required or defaults to 1
         n_nodes = Int64(get(netsett, "n_nodes", 1))
@@ -138,7 +134,15 @@ mutable struct NetworkSettings <: AbstractSettings
             fill("WC", n_nodes)
         else
             # Accept both strings and RuleTree objects
-            nm = if all(x -> x isa String for x in node_models_raw)
+            # Check if all elements are strings using explicit iteration for robustness
+            is_all_strings = true
+            for x in node_models_raw
+                if !isa(x, String)
+                    is_all_strings = false
+                    break
+                end
+            end
+            nm = if is_all_strings
                 Vector{String}(node_models_raw)
             else
                 # Mixed or all RuleTree: keep as Vector{Union{String, RuleTree}}
@@ -225,10 +229,19 @@ mutable struct NetworkSettings <: AbstractSettings
             sensory_seed = Int(sensory_seed)
         end
 
+        # Get seed for init sampling
+        init_seed = get(netsett, "init_seed", nothing)
+        if init_seed === nothing || init_seed == ""
+            init_seed = nothing
+        else
+            init_seed = Int(init_seed)
+        end
+
         # Get EEG output function
         eeg_output = String(get(netsett, "eeg_output", ""))
 
         return new(
+            name,
             n_nodes,
             node_names,
             node_models,
@@ -239,6 +252,7 @@ mutable struct NetworkSettings <: AbstractSettings
             sensory_input_conn,
             sensory_input_func,
             sensory_seed,
+            init_seed,
             eeg_output
         )
     end
@@ -255,16 +269,9 @@ mutable struct SamplingSettings <: AbstractSettings
         sampdict = get(dict, "sampling_settings", Dict{String, Any}())
         
         # Construct grammar_file from path + filename (or use combined path if provided)
-        grammar_file_raw = get(sampdict, "grammar_file", nothing)
-        grammar_file = if grammar_file_raw !== nothing && grammar_file_raw != ""
-            String(grammar_file_raw)
-        else
-            # Fall back to constructing from path and filename
-            path = String(get(sampdict, "path_grammar", "grammars"))
-            fname = String(get(sampdict, "fname_grammar", "default_grammar.cfg"))
-            joinpath(path, fname)
-        end
-        
+        grammar_file_raw = get(sampdict, "grammar_file", "grammars/default_grammar.cfg")
+        grammar_file = grammar_file_raw === nothing || grammar_file_raw == "" ? "grammars/default_grammar.cfg" : String(grammar_file_raw)
+
         # Parse grammar seed - allow null/empty to mean "random"
         grammar_seed_raw = get(sampdict, "grammar_seed", nothing)
         grammar_seed = if grammar_seed_raw === nothing || grammar_seed_raw == ""
@@ -286,7 +293,6 @@ end
 
 mutable struct SimulationSettings <: AbstractSettings
     tspan::Tuple{Float64, Float64}
-    n_runs::Int64
     dt::Union{Float64, Nothing}
     saveat::Float64
     abstol::Union{Float64, Nothing}
@@ -301,7 +307,6 @@ mutable struct SimulationSettings <: AbstractSettings
 
         new(
             Tuple{Float64, Float64}(get(simdict, "tspan", (0.0, 10.0))),
-            Int64(get(simdict, "n_runs", 1)),
             Float64(get(simdict, "dt", 0.001)),
             Float64(get(simdict, "saveat", 0.001)),
             get(simdict, "abstol", nothing),
@@ -316,28 +321,21 @@ end
 """
     OptimizerSettings
 
-Configuration specific to optimization algorithms.
+Configuration specific to optimization algorithms (CMAES).
 
 # Fields
-- `population_size`: Population size for CMAES
-- `rel_diff_convergence`: Relative difference threshold for convergence
+- `population_size`: Population size (λ parameter) for CMAES
+- `sigma0`: Initial step-size for CMAES (controls initial search radius)
 
 """
 mutable struct OptimizerSettings <: AbstractSettings
     population_size::Int64
     sigma0::Float64
-    K::Float64
-    n_samples::Int64
-    learning_rate::Float64
 
     function OptimizerSettings(dict::Dict)
-
         new(
-            Int64(get(dict, "population_size", 50)),
-            Float64(get(dict, "sigma0", 1.0)),
-            Float64(get(dict, "K", 0.5)),
-            Int64(get(dict, "n_samples", 100)),
-            Float64(get(dict, "learning_rate", 0.1)),
+            Int64(get(dict, "population_size", 100)),
+            Float64(get(dict, "sigma0", 8.0))
         )
     end
 end
@@ -479,11 +477,13 @@ mutable struct LossSettings <: AbstractSettings
         
         measurement_noise_std = max(Float64(get(dict, "measurement_noise_std", 0.0)), 0.0)
 
-        loss_noise_seed_val = get(dict, "loss_noise_seed", nothing)
+        # Default to deterministic seed (42) for reproducible results
+        # Set explicitly to nothing to enable non-deterministic noise
+        loss_noise_seed_val = get(dict, "loss_noise_seed", 42)
         loss_noise_seed = loss_noise_seed_val === nothing ? nothing : _coerce_settings_idx_value(loss_noise_seed_val)
 
         roi_weight = max(Float64(get(dict, "roi_weight", 1.0)), 0.0)
-        bg_weight = max(Float64(get(dict, "bg_weight", 0.4)), 0.0)
+        bg_weight = max(Float64(get(dict, "bg_weight", 1.0)), 0.0)
 
         new(psd_preproc,
             psd_welch_window_sec,
@@ -684,13 +684,13 @@ mutable struct OptimizationSettings <: AbstractSettings
                     scale_val = max(Float64(v_raw), eps())
                     reparam_type_scales[sym] = scale_val
                 catch err
-                    @warn "Skipping invalid reparam_type_scales entry" key=k_raw value=v_raw err=err
+                    vwarn(string("Skipping invalid reparam_type_scales entry: key=", k_raw, " value=", v_raw); level=2)
                 end
             end
         end
 
         raw_range_level = get(optdict, "param_range_level", nothing)
-        param_range_level = raw_range_level === nothing ? "high" : String(raw_range_level)
+        param_range_level = raw_range_level === nothing ? "medium" : String(raw_range_level)
         
         # Get empirical parameter table path
         empirical_param_table_path = get(optdict, "empirical_param_table_path", nothing)
@@ -698,7 +698,7 @@ mutable struct OptimizationSettings <: AbstractSettings
             empirical_param_table_path = String(empirical_param_table_path)
             # Expand to absolute path if needed
             if !isabspath(empirical_param_table_path)
-                @warn "empirical_param_table_path is not an absolute path: $(empirical_param_table_path)"
+                vwarn("empirical_param_table_path is not an absolute path: $(empirical_param_table_path)"; level=2)
             end
         end
         
@@ -733,7 +733,7 @@ mutable struct OptimizationSettings <: AbstractSettings
             reparam_strategy,
             reparam_type_scales,
             n_restarts,
-            Int64(get(optdict, "maxiters", 2000)),
+            Int64(get(optdict, "maxiters", 10000)),
             Int64(get(optdict, "time_limit_minutes", get(optdict, "time_limit", 120))),
             lossset,
             optz,

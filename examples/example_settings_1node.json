@@ -4,7 +4,7 @@
     "path_out": "./results",
     "verbosity_level": 1,
     "seed": null,
-    "make_plots": false,
+    "make_plots": true,
     "save_model_formats": ["tex"]
   },
   "network_settings": {
@@ -33,7 +33,6 @@
     "eeg_output": ""
   },
   "simulation_settings": {
-    "n_runs": 1,
     "tspan": [
       0.0,
       1000.0

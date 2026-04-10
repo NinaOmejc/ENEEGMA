@@ -302,7 +302,7 @@ Apply a model recipe string to network settings, updating node models and networ
 function apply_model_to_settings!(settings::Settings, recipe::AbstractString, model_name::AbstractString, model_idx::Int)
     if model_name in list_known_node_models_codes()
         settings.network_settings.node_models = [model_name]
-        vprint("Applied known node model code: $(model_name)"; level=2)
+        vinfo("Applied known node model: $(model_name)"; level=2)
     else
         settings.network_settings.node_models = [recipe]
     end
