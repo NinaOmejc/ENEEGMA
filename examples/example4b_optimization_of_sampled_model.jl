@@ -48,7 +48,6 @@ settings.network_settings.name = model_name
 # ============================================================================
 # Step 5: Build Network and Configure Optimization
 # ============================================================================
-settings = create_default_settings();
 
 net = build_network(settings);
 
@@ -75,6 +74,7 @@ set_all_params_tunable!(net.params)
 # Step 6: Run Optimization (commented - uncomment when ready)
 # ============================================================================
 print_settings_summary(settings; section="optimization_settings")
-settings.optimization_settings.time_limit_minutes = 10
+settings.optimization_settings.time_limit_minutes = 1
+settings.optimization_settings.n_restarts = 2
 optsol, optlogger, setter, blocks = optimize_network(net, data, settings)
 

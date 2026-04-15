@@ -1,4 +1,5 @@
 
+# using Evolutionary, Optimization, Statistics, Distributions, Interpolations, Dates
 
 function optimize_network(
     net::Network,
@@ -16,17 +17,15 @@ function optimize_network(
     vinfo("Starting optimization of $(gs.exp_name) - $(net.name)"; level=1)
     
     # Ensure output directories exist and save current settings
-    # Always save to capture any runtime modifications made before optimization started
-    exp_path = construct_output_dir(gs, ns)
-    save_settings(settings)
+    ENEEGMA.construct_output_dir(gs, ns)
 
     # get some optimization components
-    solver = get_solver(net.problem, ss)
-    solver_kwargs = get_solver_kwargs(net.problem, ss)
-    loss_fun = get_loss_function()  # Unified region-weighted MAE loss
-    optimizer = get_optimizer(os)
+    solver = ENEEGMA.get_solver(net.problem, ss)
+    solver_kwargs = ENEEGMA.get_solver_kwargs(net.problem, ss)
+    loss_fun = ENEEGMA.get_loss_function()  # Unified region-weighted MAE loss
+    optimizer = ENEEGMA.get_optimizer(os)
     
-    blocks = prepare_optimization_blocks(net, os)
+    blocks = ENEEGMA.prepare_optimization_blocks(net, os)
     tunable_params_symbols = blocks.tunable_params_symbols
     tunable_params_lb = blocks.tunable_params_lb
     tunable_params_ub = blocks.tunable_params_ub
@@ -36,19 +35,18 @@ function optimize_network(
     param_spec = blocks.param_spec
     init_spec = blocks.init_spec
     use_reparam = os.reparametrize && os.reparam_strategy != :none
-    loss_impl = wrap_loss_for_reparam(loss_fun, param_spec, init_spec; active=use_reparam)
-    optfun = OptimizationFunction(loss_impl)
-        
+    loss_impl = ENEEGMA.wrap_loss_for_reparam(loss_fun, param_spec, init_spec; active=use_reparam)
+    optfun = Optimization.OptimizationFunction(loss_impl)
+    
     all_params = net.problem.p
-    param_lb, param_ub = reparam_bounds(param_spec, tunable_params_lb, tunable_params_ub)
-    init_lb, init_ub = reparam_bounds(init_spec, inits_lb, inits_ub)
+    param_lb, param_ub = ENEEGMA.reparam_bounds(param_spec, tunable_params_lb, tunable_params_ub)
+    init_lb, init_ub = ENEEGMA.reparam_bounds(init_spec, inits_lb, inits_ub)
     tunables_lb = vcat(param_lb, init_lb)
     tunables_ub = vcat(param_ub, init_ub)
-    ensure_population_size!(os, length(tunables_lb))
 
     # create setter function for updating NamedTuple of **all params** (not just tunables) inside Problem. Nothing to do with inits here.
-    setter = make_namedtuple_setter(Tuple(tunable_params_symbols))
-    brain_source_idx = get_brain_source_idx(net)
+    setter = ENEEGMA.make_namedtuple_setter(Tuple(tunable_params_symbols))
+    brain_source_idx = ENEEGMA.get_brain_source_idx(net)
 
     args = (
         prob=net.problem, data=data, setter=setter,
@@ -56,10 +54,11 @@ function optimize_network(
         tspan=ss.tspan, loss_settings=ls,
         brain_source_idx=brain_source_idx,
         solver=solver, solver_kwargs=solver_kwargs,
+        data_settings=settings.data_settings,
     )
 
     # Generate timestamp once for all restarts
-    optimization_timestamp = Dates.format(now(), "yyyymmdd_HHMMSS")
+    optimization_timestamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
 
     best_optsol = nothing
     best_loss = Inf
@@ -68,9 +67,9 @@ function optimize_network(
 
     for irestart = 1:os.n_restarts
 
-        start_time = now()
+        start_time = Dates.now()
         
-        optsol, runlog, failure_reason = singlerun_optimization(irestart, optfun, optimizer, args, 
+        optsol, runlog, failure_reason = ENEEGMA.singlerun_optimization(irestart, optfun, optimizer, args, 
             tunable_params_symbols, tunables_lb, tunables_ub,
             os, start_time, net, param_spec, init_spec, initial_values_native, inits_lb, inits_ub
         )
@@ -99,8 +98,8 @@ function optimize_network(
         # vinfo("Completed restart $irestart/$(os.n_restarts), current best loss: $best_loss. \n"; level=1)
         # flush(stdout)
 
-        if best_loss <= os.abs_target_loss
-            vinfo("Target loss $(os.abs_target_loss) reached. Ending optimization early."; level=1)
+        if best_loss <= os.loss_settings.abs_target_loss
+            vinfo("Target loss $(os.loss_settings.abs_target_loss) reached. Ending optimization early."; level=1)
             break
         end
     end
@@ -138,15 +137,15 @@ function singlerun_optimization(
 
     optlogger = OptLogEntry[]
     failure_reason = nothing
-    callback_fun = create_callback(start_time, irestart, optlogger, os;
+    callback_fun = ENEEGMA.create_callback(start_time, irestart, optlogger, os;
                                    param_spec=param_spec,
                                    init_spec=init_spec)
 
     # Sample fresh parameter and initial values for this restart
-    tunable_params_guess = sample_param_values(net.params; p_subset=tunable_params_symbols, return_type="vector")
-    tunable_params_guess = map_to_shared_space(tunable_params_guess, param_spec)
-    initial_values_guess_native = sample_inits(net.vars; return_type="vector", sort=true)
-    initial_values_guess = map_to_shared_space(initial_values_guess_native, init_spec)
+    tunable_params_guess = ENEEGMA.sample_param_values(net.params; p_subset=tunable_params_symbols, return_type="vector")
+    tunable_params_guess = ENEEGMA.map_to_shared_space(tunable_params_guess, param_spec)
+    initial_values_guess_native = ENEEGMA.sample_inits(net.vars; return_type="vector", sort=true)
+    initial_values_guess = ENEEGMA.map_to_shared_space(initial_values_guess_native, init_spec)
     tunables_guess = vcat(tunable_params_guess, initial_values_guess)
 
     optprob = Optimization.OptimizationProblem(
@@ -332,6 +331,6 @@ function get_optimizer(os::OptimizationSettings)::Evolutionary.AbstractOptimizer
         optimizer_kwargs = merge(optimizer_kwargs, (sigma0 = oz.sigma0,))
     end
     
-    return Evolutionary.CMAES(; optimizer_kwargs..., metrics = [Evolutionary.RelDiff(os.loss_reltol)])
+    return Evolutionary.CMAES(; optimizer_kwargs..., metrics = [Evolutionary.RelDiff(os.loss_settings.loss_reltol)])
 end
 

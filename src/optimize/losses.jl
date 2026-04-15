@@ -35,7 +35,7 @@ this function returns a single loss wrapper regardless of input.
 - `loss_function`: Function that computes weighted MAE loss with optimization checks
 """
 function get_loss_function()::Function
-    return (x, p) -> compute_loss(x, p, weighted_mae)
+    return (x, p) -> compute_loss(x, p, ENEEGMA.weighted_mae)
 end
 
 
@@ -60,10 +60,11 @@ function compute_loss(new_params, args, metric_fun::Function)
     setter        = args.setter
     all_params    = args.all_params
     tspan         = args.tspan
-    loss_settings = args.loss_settings
     brain_source_idx = args.brain_source_idx
     solver        = args.solver
     solver_kwargs = args.solver_kwargs
+    loss_settings = args.loss_settings
+    data_settings = haskey(args, :data_settings) ? args.data_settings : nothing
 
     n_inits = length(prob.u0)
     n_param_block = length(new_params) - n_inits
@@ -71,7 +72,11 @@ function compute_loss(new_params, args, metric_fun::Function)
 
     θ = new_params[1:n_param_block]
     iv = new_params[n_param_block + 1 : n_param_block + n_inits]
-    sigma_effective = max(loss_settings.measurement_noise_std, 0.0)
+    sigma_effective = if data_settings !== nothing && hasproperty(data_settings, :measurement_noise_std)
+        max(data_settings.measurement_noise_std, 0.0)
+    else
+        0.0
+    end
     updated_all_params = setter(all_params, θ)
     new_prob = remake(prob; p=updated_all_params, u0=iv, tspan=tspan)
     sol = safe_solve(new_prob, solver; solver_kwargs=solver_kwargs)
@@ -118,9 +123,9 @@ function compute_loss(new_params, args, metric_fun::Function)
     end
 
     # do demean
-    model_prediction .-= mean(model_prediction)
+    model_prediction .-= Statistics.mean(model_prediction)
 
-    loss = metric_fun(model_prediction, data, 1/solver_kwargs[:saveat], loss_settings)
+    loss = metric_fun(model_prediction, data, 1/solver_kwargs[:saveat], loss_settings, data_settings)
     
     if !isfinite(loss)
         return 1e9
@@ -154,14 +159,16 @@ If no metadata is available, defaults to uniform (unweighted) MAE.
 # Returns
 - `Float64`: Weighted MAE loss
 """
-function weighted_mae(model_prediction, target::Data, fs, loss_settings::LossSettings)
+function weighted_mae(model_prediction, target::Data, fs, loss_settings::LossSettings, 
+                      data_settings::Union{Nothing, DataSettings}=nothing)
+    
     # Compute model PSD
-    model_freqs, modeled_powers = _compute_noisy_psd_avg(model_prediction, fs, loss_settings)
-    aligned_model = _interpolate_psd(model_freqs, modeled_powers, target.freqs)
+    model_freqs, modeled_powers = ENEEGMA.compute_noisy_preprocessed_welch_psd(model_prediction, fs, loss_settings, data_settings)
+    aligned_model = ENEEGMA._interpolate_psd(model_freqs, modeled_powers, target.freqs)
     
     # Without region masks: simple uniform MAE
     if target.freq_peak_metadata === nothing
-        return mean(abs.(target.powers .- aligned_model))
+        return Statistics.mean(abs.(target.powers .- aligned_model))
     end
     
     pm = target.freq_peak_metadata
@@ -172,8 +179,8 @@ function weighted_mae(model_prediction, target::Data, fs, loss_settings::LossSet
     roi_diff = abs.(target.powers[roi_mask] .- aligned_model[roi_mask])
     bg_diff = abs.(target.powers[bg_mask] .- aligned_model[bg_mask])
     
-    roi_mae = isempty(roi_diff) ? 0.0 : mean(roi_diff)
-    bg_mae = isempty(bg_diff) ? 0.0 : mean(bg_diff)
+    roi_mae = isempty(roi_diff) ? 0.0 : Statistics.mean(roi_diff)
+    bg_mae = isempty(bg_diff) ? 0.0 : Statistics.mean(bg_diff)
     
     # Weighted combination
     roi_weight = pm.roi_weight
@@ -223,12 +230,12 @@ end
 # ================================
 
 # Draw a white-noise template (N(0,1)) of requested length
-# If loss_noise_seed is nothing/null → use non-deterministic random noise
-# If loss_noise_seed is an integer → use deterministic seeded noise
+# If psd_noise_seed is nothing/null → use non-deterministic random noise
+# If psd_noise_seed is an integer → use deterministic seeded noise
 # Draw a white-noise template (N(0,1)) of requested length
-# If loss_noise_seed is nothing/null → use non-deterministic random noise
-# If loss_noise_seed is an integer → use deterministic seeded RNG
-# Note: Default loss_noise_seed is 42 (deterministic). Set to nothing for non-deterministic behavior.
+# If psd_noise_seed is nothing/null → use non-deterministic random noise
+# If psd_noise_seed is an integer → use deterministic seeded RNG
+# Note: Default psd_noise_seed is 42 (deterministic). Set to nothing for non-deterministic behavior.
 # The RNG is created once during loss setup and reused for all evaluations
 function _measurement_noise_template(len::Int, rng::Union{Random.AbstractRNG, Nothing})
     if len <= 0
@@ -257,40 +264,3 @@ function apply_measurement_noise!(data::AbstractVector, sigma, rng::Union{Random
     return data
 end
 
-
-# ================================
-# == PSD computation with noise averaging ==
-# ================================
-
-function _compute_noisy_psd_avg(model_prediction::AbstractVector{<:Real},
-                                fs::Real,
-                                loss_settings::LossSettings)
-    reps = max(loss_settings.psd_noise_avg_reps, 1)
-    sigma_effective = max(loss_settings.measurement_noise_std, 0.0)
-
-    if sigma_effective <= 0
-        return compute_preprocessed_welch_psd(model_prediction, fs; loss_settings=loss_settings)
-    end
-
-    seed_value = loss_settings.loss_noise_seed
-    freqs = Float64[]
-    accum = Float64[]
-    for rep in 1:reps
-        # Create RNG for this repetition (or use nothing for non-deterministic)
-        rng = if seed_value === nothing
-            nothing  # Non-deterministic
-        else
-            Random.MersenneTwister(Int(seed_value) + rep - 1)
-        end
-        
-        noisy = Float64.(model_prediction)
-        apply_measurement_noise!(noisy, sigma_effective, rng)
-        freqs_rep, powers_rep = compute_preprocessed_welch_psd(noisy, fs; loss_settings=loss_settings)
-        if isempty(freqs)
-            freqs = freqs_rep
-            accum = zeros(length(powers_rep))
-        end
-        accum .+= powers_rep
-    end
-    return freqs, accum ./ reps
-end

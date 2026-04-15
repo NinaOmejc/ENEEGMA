@@ -29,6 +29,18 @@ function _dict_to_matrix(raw::AbstractDict, ::Type{T}) where T
     return reshape(data, dims...)
 end
 
+"""    GeneralSettings
+
+General experiment and output configuration.
+
+# Fields
+- `exp_name::String`: Experiment/project name used for output file naming.
+- `path_out::String`: Base directory where all outputs are saved.
+- `save_model_formats::Vector{String}`: Output formats for network equations (e.g., "tex", "pdf").
+- `make_plots::Bool`: Whether to generate visualization plots.
+- `verbosity_level::Int64`: Logging verbosity (0=silent, 1=minimal, 2=detailed).
+- `seed::Union{Int, Nothing}`: Master random seed for reproducibility.
+"""
 mutable struct GeneralSettings <: AbstractSettings
     exp_name::String
     path_out::String
@@ -91,6 +103,25 @@ mutable struct GeneralSettings <: AbstractSettings
     end
 end
 
+"""    NetworkSettings
+
+Neural network topology and dynamics configuration.
+
+# Fields
+- `name::String`: Network name.
+- `n_nodes::Int64`: Number of nodes/populations in the network.
+- `node_names::Vector{String}`: Names for each node.
+- `node_models::Vector{Union{String, RuleTree}}`: Model type for each node (e.g., "WC", "FHN").
+- `node_coords::Vector{Tuple{Float64, Float64, Float64}}`: 3D coordinates for each node.
+- `network_conn::Matrix{Float64}`: Connection strength matrix (n_nodes × n_nodes).
+- `network_conn_funcs::Matrix{String}`: Connection function strings (n_nodes × n_nodes).
+- `network_delay::Matrix{Float64}`: Synaptic delay matrix in ms (n_nodes × n_nodes).
+- `sensory_input_conn::Vector{Int64}`: Binary vector indicating which nodes receive sensory input.
+- `sensory_input_func::String`: Function string for sensory input generation.
+- `sensory_seed::Union{Int, Nothing}`: Random seed for sensory input.
+- `init_seed::Union{Int, Nothing}`: Random seed for initial conditions.
+- `eeg_output::String`: EEG measurement function expression.
+"""
 mutable struct NetworkSettings <: AbstractSettings
     name::String
     n_nodes::Int64
@@ -131,7 +162,7 @@ mutable struct NetworkSettings <: AbstractSettings
         # Get or create node models - must match n_nodes (supports both String and RuleTree)
         node_models_raw = get(netsett, "node_models", nothing)
         node_models = if isnothing(node_models_raw) || isempty(node_models_raw)
-            fill("WC", n_nodes)
+            fill("MPR", n_nodes)
         else
             # Accept both strings and RuleTree objects
             # Check if all elements are strings using explicit iteration for robustness
@@ -258,11 +289,20 @@ mutable struct NetworkSettings <: AbstractSettings
     end
 end
 
+"""    SamplingSettings
+
+Grammar-based network topology sampling configuration.
+
+# Fields
+- `grammar_file::String`: Path to grammar file (.cfg format).
+- `n_samples::Int`: Number of network topologies to sample.
+- `only_unique::Bool`: Whether to filter out duplicate samples.
+- `grammar_seed::Union{Int, Nothing}`: Random seed for grammar rule selection.
+"""
 mutable struct SamplingSettings <: AbstractSettings
     grammar_file::String
     n_samples::Int        
     only_unique::Bool
-    max_resample_attempts::Int
     grammar_seed::Union{Int, Nothing}
 
     function SamplingSettings(dict::Dict{String, Any})::SamplingSettings
@@ -284,13 +324,25 @@ mutable struct SamplingSettings <: AbstractSettings
             grammar_file,
             Int(get(   sampdict, "n_samples", 10)),
             Bool(get(  sampdict, "only_unique", true)),
-            Int(get(   sampdict, "max_resample_attempts", 100)),
             grammar_seed
         )
     end
 end
 
 
+"""    SimulationSettings
+
+ODE solver and time-stepping configuration.
+
+# Fields
+- `tspan::Tuple{Float64, Float64}`: Simulation time span [start, end] in milliseconds.
+- `dt::Union{Float64, Nothing}`: Fixed time step (ms), required for stochastic solvers.
+- `saveat::Float64`: Output sampling rate (ms).
+- `abstol::Union{Float64, Nothing}`: Absolute tolerance for adaptive solvers.
+- `reltol::Union{Float64, Nothing}`: Relative tolerance for adaptive solvers.
+- `solver::Union{String, Nothing}`: ODE solver algorithm (e.g., "Tsit5", "Rosenbrock23").
+- `maxiters::Union{Int, Nothing}`: Maximum iterations per step.
+"""
 mutable struct SimulationSettings <: AbstractSettings
     tspan::Tuple{Float64, Float64}
     dt::Union{Float64, Nothing}
@@ -306,9 +358,9 @@ mutable struct SimulationSettings <: AbstractSettings
         simdict = get(dict, "simulation_settings", Dict{String, Any}())
 
         new(
-            Tuple{Float64, Float64}(get(simdict, "tspan", (0.0, 10.0))),
-            Float64(get(simdict, "dt", 0.001)),
-            Float64(get(simdict, "saveat", 0.001)),
+            Tuple{Float64, Float64}(get(simdict, "tspan", (0.0, 60.0))),
+            Float64(get(simdict, "dt", 0.0001)),
+            Float64(get(simdict, "saveat", 0.00390625)), # default 1/256 sec for good PSD resolution up to ~100 Hz
             get(simdict, "abstol", nothing),
             get(simdict, "reltol", nothing),
             String(get(simdict, "solver", "Tsit5")),
@@ -334,8 +386,8 @@ mutable struct OptimizerSettings <: AbstractSettings
 
     function OptimizerSettings(dict::Dict)
         new(
-            Int64(get(dict, "population_size", 100)),
-            Float64(get(dict, "sigma0", 8.0))
+            Int64(get(dict, "population_size", -1)),
+            Float64(get(dict, "sigma0", -1.0))
         )
     end
 end
@@ -419,94 +471,58 @@ function normalize_loss_settings_dict!(lossdict::Dict{String, Any})
         haskey(psd, "noise_avg_reps") && (lossdict["psd_noise_avg_reps"] = Int(psd["noise_avg_reps"]))
     end
 
-    noise = _losssettings_ensure_dict(get(lossdict, "time_noise", nothing))
-    if noise !== nothing
-        if haskey(noise, "measurement_noise_std")
-            lossdict["measurement_noise_std"] = Float64(noise["measurement_noise_std"])
-        end
-        if haskey(noise, "loss_noise_seed")
-            raw_seed = noise["loss_noise_seed"]
-            if raw_seed === nothing || raw_seed == ""
-                lossdict["loss_noise_seed"] = nothing
-            else
-                lossdict["loss_noise_seed"] = _coerce_settings_idx_value(raw_seed)
-            end
-        end
-    end
+    # Remove old noise fields if they exist (moved to DataSettings)
+    delete!(lossdict, "psd_noise_avg_reps")
+    delete!(lossdict, "measurement_noise_std")
+    delete!(lossdict, "loss_noise_seed")
 
     return lossdict
 end
 
+"""    LossSettings
+
+Loss function configuration for optimization.
+
+# Fields
+- `fmin::Float64`: Minimum frequency (Hz) for PSD analysis.
+- `fmax::Float64`: Maximum frequency (Hz) for PSD analysis.
+- `roi_weight::Float64`: Weight for region of interest in loss computation.
+- `bg_weight::Float64`: Weight for background activity in loss computation.
+- `loss_abstol::Float64`: Absolute tolerance for loss convergence.
+- `loss_reltol::Float64`: Relative tolerance for loss convergence.
+- `abs_target_loss::Float64`: Absolute loss target for early stopping.
+"""
 mutable struct LossSettings <: AbstractSettings
-    # PSD computation settings
-    psd_preproc::String                    # preprocessing pipeline: "log10", "relative", etc.
-    psd_welch_window_sec::Float64          # Welch window duration in seconds
-    psd_welch_overlap::Float64             # Welch window overlap (0-1)
-    psd_welch_nperseg::Int                 # Welch segment length (0=auto)
-    psd_welch_nfft::Int                    # FFT length (0=auto)
-    psd_noise_avg_reps::Int                # averaging reps for noisy PSD
-    
-    # Frequency analysis range
+    # Frequency analysis range (for loss computation only; PSD settings now in DataSettings.psd)
     fmin::Float64                          # minimum frequency (Hz)
     fmax::Float64                          # maximum frequency (Hz)
-    
-    # Noise modeling
-    measurement_noise_std::Float64         # estimated standard deviation
-    loss_noise_seed::Union{Nothing, Int}   # for reproducible noise
     
     # Region weighting (for roi vs background loss)
     roi_weight::Float64                    # weight for region of interest
     bg_weight::Float64                     # weight for background
+    
+    # Loss convergence criteria (moved from OptimizationSettings)
+    loss_abstol::Float64                   # Absolute tolerance for loss
+    loss_reltol::Float64                   # Relative tolerance for loss
+    abs_target_loss::Float64               # Absolute loss target for early stopping
 
     function LossSettings(dict::Dict{String, Any})::LossSettings
         cooked = Dict{String, Any}(dict)
         normalize_loss_settings_dict!(cooked)
         dict = cooked
         
-        psd_welch_window_sec = max(Float64(get(dict, "psd_welch_window_sec", 2.0)), 0.0)
-        psd_welch_overlap = clamp(Float64(get(dict, "psd_welch_overlap", 0.5)), 0.0, 0.99)
-        psd_welch_nperseg = max(Int(get(dict, "psd_welch_nperseg", 0)), 0)
-        psd_welch_nfft = Int(get(dict, "psd_welch_nfft", 0))
-        psd_noise_avg_reps = max(Int(get(dict, "psd_noise_avg_reps", 1)), 1)
-
-        raw_preproc = get(dict, "psd_preproc", nothing)
-        psd_preproc = _canonicalize_psd_preproc_string(raw_preproc === nothing ? "log10" : String(raw_preproc))
-
         fmin = Float64(get(dict, "fmin", 1.0))
-        fmax = Float64(get(dict, "fmax", 48.0))
+        fmax = Float64(get(dict, "fmax", 45.0))
         
-        measurement_noise_std = max(Float64(get(dict, "measurement_noise_std", 0.0)), 0.0)
-
-        # Default to deterministic seed (42) for reproducible results
-        # Set explicitly to nothing to enable non-deterministic noise
-        loss_noise_seed_val = get(dict, "loss_noise_seed", 42)
-        loss_noise_seed = loss_noise_seed_val === nothing ? nothing : _coerce_settings_idx_value(loss_noise_seed_val)
-
         roi_weight = max(Float64(get(dict, "roi_weight", 1.0)), 0.0)
         bg_weight = max(Float64(get(dict, "bg_weight", 1.0)), 0.0)
+        
+        loss_abstol = Float64(get(dict, "loss_abstol", 1e-3))
+        loss_reltol = Float64(get(dict, "loss_reltol", 1e-3))
+        abs_target_loss = max(Float64(get(dict, "abs_target_loss", 0.01)), 0.0)
 
-        new(psd_preproc,
-            psd_welch_window_sec,
-            psd_welch_overlap,
-            psd_welch_nperseg,
-            psd_welch_nfft,
-            psd_noise_avg_reps,
-            fmin,
-            fmax,
-            measurement_noise_std,
-            loss_noise_seed,
-            roi_weight,
-            bg_weight)
+        new(fmin, fmax, roi_weight, bg_weight, loss_abstol, loss_reltol, abs_target_loss)
     end
-end
-
-function losssettings_psd_flags(ls::LossSettings)
-    return _psd_preproc_tokens_flags(_psd_preproc_tokens(ls.psd_preproc))
-end
-
-function losssettings_psd_has_log(ls::LossSettings)
-    has_log = losssettings_psd_flags(ls)
-    return has_log
 end
 
 const _REPARAM_TRUE_STRINGS = Set(["true", "on", "yes", "1"])
@@ -551,69 +567,41 @@ function _parse_reparam_inputs(raw_flag, raw_strategy)
     end
 end
 
-struct HyperparameterAxis
-    hyperparameter::Vector{String}
-    values::Vector{Any}
-end
-
-function _parse_hyperparameter_axes(raw_section)::Vector{HyperparameterAxis}
-    axes = HyperparameterAxis[]
-    raw_axes = get(raw_section, "hyperparameter_axes", nothing)
-    raw_axes === nothing && return axes
-    entries = raw_axes isa AbstractVector ? raw_axes : [raw_axes]
-    for entry in entries
-        entry isa AbstractDict || continue
-        raw_keys = get(entry, "hyperparameter", nothing)
-        raw_vals = get(entry, "values", nothing)
-        raw_keys === nothing && continue
-        raw_vals === nothing && continue
-        keys = raw_keys isa AbstractVector ? [String(k) for k in raw_keys] : [String(raw_keys)]
-        values_iter = raw_vals isa AbstractVector ? raw_vals : [raw_vals]
-        values = Any[value for value in values_iter]
-        isempty(keys) && continue
-        isempty(values) && continue
-        push!(axes, HyperparameterAxis(keys, values))
+function _parse_hyperparameter_sweep(raw_section)::OrderedDict{String, Vector{Any}}
+    """Parse hyperparameter sweep configuration from JSON."""
+    result = OrderedDict{String, Vector{Any}}()
+    
+    if raw_section === nothing
+        return result
     end
-    return axes
+    
+    if raw_section isa AbstractDict
+        for (param_path, values) in raw_section
+            if param_path isa AbstractString && values isa AbstractVector
+                result[String(param_path)] = Any[v for v in values]
+            end
+        end
+    end
+    
+    return result
 end
 
 mutable struct HyperparameterSweepSettings <: AbstractSettings
-    sigma_mode::Symbol
-    param_range_levels::Vector{String}
-    scale_sets::Vector{Dict{Symbol, Float64}}
-    population_grid::Vector{Int}
-    sigma_values_override::Union{Nothing, Vector{Float64}}
-    restart_grid::Vector{Int}
-    base_reparam_scales::Dict{Symbol, Float64}
-    hyperparameter_axes::Vector{HyperparameterAxis}
+    hyperparameters::OrderedDict{String, Vector{Any}}
 
-    function HyperparameterSweepSettings(raw_section_any,
-                                         param_range_level::String,
-                                         reparam_type_scales::Dict{Symbol, Float64},
-                                         n_restarts::Int,
-                                         opt_settings::OptimizerSettings)
-        raw_section = raw_section_any isa AbstractDict ? Dict{String, Any}(raw_section_any) : Dict{String, Any}()
-        lowered = _lowercase_dict(raw_section)
-        sigma_mode = _parse_sigma_mode(lowered)
-        base_scales = isempty(reparam_type_scales) ? Dict{Symbol, Float64}() : deepcopy(reparam_type_scales)
-        scale_sets = _build_scale_sets(lowered, base_scales)
-        range_levels = _parse_param_range_levels(lowered, _normalize_range_level(param_range_level))
-        pop_values, pop_found = _parse_int_list(lowered, ["population_sizes", "population_grid", "cmaes_population"]; min_value=1)
-        population_grid = pop_found ? pop_values : [40, 80]
-        restart_values, restart_found = _parse_int_list(lowered, ["n_restarts", "restart_counts", "restart_grid"]; min_value=1)
-        restart_fallback = n_restarts > 0 ? n_restarts : 1
-        restart_grid = restart_found ? restart_values : [restart_fallback]
-        sigma_values, sigma_found = _parse_float_list(lowered, ["sigma0_values", "sigma0", "sigma_grid"]; min_value=eps())
-        sigma_override = sigma_found ? sigma_values : [2.0, 8.0]
-        axes = _parse_hyperparameter_axes(raw_section)
-        return new(sigma_mode,
-                   range_levels,
-                   scale_sets,
-                   population_grid,
-                   sigma_override,
-                   restart_grid,
-                   base_scales,
-                   axes)
+    function HyperparameterSweepSettings(raw_section_any)
+        hyperparams = _parse_hyperparameter_sweep(raw_section_any)
+        
+        # If no hyperparameters provided, use sensible defaults for sweep
+        if isempty(hyperparams)
+            hyperparams = OrderedDict(
+                "optimization_settings.param_bound_scaling_level" => ["medium", "high"],
+                "optimization_settings.optimizer_settings.sigma0" => [2.0, 8.0],
+                "optimization_settings.optimizer_settings.population_size" => [100, 150],
+            )
+        end
+        
+        return new(hyperparams)
     end
 end
 
@@ -624,20 +612,22 @@ Settings for network parameter optimization.
 
 # Fields
 - `method::String`: Optimization method. **Currently only "CMAES" is supported.**
-- `n_restarts::Int64`: Number of optimization restarts
-- Additional fields for loss configuration, reparameterization, and hyperparameter sweeping
+- `param_bound_scaling_level::String`: Parameter bounds scaling level (low, medium, high, ultra, empirical, unbounded).
+- `empirical_bounds_table_path::Union{String, Nothing}`: Path to CSV with empirical parameter bounds.
+- `empirical_lower_bound_column::String`: Column name for lower bound values (e.g., "5perc").
+- `empirical_upper_bound_column::String`: Column name for upper bound values (e.g., "95perc").
+- `n_restarts::Int64`: Number of optimization restarts.
+- Additional fields for loss configuration, reparameterization, and hyperparameter sweeping.
 """
 mutable struct OptimizationSettings <: AbstractSettings
     method::String
-    loss_abstol::Float64
-    loss_reltol::Float64
-    abs_target_loss::Float64
-    param_range_level::String
-    empirical_param_table_path::Union{String, Nothing}
-    empirical_lb_col::String
-    empirical_ub_col::String
+    param_bound_scaling_level::String
+    empirical_bounds_table_path::Union{String, Nothing}
+    empirical_lower_bound_column::String
+    empirical_upper_bound_column::String
     save_optimization_history::Bool
     save_modeled_psd::Bool
+    include_settings_in_results_output::Bool
     reparametrize::Bool
     reparam_strategy::Symbol
     reparam_type_scales::Dict{Symbol, Float64}
@@ -650,7 +640,7 @@ mutable struct OptimizationSettings <: AbstractSettings
 
     function OptimizationSettings(dict::Dict)::OptimizationSettings
         optdict = get(dict, "optimization_settings", Dict{String, Any}())
-        method = String(get(optdict, "method", get(optdict, "optimization_method", "CMAES")))
+        method = String(get(optdict, "method", "CMAES"))
         
         # Validate that only CMAES is supported
         if method != "CMAES"
@@ -668,9 +658,6 @@ mutable struct OptimizationSettings <: AbstractSettings
         loss_section = get_section("loss_settings")
         lossset = LossSettings(loss_section)
         optz = OptimizerSettings(get_section("optimizer_settings"))
-        loss_abstol = Float64(get(loss_section, "loss_abstol", get(optdict, "loss_abstol", get(optdict, "loss_limit", 1e-5))))
-        loss_reltol = Float64(get(loss_section, "loss_reltol", get(optdict, "loss_reltol", get(optdict, "rel_diff_convergence", 1e-5))))
-        abs_target_loss = max(Float64(get(optdict, "abs_target_loss", 0.01)), 0.0)
         raw_reparam = get(optdict, "reparametrize", true)
         raw_strategy = get(optdict, "reparam_strategy", nothing)
         reparam_flag, reparam_strategy = _parse_reparam_inputs(raw_reparam, raw_strategy)
@@ -689,58 +676,55 @@ mutable struct OptimizationSettings <: AbstractSettings
             end
         end
 
-        raw_range_level = get(optdict, "param_range_level", nothing)
-        param_range_level = raw_range_level === nothing ? "medium" : String(raw_range_level)
+        raw_bound_scaling_level = get(optdict, "param_bound_scaling_level", nothing)
+        param_bound_scaling_level = raw_bound_scaling_level === nothing ? "medium" : String(raw_bound_scaling_level)
         
-        # Get empirical parameter table path
-        empirical_param_table_path = get(optdict, "empirical_param_table_path", nothing)
-        if empirical_param_table_path !== nothing
-            empirical_param_table_path = String(empirical_param_table_path)
-            # Expand to absolute path if needed
-            if !isabspath(empirical_param_table_path)
-                vwarn("empirical_param_table_path is not an absolute path: $(empirical_param_table_path)"; level=2)
-            end
+        # Get empirical bounds table path (defaults to grammars/empirical_parameter_values.csv)
+        # Uses universal path separators via joinpath for cross-platform compatibility
+        empirical_bounds_table_path = get(optdict, "empirical_bounds_table_path", joinpath("grammars", "empirical_parameter_values.csv"))
+        if empirical_bounds_table_path !== nothing
+            empirical_bounds_table_path = String(empirical_bounds_table_path)
         end
         
         # Get empirical bounds column names (defaults to 5th/95th percentiles)
-        empirical_lb_col = String(get(optdict, "empirical_lb_col", "q1"))
-        empirical_ub_col = String(get(optdict, "empirical_ub_col", "q3"))
+        empirical_lower_bound_column = String(get(optdict, "empirical_lower_bound_column", "5perc"))
+        empirical_upper_bound_column = String(get(optdict, "empirical_upper_bound_column", "95perc"))
         
         save_optimization_history = _losssettings_as_bool(get(optdict, "save_optimization_history", false), false)
         save_modeled_psd = _losssettings_as_bool(get(optdict, "save_modeled_psd", false), false)
+        include_settings_in_results_output = _losssettings_as_bool(get(optdict, "include_settings_in_results_output", true), true)
         n_restarts = Int64(get(optdict, "n_restarts", 1))
         raw_sweep_section = begin
             section = get(optdict, "hyperparameter_sweep", nothing)
             if section === nothing
-                section = get(dict, "hyperparameter_sweep", get(dict, "hyper_sweep", Dict{String, Any}()))
+                section = get(dict, "hyperparameter_sweep", Dict{String, Any}())
             end
             section isa AbstractDict ? Dict{String, Any}(section) : Dict{String, Any}()
         end
-        hyper = HyperparameterSweepSettings(raw_sweep_section, param_range_level, reparam_type_scales, n_restarts, optz)
+        hyper = HyperparameterSweepSettings(raw_sweep_section)
 
     new(
             method,
-            loss_abstol,
-            loss_reltol,
-            abs_target_loss,
-            param_range_level,
-            empirical_param_table_path,
-            empirical_lb_col,
-            empirical_ub_col,
+            param_bound_scaling_level,
+            empirical_bounds_table_path,
+            empirical_lower_bound_column,
+            empirical_upper_bound_column,
             save_optimization_history,
             save_modeled_psd,
+            include_settings_in_results_output,
             reparam_flag,
             reparam_strategy,
             reparam_type_scales,
             n_restarts,
-            Int64(get(optdict, "maxiters", 10000)),
-            Int64(get(optdict, "time_limit_minutes", get(optdict, "time_limit", 120))),
+            Int64(get(optdict, "maxiters", 100_000)),
+            Int64(get(optdict, "time_limit_minutes", 120)),
             lossset,
             optz,
             hyper
         )
     end
 end
+
 function _normalize_symbol(val)::Symbol
     return Symbol(lowercase(strip(String(val))))
 end
@@ -821,9 +805,9 @@ _normalize_range_level(val) = begin
     return s
 end
 
-function _parse_param_range_levels(lowered::Dict{String, Any}, default_level::String)
-    haskey(lowered, "param_range_levels") || return [default_level]
-    raw_vals = lowered["param_range_levels"]
+function _parse_param_bound_scaling_levels(lowered::Dict{String, Any}, default_level::String)
+    haskey(lowered, "param_bound_scaling_levels") || return [default_level]
+    raw_vals = lowered["param_bound_scaling_levels"]
     iter_vals = raw_vals isa AbstractVector ? raw_vals : [raw_vals]
     levels = String[]
     for val in iter_vals
@@ -860,20 +844,69 @@ function _build_scale_sets(lowered::Dict{String, Any}, base::Dict{Symbol, Float6
 end
 
 """
+    PSDSettings
+
+Configuration for power spectral density (PSD) computation and preprocessing.
+
+# Fields
+- `window_size::Int`: Window size for Savitzky-Golay smoothing (default: 5)
+- `smooth_poly_order::Int`: Polynomial order for Savitzky-Golay smoothing (default: 2)
+- `rel_eps::Float64`: Relative epsilon for numerical stability (default: 1e-12)
+- `smooth_sigma::Float64`: Gaussian smoothing sigma (default: 1.0)
+- `workspace::Union{Nothing, SpectrumWorkspace}`: Cached workspace for Welch computation
+
+These settings control the preprocessing applied after Welch PSD computation
+and are independent of loss function configuration.
+"""
+mutable struct PSDSettings <: AbstractSettings
+    preproc_pipeline::String                # Preprocessing pipeline: "log10", "offset", etc.
+    welch_window_sec::Float64               # Welch window duration in seconds
+    welch_overlap::Float64                  # Welch window overlap (0-1)
+    welch_nperseg::Int                      # Welch segment length (0=auto)
+    welch_nfft::Int                         # FFT length (0=auto)
+    noise_avg_reps::Int                     # averaging reps for noisy PSD
+    window_size::Int                        # Savitzky-Golay window size
+    smooth_poly_order::Int                  # Savitzky-Golay polynomial order
+    rel_eps::Float64                        # Relative epsilon for numerical stability
+    smooth_sigma::Float64                   # Gaussian smoothing sigma
+    workspace::Union{Nothing, Any}          # Cached SpectrumWorkspace (using Any to avoid circular dep)
+
+    function PSDSettings(dict::Dict{String, Any}=Dict{String, Any}())
+        psd_dict = get(dict, "psd", Dict{String, Any}())
+        
+        preproc_pipeline = String(get(psd_dict, "preproc_pipeline", "log10"))
+        welch_window_sec = max(Float64(get(psd_dict, "welch_window_sec", 2.0)), 0.0)
+        welch_overlap = clamp(Float64(get(psd_dict, "welch_overlap", 0.1)), 0.0, 0.99)
+        welch_nperseg = max(Int(get(psd_dict, "welch_nperseg", 0)), 0)
+        welch_nfft = Int(get(psd_dict, "welch_nfft", 0))
+        noise_avg_reps = max(Int(get(psd_dict, "noise_avg_reps", 1)), 1)
+        
+        window_size = max(Int(get(psd_dict, "window_size", 5)), 1)
+        smooth_poly_order = max(Int(get(psd_dict, "smooth_poly_order", 2)), 0)
+        rel_eps = Float64(get(psd_dict, "rel_eps", 1e-12))
+        smooth_sigma = Float64(get(psd_dict, "smooth_sigma", 1.0))
+        
+        return new(preproc_pipeline, welch_window_sec, welch_overlap, welch_nperseg, welch_nfft,
+                   noise_avg_reps, window_size, smooth_poly_order, rel_eps, smooth_sigma, nothing)
+    end
+end
+
+"""
     DataSettings
 
 Configuration for data input and metadata.
 
 # Fields
-- `path_data`: Path to data directory
-- `subj`: Subject identifier (String or Int)
-- `task`: Task name
-- `event`: Event identifier
+- `data_file`: Path to data CSV file
+- `target_channel`: Name of target EEG channel
+- `task_type`: Task associated with data
 - `fs`: Sampling frequency (Hz)
-- `n_ts`: Number of time series
-- `ts_type`: Type of time series (e.g., "comp")
-- `fname_data`: Name of the data file
-- `fname_metadata`: Name of the metadata file
+- `data_columns`: Specific columns to load
+- `estimate_measurement_noise`: Whether to estimate noise from data
+- `spectral_roi_definition_mode`: Mode for defining region of interest (:auto or :manual)
+- `spectral_roi_auto_peak_sensitivity`: Sensitivity for automatic peak detection (0.0-1.0)
+- `spectral_roi_manual`: Manual frequency bands for ROI definition
+- `psd`: Nested PSDSettings for spectrum computation
 
 Note: DataSettings can be `nothing` if no data is used (e.g., for pure network building).
 """
@@ -884,9 +917,12 @@ mutable struct DataSettings <: AbstractSettings
     fs::Union{Float64, Nothing}
     data_columns::Union{Vector{String}, Nothing}
     estimate_measurement_noise::Bool
-    region_definition_mode::Symbol  # :auto or :manual
-    auto_peak_sensitivity::Float64  # 0.0-1.0, higher=looser peak detection
-    manual_frequency_regions::Vector{Tuple{Float64, Float64}}  # [(fmin, fmax), ...] for manual mode
+    spectral_roi_definition_mode::Symbol  # :auto or :manual
+    spectral_roi_auto_peak_sensitivity::Float64  # 0.0-1.0, higher=looser peak detection
+    spectral_roi_manual::Vector{Tuple{Float64, Float64}}  # [(fmin, fmax), ...] for manual mode
+    measurement_noise_std::Float64  # Measurement noise standard deviation (0=no noise, -1.0=not estimated)
+    psd_noise_seed::Union{Int, Nothing}  # Seed for PSD noise (42=deterministic, nothing=random)
+    psd::PSDSettings  # Nested PSD preprocessing settings
 
     function DataSettings(dict::Dict{String, Any})::DataSettings
         # Handle data_file: can be absolute or relative path
@@ -921,49 +957,83 @@ mutable struct DataSettings <: AbstractSettings
         estimate_measurement_noise = _losssettings_as_bool(get(dict, "estimate_measurement_noise", true), true)
         
         # Region definition settings
-        region_mode_raw = get(dict, "region_definition_mode", "auto")
-        region_definition_mode = Symbol(lowercase(String(region_mode_raw)))
-        region_definition_mode in (:auto, :manual) || (region_definition_mode = :auto)
+        region_mode_raw = get(dict, "spectral_roi_definition_mode", "manual")
+        spectral_roi_definition_mode = Symbol(lowercase(String(region_mode_raw)))
+        spectral_roi_definition_mode in (:auto, :manual) || (spectral_roi_definition_mode = :auto)
         
-        auto_peak_sensitivity = clamp(Float64(get(dict, "auto_peak_sensitivity", 0.3)), 0.0, 1.0)
-        manual_frequency_regions = get(dict, "manual_frequency_regions", [])
-        if manual_frequency_regions isa Vector
-            manual_frequency_regions = Vector{Tuple{Float64, Float64}}(
-                [(Float64(r[1]), Float64(r[2])) for r in manual_frequency_regions]
+        spectral_roi_auto_peak_sensitivity = clamp(Float64(get(dict, "spectral_roi_auto_peak_sensitivity", 0.3)), 0.0, 1.0)
+        
+        spectral_roi_manual = get(dict, "spectral_roi_manual", [(7.5, 14.0)])
+        if spectral_roi_manual isa Vector
+            spectral_roi_manual = Vector{Tuple{Float64, Float64}}(
+                [(Float64(r[1]), Float64(r[2])) for r in spectral_roi_manual]
             )
         else
-            manual_frequency_regions = Tuple{Float64, Float64}[]
+            spectral_roi_manual = Tuple{Float64, Float64}[]
+        end
+        
+        # Initialize PSD settings
+        psd = PSDSettings(dict)
+        
+        # Measurement noise standard deviation 
+        measurement_noise_std = Float64(get(dict, "measurement_noise_std", 0.0))
+        
+        # PSD noise seed for deterministic vs random noise
+        psd_noise_seed = if haskey(dict, "psd_noise_seed")
+            val = dict["psd_noise_seed"]
+            val === nothing ? nothing : Int(val)
+        else
+            42  # Default: deterministic
         end
 
         return new(data_file, target_channel, task_type, fs, data_columns, estimate_measurement_noise,
-                   region_definition_mode, auto_peak_sensitivity, manual_frequency_regions)
+                   spectral_roi_definition_mode, spectral_roi_auto_peak_sensitivity, spectral_roi_manual, measurement_noise_std, psd_noise_seed, psd)
     end
 end
 
+"""
+    Settings
 
+Complete configuration for ENEEGMA network building, simulation, and optimization.
 
+Contains all subsettings organized by functional domain: general experiment settings,
+network topology, sampling, simulation, data processing, and optimization.
 
+# Fields
+- `general_settings::GeneralSettings`: Experiment and output configuration.
+- `network_settings::NetworkSettings`: Network topology and dynamics.
+- `sampling_settings::Union{SamplingSettings, Nothing}`: Grammar-based sampling configuration.
+- `simulation_settings::Union{SimulationSettings, Nothing}`: ODE solver configuration.
+- `data_settings::Union{DataSettings, Nothing}`: Data input and preprocessing.
+- `optimization_settings::Union{OptimizationSettings, Nothing}`: Parameter optimization configuration.
+"""
 mutable struct Settings
     general_settings::GeneralSettings
     network_settings::NetworkSettings
     sampling_settings::Union{SamplingSettings, Nothing}
     simulation_settings::Union{SimulationSettings, Nothing}
-    optimization_settings::Union{OptimizationSettings, Nothing}
     data_settings::Union{DataSettings, Nothing}
+    optimization_settings::Union{OptimizationSettings, Nothing}
 
     function Settings(dict::Dict{String, Any})
 
         gen  = GeneralSettings(dict)
         net  = NetworkSettings(dict)
-
-        # Always construct sampling, simulation, optimization, and data with defaults if missing
         samp = SamplingSettings(dict)
         sim  = SimulationSettings(dict)
         opt  = OptimizationSettings(dict)
-
         datad = get(dict, "data_settings", Dict{String, Any}())
         data  = DataSettings(datad)
 
-        return new(gen, net, samp, sim, opt, data)
+        return new(gen, net, samp, sim, data, opt)
     end
+end
+
+"""
+Custom display for Settings objects - shows full configuration summary.
+When displaying a Settings object in the REPL, print the full summary automatically.
+"""
+function Base.show(io::IO, ::MIME"text/plain", settings::Settings)
+    print(io, "Settings object\n")
+    print_settings_summary(settings; section="all")
 end

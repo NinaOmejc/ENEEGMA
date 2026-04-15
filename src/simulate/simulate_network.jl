@@ -1,6 +1,6 @@
 """
     simulate_network(net::Network; 
-                     new_params::Union{Nothing, NamedTuple}=nothing,
+                     new_params::Union{Nothing, NamedTuple, Dict}=nothing,
                      new_inits::Union{Nothing, Vector{Float64}}=nothing,
                      new_tspan::Union{Nothing, Tuple{Float64, Float64}}=nothing)::DataFrame
 
@@ -16,7 +16,7 @@ settings, it can be computed from the state variables after retrieving the DataF
 
 # Arguments
 - `net::Network`: The network object to simulate
-- `new_params::Union{Nothing, NamedTuple}`: Override parameters (if nothing, use original)
+- `new_params::Union{Nothing, NamedTuple, Dict}`: Override parameters as NamedTuple or Dict with String/Symbol keys (if nothing, use original)
 - `new_inits::Union{Nothing, Vector{Float64}}`: Override initial conditions (if nothing, use original)
 - `new_tspan::Union{Nothing, Tuple{Float64, Float64}}`: Override time span (if nothing, use original)
 
@@ -40,14 +40,30 @@ dfs = [simulate_network(net; new_inits=sample_inits(net.vars; seed=s)) for s in 
 ```
 """
 function simulate_network(net::Network; 
-                         new_params::Union{Nothing, NamedTuple}=nothing,
+                         new_params::Union{Nothing, NamedTuple, Dict}=nothing,
                          new_inits::Union{Nothing, Vector{Float64}}=nothing,
-                         new_tspan::Union{Nothing, Tuple{Float64, Float64}}=nothing)::DataFrame
-    simsett = net.settings.simulation_settings
-    
+                         new_tspan::Union{Nothing, Tuple{Float64, Float64}}=nothing,
+                         settings::Union{Nothing, Settings}=nothing,
+                         simulation_settings::Union{Nothing, SimulationSettings}=nothing)::DataFrame
+
+    # Resolve simulation settings: use provided, or extract from provided settings, or use network's settings
+    if simulation_settings === nothing
+        if settings !== nothing
+            simulation_settings = settings.simulation_settings
+        else
+            # Try to use settings from the network
+            simulation_settings = net.settings.simulation_settings
+        end
+    end
+
+    # Warn if parameters mismatch and new_params not provided
+    if new_params === nothing
+        _warn_param_mismatches!(net)
+    end
+
     # Get solver and kwargs from settings
-    solver = get_solver(net.problem, simsett)
-    solver_kwargs = get_solver_kwargs(net.problem, simsett)
+    solver = get_solver(net.problem, simulation_settings)
+    solver_kwargs = get_solver_kwargs(net.problem, simulation_settings)
     
     # Run single simulation with optional parameter overrides
     solution = simulate_network(net.problem; 
@@ -67,7 +83,7 @@ end
 
 """
     simulate_network(prob::SciMLBase.AbstractDEProblem; 
-                     new_params::Union{Nothing, NamedTuple}=nothing, 
+                     new_params::Union{Nothing, NamedTuple, Dict}=nothing, 
                      new_inits::Union{Nothing, Vector{Float64}}=nothing,
                      new_tspan::Union{Nothing, Tuple{Float64, Float64}}=nothing,
                      solver::SciMLBase.AbstractDEAlgorithm=Rodas5(),
@@ -78,9 +94,12 @@ Simulate a network problem with optional parameter/initial condition overrides.
 This is the low-level simulation entry point. It handles problem remapping with custom parameters,
 initial conditions, and time spans, then solves using the specified solver and kwargs.
 
+Parameters can be provided as a NamedTuple or Dict. If Dict is provided, it will be automatically
+converted to a NamedTuple. Dict keys can be either Strings or Symbols and will be normalized to Symbols.
+
 # Arguments
 - `prob::SciMLBase.AbstractDEProblem`: The differential equation problem to solve
-- `new_params::Union{Nothing, NamedTuple}`: Override parameters (if nothing, use original)
+- `new_params::Union{Nothing, NamedTuple, Dict}`: Override parameters as NamedTuple or Dict with String/Symbol keys (if nothing, use original)
 - `new_inits::Union{Nothing, Vector{Float64}}`: Override initial conditions (if nothing, use original)
 - `new_tspan::Union{Nothing, Tuple{Float64, Float64}}`: Override time span (if nothing, use original)
 - `solver::SciMLBase.AbstractDEAlgorithm`: Solver algorithm (default: Rodas5())
@@ -90,11 +109,32 @@ initial conditions, and time spans, then solves using the specified solver and k
 - `sol::SciMLBase.AbstractODESolution`: Solution object from the solver
 """
 function simulate_network(prob::SciMLBase.AbstractDEProblem; 
-                     new_params::Union{Nothing, NamedTuple}=nothing, 
+                     new_params::Union{Nothing, NamedTuple, Dict}=nothing, 
                      new_inits::Union{Nothing, Vector{Float64}}=nothing,
                      new_tspan::Union{Nothing, Tuple{Float64, Float64}}=nothing,
                      solver::SciMLBase.AbstractDEAlgorithm=Rodas5(),
                      solver_kwargs::NamedTuple=NamedTuple())::SciMLBase.AbstractODESolution
+    
+    # Convert Dict to NamedTuple if needed
+    params_for_remake = new_params
+    if new_params isa Dict
+        vinfo("Converting parameter Dict to NamedTuple"; level=2)
+        # Handle both String and Symbol keys by converting to Symbols
+        sym_dict = Dict(Symbol(k) => v for (k, v) in pairs(new_params))
+        new_params_nt = NamedTuple(sym_dict)
+        # Merge with existing parameters to preserve unchanged ones
+        params_for_remake = merge(prob.p, new_params_nt)
+    elseif new_params isa NamedTuple && new_params !== nothing
+        # Merge NamedTuple with existing parameters to preserve unchanged ones
+        params_for_remake = merge(prob.p, new_params)
+    end
+    
+    # Ensure initial conditions are Vector{Float64}, not Vector{Any}
+    inits_for_remake = if new_inits !== nothing
+        Float64.(new_inits)
+    else
+        nothing
+    end
     
     # Start with empty NamedTuple to collect remake parameters
     remake_kwargs = NamedTuple()
@@ -103,18 +143,18 @@ function simulate_network(prob::SciMLBase.AbstractDEProblem;
     add(nt, k, v) = merge(nt, NamedTuple{(k,)}((v,)))
 
     # Add only fields that are specified (not nothing)
-    if new_params !== nothing
-        remake_kwargs = add(remake_kwargs, :p, new_params)
+    if params_for_remake !== nothing
+        remake_kwargs = add(remake_kwargs, :p, params_for_remake)
     end
-    if new_inits !== nothing
-        remake_kwargs = add(remake_kwargs, :u0, new_inits)
+    if inits_for_remake !== nothing
+        remake_kwargs = add(remake_kwargs, :u0, inits_for_remake)
     end
     if new_tspan !== nothing
         remake_kwargs = add(remake_kwargs, :tspan, new_tspan)
     end
 
     # Remake problem with specified overrides (or return original if none specified)
-    prob_remade = isempty(remake_kwargs) ? prob : remake(prob; remake_kwargs...)
+    prob_remade = isempty(remake_kwargs) ? prob : DifferentialEquations.remake(prob; remake_kwargs...)
 
     # Solve the problem safely with callbacks for instability detection
     sol = safe_solve(prob_remade, solver; solver_kwargs=solver_kwargs)
@@ -384,5 +424,57 @@ function save_ts_data(df::DataFrame, net::Network, gs::GeneralSettings, irun::In
     filename = joinpath(output_dir, "$(net.name)_ts_data_run$(irun).csv")
     CSV.write(filename, df)
 
+    return nothing
+end
+
+
+function _warn_param_mismatches!(net::Network)::Nothing
+    """
+        _warn_param_mismatches!(net::Network)::Nothing
+    
+    Check for parameter mismatches between net.problem.p and stored defaults.
+    
+    Issues a warning if any parameters in the network problem differ from their
+    stored default values in net.params.params. This helps users detect when
+    network state diverges from stored configuration.
+    
+    # Arguments
+    - `net::Network`: Network to check for parameter mismatches
+    
+    # Returns
+    - `nothing`
+    """
+    if !hasproperty(net.params, :params)
+        return nothing
+    end
+    
+    try
+        prob_params = net.problem.p
+        stored_params = net.params.params
+        
+        # Check for mismatches between problem parameters and stored defaults
+        mismatches = []
+        for param in stored_params
+            param_name = Symbol(param.name)
+            if haskey(prob_params, param_name)
+                prob_value = getproperty(prob_params, param_name)
+                if prob_value != param.default
+                    push!(mismatches, (name=param.name, prob_value=prob_value, default=param.default))
+                end
+            end
+        end
+        
+        if !isempty(mismatches)
+            mismatch_str = join(["$(m.name): prob=$(m.prob_value), default=$(m.default)" for m in mismatches], "\n  ")
+            vwarn("""
+            Parameter mismatch detected between net.problem.p and stored defaults:
+              $(mismatch_str)
+            Consider passing updated parameters via new_params argument. 
+            In this simulation, the parameters from net.problem.p will be used."""; level=1)
+        end
+    catch
+        # Skip warning if comparison fails
+    end
+    
     return nothing
 end

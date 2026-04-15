@@ -118,11 +118,10 @@ Parameter optimization configuration.
 | `maxiters` | Int | > 0 | `2000` | Maximum iterations per optimization run. |
 | `time_limit_minutes` | Int | > 0 | `120` | Time limit per optimization run (minutes). |
 | `reparametrize` | Bool | `true`, `false` | `false` | Whether to use reparameterization strategy. |
-| `reparam_strategy` | String | `"typed"`, `"none"` | `"typed"` | Reparameterization strategy (parameter grouping). |
-| `param_range_level` | String | `"low"`, `"medium"`, `"high"`, `"ultra"`, `"empirical"`, `"unbounded"` | `"high"` | Parameter bounds strategy. |
-| `empirical_param_table_path` | String or null | Valid file path or `null` | `null` | Path to empirical parameter table for bounds. |
-| `empirical_lb_col` | String | Column name | `"q1"` | Column in empirical table for lower bounds. |
-| `empirical_ub_col` | String | Column name | `"q3"` | Column in empirical table for upper bounds. |
+| `param_bound_scaling_level` | String | `"low"`, `"medium"`, `"high"`, `"ultra"`, `"empirical"`, `"unbounded"` | `"high"` | Parameter bounds scaling level. Scales literature-based parameter bounds by level-specific factors. |
+| `empirical_bounds_table_path` | String or null | Valid file path or `null` | `grammars/empirical_parameter_values.csv` | Path to CSV file containing empirical parameter bounds derived from statistical analysis. Column names specified by `empirical_lower_bound_column` and `empirical_upper_bound_column`. Can be absolute or relative path (relative paths resolved from working directory). |
+| `empirical_lower_bound_column` | String | Column name | `5perc` | Column name in empirical bounds table for lower bound values (e.g., 5th percentile). |
+| `empirical_upper_bound_column` | String | Column name | `95perc` | Column name in empirical bounds table for upper bound values (e.g., 95th percentile). |
 | `abs_target_loss` | Float | ≥ 0 | `0.01` | Absolute loss target for early stopping. |
 | `component_fit` | String | `"all"`, `"fspb"`, `"ssvep"` | `"all"` | Which loss component(s) to optimize. |
 | `save_optimization_history` | Bool | `true`, `false` | `false` | Save iteration-by-iteration optimization history. |
@@ -186,7 +185,7 @@ Grid search and hyperparameter sweep configuration.
 
 | Setting | Type | Constraints | Default | Description |
 |---------|------|-------------|---------|-------------|
-| `param_range_levels` | Array[String] | Valid level names | `["high"]` | Parameter range levels to sweep. |
+| `param_bound_scaling_levels` | Array[String] | Valid level names | `["high"]` | Parameter bounds scaling levels to sweep. |
 | `sigma0_mode` | String | `"auto"`, `"absolute"` | `"auto"` | Scaling mode for initial sigma. |
 | `population_grid` | Array[Int] | > 0 | `[40, 80]` | Population sizes to test. |
 | `restart_grid` | Array[Int] | > 0 | `[1]` | Restart counts to test. |

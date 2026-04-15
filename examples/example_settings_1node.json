@@ -56,7 +56,9 @@
     "data_path": "",
     "data_fname": "",
     "fs": 256.0,
-    "target_channel": "IC1"
+    "target_channel": "IC1",
+    "measurement_noise_std": 0.0,
+    "psd_noise_seed": null
   },
   "optimization_settings": {
     "method": "CMAES",
@@ -66,8 +68,6 @@
         1.0,
         50.0
       ],
-      "measurement_noise_std": 0.0,
-      "loss_noise_seed": null,
       "psd_window_size": 5,
       "psd_poly_order": 2,
       "psd_rel_eps": 1e-12,

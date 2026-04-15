@@ -30,17 +30,99 @@ function update_settings!(settings::Settings,
         hasfield(typeof(obj), last) || error("Hyperparameter key $(key) not found (missing $(last))")
         field_T = fieldtype(typeof(obj), last)
         setfield!(obj, last, convert(field_T, val))
+        vinfo("  Updated setting: $key = $(getfield(obj, last))"; level=2)
     end
 
-    # normalize_fspb_ssvep_weights!(settings.optimization_settings.loss_settings; background_auto=true)
     return settings
 end
 
+"""
+    show_hyperparameter_combos(settings::Settings; combo_idx=nothing)
+
+Display hyperparameter sweep combinations.
+
+# Arguments
+- `settings::Settings`: Settings object with hyperparameter sweep configuration
+- `combo_idx::Union{Nothing, Int}`: If provided, show only this specific combination. If nothing, show all.
+
+# Examples
+```julia
+# Show all combinations
+show_hyperparameter_combos(settings)
+
+# Show only combination #3
+show_hyperparameter_combos(settings; combo_idx=3)
+```
+"""
+function show_hyperparameter_combos(settings::Settings; combo_idx::Union{Nothing, Int}=nothing)
+    combo_keys, combos = build_sweep_combos(settings)
+    total = length(combos)
+    
+    if combo_idx !== nothing
+        # Show specific combination
+        (1 <= combo_idx <= total) || error("combo_idx $combo_idx out of range (1..$total)")
+        println("\n" * "="^80)
+        println("HYPERPARAMETER COMBINATION #$combo_idx (of $total)")
+        println("="^80)
+        combo = _get_combo_at(combos, combo_idx)
+        for (key, val) in zip(combo_keys, combo)
+            println("  $key = $val")
+        end
+        println("="^80 * "\n")
+    else
+        # Show all combinations
+        println("\n" * "="^80)
+        println("HYPERPARAMETER SWEEP CONFIGURATION")
+        println("="^80)
+        println("Total combinations to test: $total\n")
+        for (i, combo) in enumerate(combos)
+            println("Combo $i:")
+            for (key, val) in zip(combo_keys, combo)
+                println("  $key = $val")
+            end
+        end
+        println("="^80 * "\n")
+    end
+end
+
+"""
+    add_hyperparameter_axis!(settings::Settings, param_path::String, values::Vector)
+
+Add a new hyperparameter sweep axis to the settings.
+
+This is a user-friendly way to add custom hyperparameters to sweep over.
+
+# Arguments
+- `settings::Settings`: Settings object
+- `param_path::String`: Dot-separated parameter path (e.g., "optimization_settings.optimizer_settings.sigma0")
+- `values::Vector`: Vector of values to sweep over
+
+# Example
+```julia
+# Add a sweep of background loss weight
+add_hyperparameter_axis!(settings, "optimization_settings.loss_settings.bg_weight", [0.5, 0.75, 1.0])
+
+# Now settings.optimization_settings.hyperparameter_sweep includes this new axis
+```
+"""
+function add_hyperparameter_axis!(settings::Settings, param_path::String, values::Vector)
+    """Add a new hyperparameter to the sweep configuration."""
+    settings.optimization_settings.hyperparameter_sweep.hyperparameters[param_path] = Any[v for v in values]
+end
+
+"""
+Extract hyperparameter sweep combinations from settings.
+
+Each HyperparameterAxis defines one hyperparameter path and its sweep values.
+Returns combo_keys (parameter paths) and combos (all value combinations via Cartesian product).
+"""
 function build_sweep_combos(settings::Settings)
     os = settings.optimization_settings
     hs = os.hyperparameter_sweep
-    combo_keys = [first(ax.hyperparameter) for ax in hs.hyperparameter_axes]
-    combo_values = [collect(ax.values) for ax in hs.hyperparameter_axes]           
+    # Extract parameter paths and their values from hyperparameter dict
+    combo_keys = collect(keys(hs.hyperparameters))
+    combo_values = [collect(hs.hyperparameters[key]) for key in combo_keys]
+    # Create all combinations via Cartesian product
     return combo_keys, collect(Iterators.product(combo_values...))     
 end
 
@@ -56,27 +138,14 @@ function _run_single_combo!(settings::Settings,
                             combo_keys::Vector{String},
                             combo_idx::Int)
 
-    os = settings.optimization_settings
-    update_settings!(settings, combo, combo_keys)
-    # Loss settings are now simplified: only region weighting (roi_weight, bg_weight) is used
-    println(" ROI weight: $(settings.optimization_settings.loss_settings.roi_weight)")
-    println(" Background weight: $(settings.optimization_settings.loss_settings.bg_weight)")
-    flush(stdout)
+    ENEEGMA.update_settings!(settings, combo, combo_keys)
     
     net = build_network(settings)
     set_all_params_tunable!(net.params)
 
-    decision_dim = count_decision_variables(net, os)
-    ensure_population_size!(os, decision_dim)
-    ensure_sigma0!(os, decision_dim)
-
-    optsol, optlogger, setter, blocks = optimize_network(
+    optimize_network(
         net, data, settings;
         hyperparam_combo=combo, hyperparam_idx=combo_idx, hyperparam_keys=combo_keys
-    )
-    save_optimization_results(
-        optsol, optlogger, setter, net, data, settings;
-        blocks=blocks, hyperparam_combo=combo, hyperparam_idx=combo_idx, hyperparam_keys=combo_keys
     )
     return nothing
 end
@@ -104,15 +173,15 @@ function run_hyperparameter_sweep(settings::Union{Nothing, Settings},
                                   max_runs::Union{Nothing, Int}=nothing)
 
     vinfo("RUNNING HYPERPARAMETER SWEEP"; level=1)
-    vinfo("$(length(combos)) hyperparameter combinations to test\n"; level=2)
-    combo_keys, combos = build_sweep_combos(settings)
+    combo_keys, combos = ENEEGMA.build_sweep_combos(settings)
     total = length(combos)
+    vinfo("$(length(combos)) hyperparameter combinations to test\n"; level=2)
 
     if combo_idx !== nothing
         vinfo("\n[Hyperparameter Sweep $(combo_idx) / $(length(combos))]"; level=1)
-        combo = _get_combo_at(combos, combo_idx)
+        combo = ENEEGMA._get_combo_at(combos, combo_idx)
         vinfo("Hyperparameter combination: $(combo)\n"; level=1)
-        _run_single_combo!(settings, data, combo, combo_keys, combo_idx)
+        ENEEGMA._run_single_combo!(settings, data, combo, combo_keys, combo_idx)
         return nothing
     end
 
@@ -122,9 +191,9 @@ function run_hyperparameter_sweep(settings::Union{Nothing, Settings},
     end
 
     for (i, combo) in enumerate(combos)
-        vinfo("[Hyperparameter sweep $(combo_idx)/$(length(combos))]: $(combo)"; level=1)
+        vinfo("[Hyperparameter sweep $i/$(length(combos))]: $(combo)"; level=1)
 
-        combo = _get_combo_at(combos, i)
-        _run_single_combo!(settings, data, combo, combo_keys, i)
+        combo = ENEEGMA._get_combo_at(combos, i)
+        ENEEGMA._run_single_combo!(settings, data, combo, combo_keys, i)
     end
 end

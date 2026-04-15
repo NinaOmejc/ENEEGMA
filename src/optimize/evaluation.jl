@@ -134,8 +134,17 @@ function evaluate_model(
     data_settings = settings.data_settings
     loss_settings = settings.optimization_settings.loss_settings
     
+    # Validate required settings
+    if data_settings === nothing
+        error("evaluate_model requires data_settings to be configured in settings object")
+    end
+    
+    if loss_settings === nothing
+        error("evaluate_model requires loss_settings to be configured in optimization_settings")
+    end
+    
     # Simulate and extract prediction
-    sol, model_prediction, success, error_msg = simulate_and_extract(
+    sol, model_prediction, success, error_msg = ENEEGMA.simulate_and_extract(
         net, params, inits, settings; demean=demean)
     
     # Normalize metric names (allows empty vector like [])
@@ -169,24 +178,25 @@ function evaluate_model(
     end
     
     # Compute PSD
-    freqs, model_psd = _compute_noisy_psd_avg(
+    freqs, model_psd = compute_noisy_preprocessed_welch_psd(
         model_prediction,
         data_settings.fs,
-        loss_settings
+        loss_settings,
+        data_settings
     )
-    
+
     # Compute requested metrics
     for metric_name in metric_names
         metric_value = try
             if metric_name == "loss"
                 # Use the unified region-weighted loss function
-                loss_function = get_metric_function()
-                loss_function(model_prediction, data, data_settings.fs, loss_settings)
+                loss_function = ENEEGMA.get_metric_function()
+                loss_function(model_prediction, data, data_settings.fs, loss_settings, data_settings)
             elseif metric_name == "r2"
-                r2(model_psd, data.powers)
+                ENEEGMA.r2(model_psd, data.powers)
             elseif metric_name == "iae"
                 # Integrated absolute error using unified region weighting from freq_peak_metadata
-                weighted_iae(model_psd, data.powers, freqs, data)
+                ENEEGMA.weighted_iae(model_psd, data.powers, freqs, data)
             else
                 error("Unknown evaluation metric: $metric_name. Supported metrics: loss, r2, iae")
             end
@@ -274,6 +284,10 @@ function weighted_iae(model_psd::Vector{Float64}, target_psd::Vector{Float64},
     Compute integrated absolute error (area between curves) using region weighting from freq_peak_metadata.
     Weights ROI regions differently from background, consistent with loss computation.
     """
+    if length(model_psd) != length(target_psd)
+        error("model_psd and target_psd must have the same length")
+    end
+    
     e = abs.(model_psd .- target_psd)
     df = diff(freqs)
     trap = 0.5 .* (e[1:end-1] .+ e[2:end]) .* df
@@ -284,12 +298,21 @@ function weighted_iae(model_psd::Vector{Float64}, target_psd::Vector{Float64},
     end
     
     pm = data.freq_peak_metadata
-    roi_mask = pm.roi_mask
-    bg_mask = pm.bg_mask
+    roi_mask = vec(pm.roi_mask)  # Ensure it's a vector
+    bg_mask = vec(pm.bg_mask)    # Ensure it's a vector
     
-    # Compute IAE in each region
-    roi_iae = sum(trap .* roi_mask[1:end-1] .& roi_mask[2:end])
-    bg_iae = sum(trap .* bg_mask[1:end-1] .& bg_mask[2:end])
+    # Ensure masks have compatible length with trap
+    if length(roi_mask) != length(freqs) || length(bg_mask) != length(freqs)
+        error("Mask length ($(length(roi_mask))) must match freqs length ($(length(freqs)))")
+    end
+    
+    # Compute IAE in each region - use multiplication for binary masks
+    # (masks should be 0/1, so multiplication replaces AND operation)
+    roi_seg = roi_mask[1:end-1] .* roi_mask[2:end]
+    bg_seg = bg_mask[1:end-1] .* bg_mask[2:end]
+    
+    roi_iae = sum(trap .* roi_seg)
+    bg_iae = sum(trap .* bg_seg)
     
     # Weighted combination (same as loss: ROI 2x stronger than background)
     roi_weight = pm.roi_weight

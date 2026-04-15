@@ -70,7 +70,7 @@ include("types/data.jl")
 include("types/optimization_types.jl")
 
 export Settings, GeneralSettings, NetworkSettings, SimulationSettings, OptimizationSettings
-export OptimizerSettings, SamplingSettings, DataSettings, LossSettings
+export OptimizerSettings, HyperparameterSweepSettings, HyperparameterAxis, SamplingSettings, DataSettings, LossSettings
 export Population, InputDynamics, SensoryInput, InternodeInput, InterpopulationInput
 export Data, OptLogEntry, ReparamSpec
 export ParamTransform, ParamReparamTransform, Affine01, ExpPos, SoftplusPos, SigmoidBound, TanhBound, Identity
@@ -111,8 +111,8 @@ export settings_to_dict, print_settings_summary, load_data
 # Signal processing utilities
 export extract_brain_sources, extract_brain_source
 export WelchWorkspace, SpectrumWorkspace
-export calculate_spectra, calculate_spectrum
-export compute_cwt, compute_stft, compute_welch_pow_spectrum, compute_welch_pow_spectra
+export compute_cwt, compute_stft
+export compute_welch_psd, compute_preprocessed_welch_psd, compute_noisy_preprocessed_welch_psd
 export parse_psd_preproc_pipeline, psd_preproc_flags_from_spec
 export normalize_spectrum, normalize_spectra
 
@@ -120,7 +120,7 @@ export normalize_spectrum, normalize_spectra
 # MODEL BUILDING
 # ============================================================================
 
-include("build/known_node_models.jl")
+include("build/canonical_node_models.jl")
 include("build/build_node.jl")
 include("build/build_population.jl")
 include("build/build_network.jl")
@@ -134,7 +134,7 @@ export build_population, build_populations
 export build_network, build_node
 export create_input_dynamics, create_interneuron_input
 export apply_connectivity_motif
-export list_known_node_models, list_known_node_models_codes, get_known_node_model_info!
+export list_canonical_node_models, list_canonical_node_models_codes, get_canonical_node_model_info!
 export update_network_parameters!, construct_network_problem!
 export set_network_signature!, export_network
 export transform2latex, string2num, string2symbolicfun, soft_wrap, sort_symbols
@@ -176,6 +176,6 @@ export detect_peak_windows, build_broad_peak_metadata
 export estimate_sigma_init, estimate_sigma_floor
 export maybe_initialize_std_measured_noise!
 export save_optimization_results
-export run_hyperparameter_sweep
+export run_hyperparameter_sweep, show_hyperparameter_combos, add_hyperparameter_axis!
 
 end  # module ENEEGMA

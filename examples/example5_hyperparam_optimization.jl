@@ -1,77 +1,71 @@
-# Example 5: Hyperparameter Sweep with Grammar-Sampled Models
-# ===========================================================
-# This example demonstrates how to:
-# 1. Load target data and prepare for optimization
-# 2. Load candidate models from grammar sampling results
-# 3. Select a specific model for optimization
-# 4. Run a systematic hyperparameter sweep to find optimal configuration
+# Example 5: Hyperparameter Sweep Optimization
+# ==============================================
+# This example demonstrates systematic hyperparameter optimization:
+# 1. Load target data and configure neural network
+# 2. Define hyperparameter sweep axes
+# 3. Review all sweep combinations
+# 4. Run optimization across the parameter space
+
+using Revise 
 using ENEEGMA
 using CSV
 using DataFrames
 using JSON
-using Revise 
 
-# ============================================================================
-# Step 1: Create Settings
-# ============================================================================
-settings = create_default_settings();
+# =============================================================================
+# STEP 1: Load Settings and Data and build network as in previous examples
+# =============================================================================
+println("Step 1: Loading settings and data...")
+settings = create_default_settings()
 
-# ============================================================================
-# Step 2: Configure Data Settings
-# ============================================================================
-# Data file defaults to examples/example_data_rest.csv with IC3 channel
-# The example data uses fs=256 and task_type="rest"
-# You can override these defaults, e.g.
-# settings.data_settings.data_file = "path/to/your/data.csv"
+# Load and prepare data
 print_settings_summary(settings; section="data_settings")
-data = prepare_data!(settings);
-# using Plots
-# plot(data.times, data.signal, title="Target EEG Signal", xlabel="Time (s)", ylabel="Amplitude")
-# plot(data.freqs, data.powers, title="Target PSD", xlabel="Frequency (Hz)", ylabel="Power")
+data = prepare_data!(settings)
 
-# ============================================================================
-# Step 3: Load candidate models from grammar sampling CSV
-# ============================================================================
-# Load the parse trees from grammar sampling results
-models_file = joinpath("examples", "example_grammar_parse_trees.csv")
-candidate_models = CSV.read(models_file, DataFrame)
-
-println("\nLoaded $(nrow(candidate_models)) candidate models")
-
-# ============================================================================
-# Step 4: Select model and build network
-# ============================================================================
-# Select a model (change index to test different models)
-model_idx = 1
-model_name = candidate_models.model_name[model_idx]
-parse_tree = candidate_models.parse_tree[model_idx]
-
-println("Building network with model: $(model_name)")
-
-# Set the model in network settings (parse_tree can be used directly as String)
-settings.network_settings.node_models = [parse_tree]
-settings.network_settings.name = model_name
-
-# Build Network
+# Build and configure network
 net = build_network(settings)
-println("Network built successfully")
-println("System size: $(length(net.dynamics)) equations")
-
-# Make all parameters tunable for optimization
 set_all_params_tunable!(net.params)
 
-# ============================================================================
-# Step 5: Configure Hyperparameter Sweep
-# ============================================================================
-# Hyperparameter sweep settings are in optimization_settings.hyperparameter_sweep
-# 
-# Configuration options:
-#   - population_grid: Vector of population sizes to test [e.g., [20, 40, 80]]
-#   - sigma_grid: Vector of initial step sizes [e.g., [0.5, 1.0, 2.0]]
-print_settings_summary(settings; section="optimization_settings")
+# =============================================================================
+# STEP 2: Configure Hyperparameter Sweep
+# =============================================================================
 
-# ============================================================================
-# Step 6: Run Hyperparameter Sweep
-# ============================================================================
-# The sweep will run optimization for each hyperparameter combination
-run_hyperparameter_sweep(settings, data)
+# DEFAULT SWEEP AXES (automatically included):
+#   • param_bound_scaling_level: ["medium", "high"]
+#   • sigma0: [-1.0, 2.0, 8.0]  (where -1.0 means use CMAES default)
+#   • population_size: [-1, 100, 150]  (where -1 means use CMAES default)
+#
+# These provide 2 × 3 × 3 = 18 combinations
+
+# Reset to defaults only (uncomment to clear custom axes):
+# empty!(settings.optimization_settings.hyperparameter_sweep.hyperparameter_axes)
+
+# ADD CUSTOM AXES using add_hyperparameter_axis!()
+add_hyperparameter_axis!(settings, 
+    "optimization_settings.loss_settings.bg_weight", 
+    [0.5, 0.75, 1.0]
+)
+
+# =============================================================================
+# STEP 3: Review All Sweep Combinations
+# =============================================================================
+show_hyperparameter_combos(settings)
+
+# Show specific combination (e.g., combination #3):
+combo_idx = 16
+show_hyperparameter_combos(settings; combo_idx=combo_idx)
+
+# =============================================================================
+# STEP 4: Run Hyperparameter Sweep
+# =============================================================================
+
+# OPTION A: Run full sweep (all combinations)
+# run_hyperparameter_sweep(settings, data)
+
+# OPTION B: Run specific combination (useful for debugging/testing)
+settings.optimization_settings.time_limit_minutes = 1
+run_hyperparameter_sweep(settings, data; combo_idx=combo_idx)
+
+println("Example complete! Results saved to: $(settings.general_settings.path_out)")
+
+

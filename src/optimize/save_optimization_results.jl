@@ -20,13 +20,13 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     optimization_settings = settings.optimization_settings
     loss_settings = optimization_settings.loss_settings
 
-    blocks = blocks === nothing ? prepare_optimization_blocks(net, optimization_settings) : blocks
-    params_native, inits_native, min_optlogger_loss = best_params_inits(optsol, optlogger, blocks)
-    param_range_entries, init_range_entries = native_range_entries(net, blocks)
+    blocks = blocks === nothing ? ENEEGMA.prepare_optimization_blocks(net, optimization_settings) : blocks
+    params_native, inits_native, min_optlogger_loss = ENEEGMA.best_params_inits(optsol, optlogger, blocks)
+    param_range_entries, init_range_entries = ENEEGMA.native_range_entries(net, blocks)
     best_loss = min(optsol.minimum, min_optlogger_loss)
 
     # Organize outputs by candidate model - use universal function
-    candidate_path = construct_output_dir(general_settings, settings.network_settings)
+    candidate_path = ENEEGMA.construct_output_dir(general_settings, settings.network_settings)
     
     # Create timestamped optimization subdirectory to allow multiple runs without overwriting
     # Use provided timestamp if available (shared across all restarts), otherwise generate new one
@@ -41,12 +41,12 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
 
     fname_loss = "$(base_prefix)_loss_evolution_over_iterations.png"
     path_loss = joinpath(optimization_path, fname_loss)
-    plot_loss_over_iterations(optlogger, general_settings, path_loss)
-    save_optlogger(optlogger, settings; fullfname_csv=joinpath(optimization_path, "$(base_prefix)_optlogger.csv"))
+    ENEEGMA.plot_loss_over_iterations(optlogger, general_settings, path_loss)
+    ENEEGMA.save_optlogger(optlogger, settings; fullfname_csv=joinpath(optimization_path, "$(base_prefix)_optlogger.csv"))
 
     # Simulate and evaluate model with best parameters using centralized evaluate_model function
     opt_params = setter(net.problem.p, params_native)
-    result = evaluate_model(
+    result = ENEEGMA.evaluate_model(
         net, opt_params, inits_native, target_data, settings;
         evaluation_metrics=["loss", "r2", "iae"],
         demean=true
@@ -67,7 +67,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
 
     fname_obs_ts = "$(base_prefix)_observed_vs_modeled_timeseries.png"
     path_obs_ts = joinpath(optimization_path, fname_obs_ts)
-    plot_observed_vs_modelled_ts_windows(sol, target_data, general_settings, net;
+    plot_observed_vs_modelled_ts_windows(sol, target_data, settings, net;
                                                 fullfname_fig=path_obs_ts)
 
     fname_obs_freq = "$(base_prefix)_observed_vs_modeled_spectrum.png"
@@ -92,9 +92,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     freq_anim_path = joinpath(optimization_path, fname_freq_anim)
     plot_psd_spetra_evolution(optlogger, net, setter;
                     target_data=target_data,
-                    general_settings=general_settings,
-                    simulation_settings=simulation_settings,
-                    loss_settings=loss_settings,
+                    settings=settings,
                     fullfname_fig=freq_plot_path,
                     fullfname_anim=freq_anim_path)
 
@@ -162,10 +160,10 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
         end
     end
 
-    # Build main results structure with metadata, optimization_results, and other sections
+    # Build main results structure with optimization_results first, then metadata and other sections
     results = OrderedDict{String, Any}(
-        "metadata" => metadata,
         "optimization_results" => optimization_results_dict,
+        "metadata" => metadata,
         "best_parameters" => best_opt_params_named,
         "initial_states" => initial_states_dict,
         "hyperparam_adaptation" => hyperparam_adaptation_dict,
@@ -179,6 +177,11 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     if restart_idx === nothing
         results["parameter_ranges"] = param_range_entries
         results["initial_state_ranges"] = init_range_entries
+    end
+    
+    # Add full configuration if requested
+    if optimization_settings.include_settings_in_results_output
+        results["configuration"] = settings_to_dict(settings)
     end
 
     fname_results = "$(base_prefix)_optimization_results.json"
@@ -242,7 +245,7 @@ function save_modeled_psd(modeled_powers::Vector{Float64},
     return nothing
 end
 
-const JSON_SETTINGS_EXCLUDE_FIELDS = Set(["reference_freqs", "reference_psd"])
+const JSON_SETTINGS_EXCLUDE_FIELDS = Set(["reference_freqs", "reference_psd", "workspace"])
 
 function write_compact_json(path::AbstractString, data; digits::Int=3)
     prepared = _prepare_json_value(data, digits)
@@ -560,19 +563,12 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
                               net::Network,
                               setter::Function;
                               target_data::Union{Data, Vector{Float64}, Matrix{Float64}, DataFrame}=Float64[],
-                              general_settings::Union{Nothing, GeneralSettings}=nothing,
-                              simulation_settings::Union{Nothing, SimulationSettings}=nothing,
-                              loss_settings::Union{Nothing, LossSettings}=nothing,
+                              settings::Union{Nothing, Settings}=nothing,
                               fullfname_fig::Union{Nothing, String}=nothing,
                               fullfname_anim::Union{Nothing, String}=nothing,
                               max_entries::Int=typemax(Int))::Nothing
 
-    #println("Target data: $(target_data)")
-    # println("Target data powers: $(target_data.powers)")
-    println("Target data power size: $(length(target_data.powers))")
-    println("Modeled powers size: $(length(target_data.powers))")
-
-    if general_settings !== nothing && !general_settings.make_plots
+    if settings !== nothing && !settings.general_settings.make_plots
         return nothing
     end
 
@@ -582,9 +578,10 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
         return nothing
     end
 
-    gen = general_settings === nothing ? net.settings.general_settings : general_settings
-    sim = simulation_settings === nothing ? net.settings.simulation_settings : simulation_settings
-    loss = loss_settings === nothing ? net.settings.optimization_settings.loss_settings : loss_settings
+    gen = settings === nothing ? net.settings.general_settings : settings.general_settings
+    sim = settings === nothing ? net.settings.simulation_settings : settings.simulation_settings
+    loss = settings === nothing ? net.settings.optimization_settings.loss_settings : settings.optimization_settings.loss_settings
+    data = settings === nothing ? net.settings.data_settings : settings.data_settings
 
     solver = get_solver(net.problem, sim)
     solver_kwargs = get_solver_kwargs(net.problem, sim)
@@ -600,7 +597,7 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
 
         param_block = params_vec[1:n_params]
         init_block = params_vec[n_params + 1 : n_params + n_state_vars]
-        sigma_val = loss.measurement_noise_std
+        sigma_val = data.measurement_noise_std
         new_params = setter(net.problem.p, param_block)
         try
             sol = simulate_network(net.problem; new_params=new_params, new_inits=init_block,
@@ -611,7 +608,7 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
             end
             model_prediction = Matrix(df)[:, 2]
             sampling_rate = length(sol.t) > 1 ? 1.0 / (sol.t[2] - sol.t[1]) : 1.0 / sim.saveat
-            freqs, modeled_powers = _compute_noisy_psd_avg(model_prediction, sampling_rate, loss)
+            freqs, modeled_powers = compute_noisy_preprocessed_welch_psd(model_prediction, sampling_rate, loss, data)
             # Skip entries with empty or invalid power spectra
             if !isempty(modeled_powers) && all(isfinite, modeled_powers)
                 push!(spectra, (iter=entry.iter, loss=entry.loss, restart=entry.irestart,
@@ -716,6 +713,7 @@ function compute_r2_for_params(net::Network,
                                inits_native::Vector{Float64})::Float64
     sim = net.settings.simulation_settings
     loss = net.settings.optimization_settings.loss_settings
+    data = net.settings.data_settings
     solver = get_solver(net.problem, sim)
     solver_kwargs = get_solver_kwargs(net.problem, sim)
 
@@ -734,7 +732,7 @@ function compute_r2_for_params(net::Network,
     end
     model_prediction = Matrix(df)[:, 2]
     fs = length(sol.t) > 1 ? 1.0 / (sol.t[2] - sol.t[1]) : 1.0 / sim.saveat
-    _, modeled_powers = _compute_noisy_psd_avg(model_prediction, fs, loss)
+    _, modeled_powers = compute_noisy_preprocessed_welch_psd(model_prediction, fs, loss, data)
     target_freqs, target_curve = target_data.freqs, target_data.powers
     if target_curve === nothing || length(target_curve) != length(modeled_powers)
         return NaN
@@ -783,11 +781,12 @@ end
 
 function plot_observed_vs_modelled_ts_windows(sol::SciMLBase.AbstractODESolution,
                                               target_data::Union{Data, Vector{Float64}, Matrix{Float64}, DataFrame},
-                                              general_settings::GeneralSettings,
+                                              settings::Union{Nothing, Settings},
                                               net::Network;
                                               zoom_window::Tuple{Float64, Float64}=(2.0, 5.0),
                                               fullfname_fig::Union{Nothing, AbstractString}=nothing)
-    general_settings.make_plots || return nothing
+    gen_settings = settings === nothing ? net.settings.general_settings : settings.general_settings
+    gen_settings.make_plots || return nothing
     target_data isa Data || return nothing
 
     df = DataFrame(sol)
@@ -805,8 +804,8 @@ function plot_observed_vs_modelled_ts_windows(sol::SciMLBase.AbstractODESolution
     plot!(p[2], model_times, model_ts, label="Model", xlabel="Time (s)", ylabel="", xlims=zoom_window)
 
     outpath = fullfname_fig === nothing ?
-              joinpath(general_settings.path_out,
-                       "$(net.name)_$(general_settings.exp_name)_plot_obs_vs_mod_ts.png") :
+              joinpath(gen_settings.path_out,
+                       "$(net.name)_$(gen_settings.exp_name)_plot_obs_vs_mod_ts.png") :
               String(fullfname_fig)
     savefig(p, outpath)
     return nothing

@@ -26,7 +26,7 @@ Load settings from a JSON file with validation.
 
 # Arguments
 - `filepath::String`: Path to the JSON settings file (must end with .json)
-
+ 
 # Returns
 Loaded settings dictionary
 
@@ -111,6 +111,42 @@ function create_default_settings()::Settings
 end
 
 """
+    struct_to_ordered_dict(obj::T; exclude::Set{Symbol}=Set{Symbol}())::OrderedDict where T
+
+Reflection-based serialization: Convert any struct to OrderedDict by introspecting its fields.
+Automatically handles RuleTree objects by serializing them.
+
+# Arguments
+- `obj::T`: Any struct object to serialize
+- `exclude::Set{Symbol}`: Field names to skip during serialization
+
+# Returns
+OrderedDict with field names as keys and field values as values
+"""
+function struct_to_ordered_dict(obj::T; exclude::Set{Symbol}=Set{Symbol}())::OrderedDict where T
+    out = OrderedDict{String, Any}()
+    
+    for fname in fieldnames(T)
+        fname in exclude && continue
+        
+        val = getfield(obj, fname)
+        key = String(fname)
+        
+        # Handle RuleTree serialization
+        if val isa RuleTree
+            out[key] = serialize_rule_tree(val)
+        # Handle nested AbstractSettings objects
+        elseif val isa AbstractSettings && !isa(val, RuleTree)
+            out[key] = struct_to_ordered_dict(val; exclude)
+        else
+            out[key] = val
+        end
+    end
+    
+    return out
+end
+
+"""
     settings_to_dict(settings::Settings)::Dict{String, Any}
 
 Convert a Settings object back to its dictionary representation.
@@ -122,126 +158,60 @@ Useful for saving and inspecting configuration.
 # Returns
 Dictionary representation of the Settings object
 """
-function settings_to_dict(settings::Settings)::Dict{String, Any}
+function settings_to_dict(settings::Settings)::OrderedDict{String, Any}
     d = OrderedDict{String, Any}()
     
-    # General settings
-    d["general_settings"] = OrderedDict(
-        "exp_name" => settings.general_settings.exp_name,
-        "path_out" => settings.general_settings.path_out,
-        "verbosity_level" => settings.general_settings.verbosity_level,
-        "seed" => settings.general_settings.seed,
-        "make_plots" => settings.general_settings.make_plots,
-        "save_model_formats" => settings.general_settings.save_model_formats
-    )
+    # Serialize each settings component using reflection, with custom handling for complex fields
     
-    # Network settings
+    # General settings - serialize all fields
+    d["general_settings"] = struct_to_ordered_dict(settings.general_settings)
+    
+    # Network settings - needs custom RuleTree handling
     ns = settings.network_settings
-    # Serialize node_models: convert RuleTree to string representation
     node_models_serialized = [m isa String ? m : serialize_rule_tree(m) for m in ns.node_models]
-    d["network_settings"] = OrderedDict(
-        "name" => ns.name,
-        "n_nodes" => ns.n_nodes,
-        "node_names" => ns.node_names,
-        "node_models" => node_models_serialized,
-        "node_coords" => ns.node_coords,
-        "network_conn" => ns.network_conn,
-        "network_delay" => ns.network_delay,
-        "network_conn_funcs" => ns.network_conn_funcs,
-        "sensory_input_conn" => ns.sensory_input_conn,
-        "sensory_input_func" => ns.sensory_input_func,
-        "sensory_seed" => ns.sensory_seed,
-        "init_seed" => ns.init_seed,
-        "eeg_output" => ns.eeg_output
-    )
+    d["network_settings"] = struct_to_ordered_dict(ns)
+    d["network_settings"]["node_models"] = node_models_serialized
     
-    # Sampling settings
+    # Sampling settings - serialize if not nothing
     samp_s = settings.sampling_settings
     d["sampling_settings"] = if samp_s !== nothing
-        OrderedDict(
-            "grammar_file" => samp_s.grammar_file,
-            "n_samples" => samp_s.n_samples,
-            "only_unique" => samp_s.only_unique,
-            "max_resample_attempts" => samp_s.max_resample_attempts,
-            "grammar_seed" => samp_s.grammar_seed
-        )
+        struct_to_ordered_dict(samp_s)
     else
         OrderedDict()
     end
     
-    # Simulation settings
+    # Simulation settings - serialize all fields
     ss = settings.simulation_settings
-    d["simulation_settings"] = OrderedDict(
-        "tspan" => collect(ss.tspan),
-        "dt" => ss.dt,
-        "solver" => ss.solver
-    )
+    sim_dict = struct_to_ordered_dict(ss)
+    # Convert tspan tuple to array for JSON
+    sim_dict["tspan"] = collect(ss.tspan)
+    d["simulation_settings"] = sim_dict
     
-    # Data settings
+    # Data settings - serialize if not nothing
     data_s = settings.data_settings
     d["data_settings"] = if data_s !== nothing
-        OrderedDict(
-            "data_file" => data_s.data_file,
-            "target_channel" => data_s.target_channel,
-            "task_type" => data_s.task_type,
-            "fs" => data_s.fs,
-            "data_columns" => data_s.data_columns
-        )
+        data_dict = struct_to_ordered_dict(data_s; exclude=Set([:workspace]))
+        # Nested PSD settings are already serialized via reflection
+        data_dict
     else
         OrderedDict()
     end
     
-    # Optimization settings with nested loss and optimizer
+    # Optimization settings - requires custom handling for nested structures
     os = settings.optimization_settings
-    ls = os.loss_settings
-    opt_s = os.optimizer_settings
-    
     d["optimization_settings"] = OrderedDict(
         "method" => os.method,
-        "loss_abstol" => os.loss_abstol,
-        "loss_reltol" => os.loss_reltol,
-        "abs_target_loss" => os.abs_target_loss,
-        "param_range_level" => os.param_range_level,
+        "param_bound_scaling_level" => os.param_bound_scaling_level,
         "save_optimization_history" => os.save_optimization_history,
         "save_modeled_psd" => os.save_modeled_psd,
+        "include_settings_in_results_output" => os.include_settings_in_results_output,
         "reparametrize" => os.reparametrize,
         "n_restarts" => os.n_restarts,
         "maxiters" => os.maxiters,
         "time_limit_minutes" => os.time_limit_minutes,
-        "loss_settings" => OrderedDict(
-            "psd_preproc" => ls.psd_preproc,
-            "psd_welch_window_sec" => ls.psd_welch_window_sec,
-            "psd_welch_overlap" => ls.psd_welch_overlap,
-            "psd_welch_nperseg" => ls.psd_welch_nperseg,
-            "psd_welch_nfft" => ls.psd_welch_nfft,
-            "psd_noise_avg_reps" => ls.psd_noise_avg_reps,
-            "fmin" => ls.fmin,
-            "fmax" => ls.fmax,
-            "measurement_noise_std" => ls.measurement_noise_std,
-            "loss_noise_seed" => ls.loss_noise_seed,
-            "roi_weight" => ls.roi_weight,
-            "bg_weight" => ls.bg_weight
-        ),
-        "optimizer_settings" => OrderedDict(
-            "population_size" => opt_s.population_size,
-            "sigma0" => opt_s.sigma0,
-            "K" => opt_s.K,
-            "n_samples" => opt_s.n_samples,
-            "learning_rate" => opt_s.learning_rate
-        ),
-        "hyperparameter_sweep" => OrderedDict(
-            "sigma_mode" => os.hyperparameter_sweep.sigma_mode,
-            "param_range_levels" => os.hyperparameter_sweep.param_range_levels,
-            "scale_sets" => os.hyperparameter_sweep.scale_sets,
-            "population_grid" => os.hyperparameter_sweep.population_grid,
-            "sigma_values_override" => os.hyperparameter_sweep.sigma_values_override,
-            "restart_grid" => os.hyperparameter_sweep.restart_grid,
-            "base_reparam_scales" => os.hyperparameter_sweep.base_reparam_scales,
-            "hyperparameter_axes" => [OrderedDict(
-                "hyperparameter" => axis.hyperparameter,
-                "values" => axis.values
-            ) for axis in os.hyperparameter_sweep.hyperparameter_axes]
-        )
+        "loss_settings" => struct_to_ordered_dict(os.loss_settings),
+        "optimizer_settings" => struct_to_ordered_dict(os.optimizer_settings),
+        "hyperparameter_sweep" => os.hyperparameter_sweep.hyperparameters
     )
     
     return d
@@ -325,7 +295,7 @@ function format_json_with_indent(json_str::String; indent=2)
 end
 
 """
-    save_settings(settings::Union{Settings, Dict}, filepath::Union{String, Nothing}=nothing; overwrite::Bool=true)::String
+    save_settings(settings::Union{Settings, Dict}, filepath::Union{String, Nothing}=nothing)::String
 
 Save settings object or dictionary to a JSON file.
 
@@ -335,7 +305,6 @@ For Dict objects: filepath must be provided.
 # Arguments
 - `settings::Union{Settings, Dict}`: Settings object or dictionary to save
 - `filepath::Union{String, Nothing}`: Custom filepath (optional for Settings, required for Dict). If nothing with Settings, uses path_out/exp_name/settings.json
-- `overwrite::Bool`: Whether to overwrite if file exists (default=true)
 
 # Returns
 The full path to the saved file
@@ -353,7 +322,7 @@ settings_dict = Dict(...)
 save_settings(settings_dict, "config.json")  # filepath required for Dict
 ```
 """
-function save_settings(settings::Union{Settings, Dict}, filepath::Union{String, Nothing}=nothing; overwrite::Bool=true)::String
+function save_settings(settings::Union{Settings, Dict}, filepath::Union{String, Nothing}=nothing)::String
     # Set verbosity from Settings if available (so vinfo() calls work correctly)
     if settings isa Settings
         set_verbose(settings.general_settings.verbosity_level)
@@ -423,7 +392,7 @@ function print_settings_summary(settings::Union{Settings, Dict}; section::String
     println()  # Add extra newline at end for readability
 end
 
-function print_section(section::String, settings_dict::Dict, format_type::String="short")
+function print_section(section::String, settings_dict::AbstractDict, format_type::String="short")
     should_print(s) = section == "all" || section == s
     
     if format_type == "short"
@@ -433,437 +402,207 @@ function print_section(section::String, settings_dict::Dict, format_type::String
     end
 end
 
-function print_section_short(section::String, settings_dict::Dict)
-    should_print(s) = section == "all" || section == s
+"""
+    format_value_short(value::Any)::String
     
-    if should_print("general_settings")
-        gs = get(settings_dict, "general_settings", Dict())
-        println("\n[General Settings]")
-        println("  exp_name: $(get(gs, "exp_name", "N/A"))")
-        println("  path_out: $(get(gs, "path_out", "N/A"))")
-        println("  verbosity_level: $(get(gs, "verbosity_level", 1))")
-        println("  seed: $(get(gs, "seed", nothing))")
-        println("  make_plots: $(get(gs, "make_plots", true))")
-        println("  save_model_formats: $(get(gs, "save_model_formats", ["tex"]))")
-    end
-    
-    if should_print("network_settings")
-        ns = get(settings_dict, "network_settings", Dict())
-        println("\n[Network Settings]")
-        println("  name: $(get(ns, "name", "net1"))")
-        println("  n_nodes: $(get(ns, "n_nodes", "N/A"))")
-        println("  node_names: $(join(get(ns, "node_names", []), ", "))")
-        # Handle both String and RuleTree node models
-        node_models_raw = get(ns, "node_models", [])
-        is_all_strings = true
-        for x in node_models_raw
-            if !isa(x, String)
-                is_all_strings = false
-                break
-            end
-        end
-        node_models_display = if is_all_strings
-            join(node_models_raw, ", ")
+Format a value for short display (single line).
+"""
+function format_value_short(value::Any)::String
+    if value === nothing
+        return "nothing"
+    elseif value isa Bool
+        return string(value)
+    elseif value isa Number
+        return string(value)
+    elseif value isa AbstractString
+        return value
+    elseif value isa Vector
+        if isempty(value)
+            return "[]"
+        elseif all(v -> v isa Number || v isa Bool || v isa Nothing, value)
+            # Simple vector of numbers/bools
+            return join(value, ", ")
+        elseif all(v -> v isa AbstractString, value)
+            # Vector of strings
+            return join(value, ", ")
         else
-            join([x isa String ? x : serialize_rule_tree(x) for x in node_models_raw], ", ")
+            # Complex vector
+            return string(length(value)) * " items"
         end
-        println("  node_models: $(node_models_display)")
-        
-        # node_coords: Print each coordinate on separate line
-        node_coords = get(ns, "node_coords", [])
-        println("  node_coords:")
-        if isempty(node_coords)
-            println("    (empty)")
-        else
-            for (i, coord) in enumerate(node_coords)
-                println("    Node $i: $coord")
-            end
-        end
-        
-        # network_conn: Print matrix with rows
-        conn = get(ns, "network_conn", [])
-        println("  network_conn:")
-        if isempty(conn)
-            println("    (empty)")
-        elseif conn isa Vector
-            println("    $(conn)")
-        else
-            rows = length(conn)
-            cols = (rows > 0 && conn[1] isa Vector) ? length(conn[1]) : 1
-            println("    $rows × $cols matrix")
-            for (i, row) in enumerate(conn)
-                println("      Row $i: $(row)")
-            end
-        end
-        
-        # network_delay: Print matrix with rows
-        delay = get(ns, "network_delay", [])
-        println("  network_delay:")
-        if isempty(delay)
-            println("    (empty)")
-        elseif delay isa Vector
-            println("    $(delay)")
-        else
-            rows = length(delay)
-            cols = (rows > 0 && delay[1] isa Vector) ? length(delay[1]) : 1
-            println("    $rows × $cols matrix")
-            for (i, row) in enumerate(delay)
-                println("      Row $i: $(row)")
-            end
-        end
-        
-        # network_conn_funcs: Print matrix with rows
-        funcs = get(ns, "network_conn_funcs", [])
-        println("  network_conn_funcs:")
-        if isempty(funcs)
-            println("    (empty)")
-        elseif funcs isa Vector
-            println("    $(funcs)")
-        else
-            rows = length(funcs)
-            cols = (rows > 0 && funcs[1] isa Vector) ? length(funcs[1]) : 1
-            println("    $rows × $cols matrix")
-            for (i, row) in enumerate(funcs)
-                println("      Row $i: $(row)")
-            end
-        end
-        
-        println("  sensory_input_conn: $(join(get(ns, "sensory_input_conn", []), ", "))")
-        println("  sensory_input_func: $(get(ns, "sensory_input_func", "none"))")
-        println("  sensory_seed: $(get(ns, "sensory_seed", nothing))")
-        println("  init_seed: $(get(ns, "init_seed", nothing))")
-        println("  eeg_output: $(get(ns, "eeg_output", "default"))")
-    end
-    
-    if should_print("simulation_settings")
-        ss = get(settings_dict, "simulation_settings", Dict())
-        println("\n[Simulation Settings]")
-        tspan_val = get(ss, "tspan", [0.0, 1000.0])
-        t1 = (tspan_val isa Vector) ? tspan_val[1] : tspan_val[1]
-        t2 = (tspan_val isa Vector) ? tspan_val[2] : tspan_val[2]
-        println("  tspan: [$t1, $t2]")
-        println("  dt: $(get(ss, "dt", "N/A"))")
-        println("  saveat: $(get(ss, "saveat", "N/A"))")
-        println("  solver: $(get(ss, "solver", "Tsit5"))")
-    end
-    
-    if should_print("data_settings")
-        ds = get(settings_dict, "data_settings", Dict())
-        println("\n[Data Settings]")
-        println("  data_file: $(get(ds, "data_file", ""))")
-        println("  target_channel: $(get(ds, "target_channel", "IC3"))")
-        println("  task_type: $(get(ds, "task_type", nothing))")
-        println("  fs: $(get(ds, "fs", nothing))")
-    end
-    
-    if should_print("optimization_settings")
-        os = get(settings_dict, "optimization_settings", Dict())
-        println("\n[Optimization Settings]")
-        println("  method: $(get(os, "method", "CMAES"))")
-        println("  abs_target_loss: $(get(os, "abs_target_loss", 0.01))")
-        println("  reparametrize: $(get(os, "reparametrize", true))")
-        println("  param_range_level: $(get(os, "param_range_level", "high"))")
-        println("  n_restarts: $(get(os, "n_restarts", 1))")
-        println("  maxiters: $(get(os, "maxiters", 2000))")
-        println("  time_limit_minutes: $(get(os, "time_limit_minutes", 120))")
-        
-        ls = get(os, "loss_settings", Dict())
-        println("  loss_settings.fmin: $(get(ls, "fmin", 1.0))")
-        println("  loss_settings.fmax: $(get(ls, "fmax", 48.0))")
-        
-        hs = get(os, "hyperparameter_sweep", Dict())
-        if !isempty(hs)
-            println("  hyperparameter_sweep.sigma_mode: $(get(hs, "sigma_mode", :auto))")
-            println("  hyperparameter_sweep.population_grid: $(get(hs, "population_grid", []))")
-            println("  hyperparameter_sweep.restart_grid: $(get(hs, "restart_grid", []))")
-            println("  hyperparameter_sweep.sigma_values_override: $(get(hs, "sigma_values_override", nothing))") 
-        end
-    end
-    
-    if should_print("sampling_settings")
-        samp = get(settings_dict, "sampling_settings", Dict())
-        println("\n[Sampling Settings]")
-        println("  grammar_file: $(get(samp, "grammar_file", "grammars/default_grammar.cfg"))")
-        println("  n_samples: $(get(samp, "n_samples", 10))")
-        println("  only_unique: $(get(samp, "only_unique", true))")
-        println("  max_resample_attempts: $(get(samp, "max_resample_attempts", 100))")
-        println("  grammar_seed: $(get(samp, "grammar_seed", nothing))")
+    elseif value isa AbstractDict
+        return "{" * string(length(value)) * " keys}"
+    elseif value isa Tuple
+        return "(" * join(value, ", ") * ")"
+    else
+        return string(value)
     end
 end
 
-function print_section_long(section::String, settings_dict::Dict)
+"""
+    format_value_long(value::Any, indent::Int=0)::String
+    
+Format a value for long display (potentially multi-line).
+"""
+function format_value_long(value::Any, indent::Int=0)::String
+    prefix = " "^indent
+    
+    if value === nothing
+        return "nothing"
+    elseif value isa Bool
+        return string(value)
+    elseif value isa Number
+        return string(value)
+    elseif value isa AbstractString
+        return value
+    elseif value isa Vector
+        if isempty(value)
+            return "[]"
+        elseif length(value) <= 3 && all(v -> v isa Number || v isa Bool, value)
+            return "[" * join(value, ", ") * "]"
+        elseif all(v -> v isa AbstractString, value)
+            return "[" * join(value, ", ") * "]"
+        else
+            return string(length(value)) * " items"
+        end
+    elseif value isa Matrix
+        rows = size(value, 1)
+        cols = size(value, 2)
+        return "Matrix{$(rows)×$(cols)}"
+    elseif value isa AbstractDict
+        return "{$(length(value)) keys}"
+    elseif value isa Tuple
+        if length(value) <= 3
+            return "(" * join(value, ", ") * ")"
+        else
+            return "Tuple{$(length(value)) elements}"
+        end
+    else
+        return string(value)
+    end
+end
+
+"""
+    print_dict_short(dict::AbstractDict, section_name::String, indent::Int=0)
+    
+Print dictionary contents in short format, automatically iterating over keys.
+"""
+function print_dict_short(dict::AbstractDict, section_name::String, indent::Int=2)
+    isempty(dict) && return
+    
+    prefix = " "^indent
+    
+    for (key, value) in dict
+        # Skip certain internal keys
+        key in ("workspace",) && continue
+        
+        # Format the value
+        val_str = format_value_short(value)
+        
+        # Handle nested dicts separately for readability
+        if value isa AbstractDict && !isempty(value)
+            println("$prefix$key:")
+            print_dict_short(value, "", indent + 2)
+        else
+            println("$prefix$key: $val_str")
+        end
+    end
+end
+
+"""
+    print_dict_long(dict::AbstractDict, section_name::String, indent::Int=0)
+    
+Print dictionary contents in long format, automatically iterating over keys.
+"""
+function print_dict_long(dict::AbstractDict, section_name::String, indent::Int=2)
+    isempty(dict) && return
+    
+    prefix = " "^indent
+    
+    for (key, value) in dict
+        # Skip certain internal keys
+        key in ("workspace",) && continue
+        
+        # Convert underscores to spaces for readability
+        display_key = replace(key, "_" => " ")
+        
+        # Try to infer a description based on the key  
+        type_str = if value isa Bool
+            "Bool"
+        elseif value isa Number
+            "$(typeof(value))"
+        elseif value isa AbstractString
+            "String"
+        elseif value isa Vector
+            "Vector"
+        elseif value isa Matrix
+            "Matrix"
+        elseif value isa AbstractDict
+            "Dict"
+        else
+            "$(typeof(value))"
+        end
+        
+        # Format value
+        val_str = format_value_long(value, indent + 2)
+        
+        # Print with type info
+        println("$prefix$display_key :: $type_str")
+        
+        if val_str != string(value) && (value isa AbstractDict && !isempty(value))
+            # If it's a non-empty dict, print recursively
+            print_dict_long(value, "", indent + 2)
+        else
+            println("$prefix  → $val_str")
+        end
+    end
+end
+
+"""
+    print_section_short(section::String, settings_dict::AbstractDict)
+    
+Print settings in short format using generic reflection-based iteration.
+Automatically prints all fields in settings_dict without manual enumeration.
+"""
+function print_section_short(section::String, settings_dict::AbstractDict)
     should_print(s) = section == "all" || section == s
     
-    if should_print("general_settings")
-        gs = get(settings_dict, "general_settings", Dict())
-        println("\n[General Settings]")
-        println("  exp_name              :: String   | Name of the experiment")
-        println("    → $(get(gs, "exp_name", "N/A"))")
-        println("  path_out              :: String      | Base output directory")
-        println("    → $(get(gs, "path_out", "N/A"))")
-        println("  verbosity_level       :: Int         | 0=silent, 1=minimal, 2=detailed")
-        println("    → $(get(gs, "verbosity_level", 1))")
-        println("  seed                  :: Int?        | Random seed (nothing=random)")
-        println("    → $(get(gs, "seed", nothing))")
-        println("  make_plots            :: Bool        | Generate plot output (PNG)")
-        println("    → $(get(gs, "make_plots", true))")
-        println("  save_model_formats    :: Vector      | Formats for saving models (tex only, tvb coming)")
-        println("    → $(get(gs, "save_model_formats", ["tex"]))")
-    end
-    
-    if should_print("network_settings")
-        ns = get(settings_dict, "network_settings", Dict())
-        println("\n[Network Settings]")
-        println("  name                  :: String   | Network identifier")
-        println("    → $(get(ns, "name", "net1"))")
-        println("  n_nodes               :: Int      | Number of nodes in network")
-        println("    → $(get(ns, "n_nodes", "N/A"))")
-        println("  node_names            :: Vector   | Names of each node")
-        println("    → $(join(get(ns, "node_names", []), ", "))")
-        println("  node_models           :: Vector   | Model per node (Unknown=grammar-sampled)")
-        # Handle both String and RuleTree node models
-        node_models_raw = get(ns, "node_models", [])
-        is_all_strings = true
-        for x in node_models_raw
-            if !isa(x, String)
-                is_all_strings = false
-                break
-            end
-        end
-        node_models_display = if is_all_strings
-            join(node_models_raw, ", ")
-        else
-            join([x isa String ? x : serialize_rule_tree(x) for x in node_models_raw], ", ")
-        end
-        println("    → $(node_models_display)")
-        
-        # node_coords: Print actual coordinates
-        node_coords = get(ns, "node_coords", [])
-        println("  node_coords           :: Vector   | 3D coordinates of each node")
-        if isempty(node_coords)
-            println("    → (empty)")
-        else
-            for (i, coord) in enumerate(node_coords)
-                println("    → Node $i: $coord")
-            end
-        end
-        
-        # network_conn: Print matrix dimensions and values
-        conn = get(ns, "network_conn", [])
-        println("  network_conn          :: Matrix   | Connection strengths (n_nodes × n_nodes)")
-        if isempty(conn)
-            println("    → (empty)")
-        elseif conn isa Vector
-            println("    → $(conn)")
-        else
-            rows = length(conn)
-            cols = (rows > 0 && conn[1] isa Vector) ? length(conn[1]) : 1
-            println("    → $rows × $cols matrix")
-            for (i, row) in enumerate(conn)
-                println("       Row $i: $(row)")
-            end
-        end
-        
-        # network_delay: Print matrix
-        delay = get(ns, "network_delay", [])
-        println("  network_delay         :: Matrix   | Transmission delays (n_nodes × n_nodes)")
-        if isempty(delay)
-            println("    → (empty)")
-        elseif delay isa Vector
-            println("    → $(delay)")
-        else
-            rows = length(delay)
-            cols = (rows > 0 && delay[1] isa Vector) ? length(delay[1]) : 1
-            println("    → $rows × $cols matrix")
-            for (i, row) in enumerate(delay)
-                println("       Row $i: $(row)")
-            end
-        end
-        
-        # network_conn_funcs: Print matrix
-        funcs = get(ns, "network_conn_funcs", [])
-        println("  network_conn_funcs    :: Matrix   | Connection function types")
-        if isempty(funcs)
-            println("    → (empty)")
-        elseif funcs isa Vector
-            println("    → $(funcs)")
-        else
-            rows = length(funcs)
-            cols = (rows > 0 && funcs[1] isa Vector) ? length(funcs[1]) : 1
-            println("    → $rows × $cols matrix")
-            for (i, row) in enumerate(funcs)
-                println("       Row $i: $(row)")
-            end
-        end
-        
-        println("  sensory_input_conn    :: Vector   | Which nodes receive sensory input")
-        println("    → $(join(get(ns, "sensory_input_conn", []), ", "))")
-        println("  sensory_input_func    :: String   | Input dynamics function")
-        println("    → $(get(ns, "sensory_input_func", "none"))")
-        println("  sensory_seed      :: Int?     | Seed for input randomization")
-        println("    → $(get(ns, "sensory_seed", nothing))")
-        println("  init_seed         :: Int?     | Seed for initial condition sampling")
-        println("    → $(get(ns, "init_seed", nothing))")
-        println("  eeg_output            :: String   | EEG recording specification")
-        println("    → $(get(ns, "eeg_output", "default"))")
-    end
-    
-    if should_print("simulation_settings")
-        ss = get(settings_dict, "simulation_settings", Dict())
-        println("\n[Simulation Settings]")
-        tspan_val = get(ss, "tspan", [0.0, 1000.0])
-        t1 = (tspan_val isa Vector) ? tspan_val[1] : tspan_val[1]
-        t2 = (tspan_val isa Vector) ? tspan_val[2] : tspan_val[2]
-        println("  tspan                 :: Vector   | Time interval (ms): [start, end]")
-        println("    → [$t1, $t2]")
-        println("  dt                    :: Float    | Time step (ms)")
-        println("    → $(get(ss, "dt", "N/A"))")
-        println("  saveat                :: Float    | Output save frequency (ms)")
-        println("    → $(get(ss, "saveat", "N/A"))")
-        println("  solver                :: String   | ODE solver (Tsit5, RK4, etc.)")
-        println("    → $(get(ss, "solver", "Tsit5"))")
-        skw = get(ss, "solver_kwargs", Dict())
-        println("  solver_kwargs         :: Dict     | Solver configuration")
-        println("    abstol → $(get(skw, "abstol", 1e-6))")
-        println("    reltol → $(get(skw, "reltol", 1e-5))")
-        println("    maxiters → $(get(skw, "maxiters", 1e5))")
-    end
-    
-    if should_print("optimization_settings")
-        os = get(settings_dict, "optimization_settings", Dict())
-        println("\n[Optimization Settings]")
-        println("  method                :: String   | Optimizer: CMAES (only option)")
-        println("    → $(get(os, "method", "CMAES"))")
-        println("  abs_target_loss       :: Float    | Absolute loss target")
-        println("    → $(get(os, "abs_target_loss", 0.01))")
-        println("  reparametrize         :: Bool     | Use reparametrization strategy")
-        println("    → $(get(os, "reparametrize", true))")
-        println("  param_range_level     :: String   | Parameter range level (high/medium/low)")
-        println("    → $(get(os, "param_range_level", "high"))")
-        println("  n_restarts            :: Int      | Number of optimization restarts")
-        println("    → $(get(os, "n_restarts", 1))")
-        println("  maxiters              :: Int      | Maximum iterations per restart")
-        println("    → $(get(os, "maxiters", 2000))")
-        println("  time_limit_minutes    :: Int      | Time limit for optimization")
-        println("    → $(get(os, "time_limit_minutes", 120))")
-        println("  loss_abstol           :: Float    | Absolute tolerance for loss")
-        println("    → $(get(os, "loss_abstol", 1e-5))")
-        println("  loss_reltol           :: Float    | Relative tolerance for loss")
-        println("    → $(get(os, "loss_reltol", 1e-5))")
-        println("  save_optimization_history :: Bool | Save optimization trajectory")
-        println("    → $(get(os, "save_optimization_history", false))")
-        println("  save_modeled_psd      :: Bool     | Save modeled PSD output")
-        println("    → $(get(os, "save_modeled_psd", false))")
-        
-        ls = get(os, "loss_settings", Dict())
-        println("\n  [Loss Settings]")
-        println("    loss_fn             :: String   | fmin=1.0, fmax=48.0, fbands")
-        println("      → fmin            → $(get(ls, "fmin", 1.0))")
-        println("      → fmax            → $(get(ls, "fmax", 48.0))")
-        println("      → fbands          → $(join(get(ls, "fbands", ["delta", "theta", "alpha", "betalow", "betahigh"]), ", "))")
-        println("    psd_settings")
-        println("      → preproc         → $(get(ls, "psd_preproc", "log10"))")
-        println("      → welch_window    → $(get(ls, "psd_welch_window_sec", 2.0)) sec")
-        println("      → welch_overlap   → $(get(ls, "psd_welch_overlap", 0.5))")
-        println("      → welch_nperseg   → $(get(ls, "psd_welch_nperseg", 0))")
-        println("      → noise_avg_reps  → $(get(ls, "psd_noise_avg_reps", 1))")
-        println("    frequency_range")
-        println("      → fmin            → $(get(ls, "fmin", 1.0)) Hz")
-        println("      → fmax            → $(get(ls, "fmax", 48.0)) Hz")
-        println("    noise_settings")
-        println("      → measurement_noise → $(get(ls, "measurement_noise_std", 0.0))")
-        println("      → seed            → $(get(ls, "loss_noise_seed", nothing))")
-        println("    region_weighting")
-        println("      → roi_weight      → $(get(ls, "roi_weight", 1.0))")
-        println("      → bg_weight       → $(get(ls, "bg_weight", 0.4))")
-        
-        os_set = get(os, "optimizer_settings", Dict())
-        println("\n  [Optimizer Settings (CMAES)]")
-        println("    population_size     :: Int      | Population size for CMAES")
-        println("      → $(get(os_set, "population_size", 50))")
-        println("    sigma0              :: Float    | Initial step size")
-        println("      → $(get(os_set, "sigma0", 1.0))")
-        println("    K                   :: Float    | Learning rate factor")
-        println("      → $(get(os_set, "K", 0.5))")
-        println("    n_samples           :: Int      | Number of samples per generation")
-        println("      → $(get(os_set, "n_samples", 100))")
-        println("    learning_rate       :: Float    | Adam learning rate")
-        println("      → $(get(os_set, "learning_rate", 0.1))")
-        
-        hs = get(os, "hyperparameter_sweep", Dict())
-        if !isempty(hs)
-            println("\n  [Hyperparameter Sweep Settings]")
-            println("    sigma_mode              :: Symbol   | Sigma mode (auto, manual, etc.)")
-            println("      → $(get(hs, "sigma_mode", :auto))")
-            println("    param_range_levels      :: Vector   | Parameter range levels (high/medium/low)")
-            println("      → $(get(hs, "param_range_levels", []))")
-            println("    scale_sets              :: Vector   | Scale sets for reparametrization")
-            println("      → $(get(hs, "scale_sets", []))")
-            println("    population_grid         :: Vector   | Population sizes to test")
-            println("      → $(get(hs, "population_grid", []))")
-            println("    sigma_values_override   :: Vector?  | Override sigma values (nothing=auto)")
-            println("      → $(get(hs, "sigma_values_override", nothing))")
-            println("    restart_grid            :: Vector   | Number of restarts to test")
-            println("      → $(get(hs, "restart_grid", []))")
-            println("    base_reparam_scales     :: Dict     | Base reparametrization scales")
-            println("      → $(get(hs, "base_reparam_scales", Dict()))")
-            println("    sigma_values_override   :: Vector?  | Override sigma values ([2.0, 8.0]=default)") 
-            println("      → $(get(hs, "sigma_values_override", [2.0, 8.0]))") 
-            axes = get(hs, "hyperparameter_axes", [])
-            if !isempty(axes)
-                println("    hyperparameter_axes     :: Vector   | Custom sweep axes")
-                for (i, axis) in enumerate(axes)
-                    hp_names = get(axis, "hyperparameter", [])
-                    values = get(axis, "values", [])
-                    println("      → Axis $i: $(join(hp_names, ", "))")
-                    for (j, v) in enumerate(values)
-                        println("         Value $j: $v")
-                    end
-                end
-            else
-                println("    hyperparameter_axes     :: Vector   | Custom sweep axes (empty)")
-            end
+    for (section_name, section_data) in settings_dict
+        if should_print(section_name)
+            # Format section name: "general_settings" → "General Settings"
+            formatted_name = replace(section_name, "_" => " ") |> titlecase
+            println("\n[$formatted_name]")
+            print_dict_short(section_data, section_name, 2)
         end
     end
+end
+
+"""
+    print_section_long(section::String, settings_dict::AbstractDict)
     
-    if should_print("data_settings")
-        ds = get(settings_dict, "data_settings", Dict())
-        println("\n[Data Settings]")
-        println("  data_file             :: String   | Path to data CSV file")
-        println("    → $(get(ds, "data_file", ""))")
-        println("  target_channel        :: String   | Channel/component to fit")
-        println("    → $(get(ds, "target_channel", "IC3"))")
-        println("  task_type             :: String?  | Type of task (optional)")
-        println("    → $(get(ds, "task_type", nothing))")
-        println("  fs                    :: Float?   | Sampling frequency (optional)")
-        println("    → $(get(ds, "fs", nothing))")
-    end
+Print settings in long format using generic reflection-based iteration.
+Automatically prints all fields with type information without manual enumeration.
+"""
+function print_section_long(section::String, settings_dict::AbstractDict)
+    should_print(s) = section == "all" || section == s
     
-    if should_print("sampling_settings")
-        samp = get(settings_dict, "sampling_settings", Dict())
-        println("\n[Sampling Settings]")
-        println("  grammar_file          :: String   | Path to grammar configuration file")
-        println("    → $(get(samp, "grammar_file", "grammars/default_grammar.cfg"))")
-        println("  n_samples             :: Int      | Number of models to sample")
-        println("    → $(get(samp, "n_samples", 10))")
-        println("  only_unique           :: Bool     | Keep only unique models")
-        println("    → $(get(samp, "only_unique", true))")
-        println("  max_resample_attempts :: Int      | Max attempts to resample for uniqueness")
-        println("    → $(get(samp, "max_resample_attempts", 100))")
-        println("  grammar_seed          :: Int?     | Random seed for sampling (nothing=random)")
-        println("    → $(get(samp, "grammar_seed", nothing))")
+    for (section_name, section_data) in settings_dict
+        if should_print(section_name)
+            # Format section name: "general_settings" → "General Settings"
+            formatted_name = replace(section_name, "_" => " ") |> titlecase
+            println("\n[$formatted_name]")
+            print_dict_long(section_data, section_name, 2)
+        end
     end
 end
 
 """
     load_settings(settings_path::String)::Settings
 
-Load and initialize settings from a JSON file with workflow setup.
+Load and initialize settings from a JSON file.
 
 This is the primary entry point for loading ENEEGMA configuration files.
 It handles:
 - Loading JSON from file
-- Migrating legacy hyperparameter sweep settings
 - Building Settings object (all defaults applied by constructors)
 - Setting up task-local storage
 - Configuring global verbosity level
@@ -892,22 +631,6 @@ function load_settings(settings_path::String)::Settings
     if general_dict === nothing
         general_dict = Dict{String, Any}()
         settings["general_settings"] = general_dict
-    end
-
-    # Ensure hyperparameter sweep settings live under optimization settings
-    legacy = nothing
-    if haskey(settings, "hyperparameter_sweep")
-        legacy = settings["hyperparameter_sweep"]
-        delete!(settings, "hyperparameter_sweep")
-    elseif haskey(settings, "hyper_sweep")
-        legacy = settings["hyper_sweep"]
-        delete!(settings, "hyper_sweep")
-    end
-    if legacy !== nothing
-        optdict = get!(settings, "optimization_settings", Dict{String, Any}())
-        if !haskey(optdict, "hyperparameter_sweep")
-            optdict["hyperparameter_sweep"] = legacy
-        end
     end
 
     # Build Settings object from loaded settings dict

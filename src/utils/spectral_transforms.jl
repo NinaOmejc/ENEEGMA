@@ -4,40 +4,33 @@ using DSP
 """
     SpectralTransforms Module
 
-This module provides comprehensive tools for spectral analysis of time series data, 
-particularly suited for EEG signal processing. It includes methods for computing 
-various time-frequency representations, power spectral density estimation, 
-normalization, and frequency band analysis.
+Spectral analysis tools for power spectral density (PSD) computation with flexible 
+preprocessing pipelines. Designed for EEG and neural signal analysis.
 
 ## Main Methods
 
 ### Power Spectral Density (PSD)
-- `compute_welch_pow_spectrum()`: Single-signal Welch PSD estimation
-- `compute_welch_pow_spectra()`: Multi-signal Welch PSD estimation for DataFrames
-- `calculate_spectrum()`: Complete spectral calculation with optional normalization
-- `calculate_spectra()`: Process multiple signals from DataFrames
+- `compute_welch_psd()`: Single-signal Welch PSD estimation
+- `compute_preprocessed_welch_psd()`: Welch PSD with preprocessing pipeline (normalization, log transform, smoothing)
+- `compute_noisy_preprocessed_welch_psd()`: Welch PSD with preprocessing and noise averaging
 
-### Time-Frequency Representations
-- `compute_cwt()`: Continuous Wavelet Transform using Morlet wavelets
-- `compute_stft()`: Short-Time Fourier Transform with customizable parameters
+### PSD Preprocessing Pipeline
+- Normalization methods: relative, db, zscore, minmax, percent, log, log10, relative_db
+- Log transforms: log, log2, log10
+- Smoothing methods: savitzky_golay, gaussian, moving_avg
+- Offset reduction: mean, median
+- Extensible token-based pipeline syntax (e.g., "relative-log10-savgol")
 
-### Normalization Methods
-- `normalize_power_spectrum()`: Single signal normalization (db, relative, zscore, minmax, percent, log, log10, relative_db)
+### Normalization (deprecated - use preprocessing pipeline instead)
+- `normalize_power_spectrum()`: Single signal normalization
 - `normalize_power_spectra()`: Multi-signal normalization for DataFrames
-
-### Frequency Band Analysis
-- `extract_frequency_band_powers()`: Extract power in standard EEG frequency bands (single or multi-signal)
-- `calculate_band_relative_powers()`: Calculate relative power across frequency bands
-
-### Smoothing
-- `smooth_tf_powers()`: Apply smoothing to time-frequency representations (gaussian, moving_avg)
 
 ## Typical Workflow
 
-1. Load time series data into a DataFrame with 'time' column
-2. Calculate power spectra using `compute_welch_pow_spectra()`
-3. Optionally normalize using `normalize_power_spectra()`
-4. Extract frequency band powers using `extract_frequency_band_powers()`
+1. Load time series data into a DataFrame
+2. Compute preprocessed PSD: `compute_preprocessed_welch_psd(signal, fs; loss_settings=loss_settings, data_settings=data_settings)`
+3. Specify preprocessing via PSDSettings.preproc_pipeline or LossSettings.psd_preproc
+4. Results include normalized/log-transformed power values
 5. For time-frequency analysis, use `compute_stft()` or `compute_cwt()`
 """
 
@@ -134,8 +127,6 @@ function _ensure_spectrum_workspace(workspace::Union{Nothing, SpectrumWorkspace}
     return workspace
 end
 
-_default_overlap() = 0.5
-
 const _IMAGEFILTERING_MODULE = Ref{Union{Module, Nothing}}(nothing)
 const _IMAGEFILTERING_TRIED = Ref(false)
 
@@ -168,28 +159,38 @@ function _resolve_nfft(len::Int, nfft::Union{Int, Nothing})
     end
 end
 
-function _resolve_welch_params(len::Int, fs::Float64, loss_settings::Union{Nothing, LossSettings}, nfft::Union{Int, Nothing}, overlap::Float64)
-    nperseg = min(len, 256)
-    nfft_eff = _resolve_nfft(len, nfft)
-    overlap_eff = overlap
+function _resolve_welch_params(len::Int, fs::Float64, data_settings::Union{Nothing, Any})
+    # Get parameters from data_settings if available; otherwise use sensible defaults
+    if data_settings !== nothing && hasproperty(data_settings, :psd)
+        psd_settings = data_settings.psd
+        
+        # Determine nperseg
+        if psd_settings.welch_nperseg > 0
+            nperseg = min(psd_settings.welch_nperseg, len)
+        elseif psd_settings.welch_window_sec > 0 && fs > 0
+            nperseg = Int(round(fs * psd_settings.welch_window_sec))
+            nperseg = clamp(nperseg, 64, len)
+        else
+            nperseg = min(len, 256)
+        end
 
-    loss_settings === nothing && return nperseg, nfft_eff, overlap_eff
-
-    if loss_settings.psd_welch_nperseg > 0
-        nperseg = min(loss_settings.psd_welch_nperseg, len)
-    elseif loss_settings.psd_welch_window_sec > 0 && fs > 0
-        nperseg = Int(round(fs * loss_settings.psd_welch_window_sec))
-        nperseg = clamp(nperseg, 64, len)
-    end
-
-    overlap_eff = loss_settings.psd_welch_overlap
-
-    if loss_settings.psd_welch_nfft > 0
-        nfft_eff = max(loss_settings.psd_welch_nfft, nperseg)
+        # Determine nfft
+        nfft_eff = if psd_settings.welch_nfft > 0
+            max(psd_settings.welch_nfft, nperseg)
+        else
+            max(_resolve_nfft(len, nothing), nperseg)
+        end
+        
+        # Get overlap from settings
+        overlap_eff = psd_settings.welch_overlap
     else
-        nfft_eff = max(_resolve_nfft(len, nfft), nperseg)
+        # Fallback defaults when data_settings is unavailable
+        nperseg = min(len, 256)
+        nfft_eff = _resolve_nfft(len, nothing)
+        overlap_eff = 0.1
     end
 
+    # Ensure at least 2 segments; otherwise disable overlap
     hop = max(1, Int(round(nperseg * (1 - overlap_eff))))
     nseg_est = 1 + max(0, (len - nperseg) ÷ hop)
     if nseg_est < 2
@@ -265,240 +266,22 @@ function _welch_psd!(ws::WelchWorkspace, data::AbstractVector{<:Real}, xlims::Un
     return _select_frequency_range!(ws, xlims)
 end
 
-function calculate_spectra(dfs_sources::Vector{DataFrame}, 
-                           normalization_method::String="")::Vector{DataFrame}
 
-    dfs_sources_spect = Vector{DataFrame}()
-
-    for df_source in dfs_sources
-        df_source_spect = calculate_spectrum(df_source; normalization_method=normalization_method)
-        push!(dfs_sources_spect, df_source_spect)
-    end
-
-    return dfs_sources_spect
-end
-
-
-function calculate_spectrum(df_source::DataFrame; normalization_method::String="")
-    
-    # Calculate sampling frequency from time data
-    time_col = df_source.time
-    fs = 1.0 / (time_col[2] - time_col[1])
-    
-    # Compute frequency domain data for all signals
-    df_source_spect = compute_welch_pow_spectra(df_source, fs)
-
-    # Normalize
-    if normalization_method != ""
-        df_source_spect_norm = normalize_power_spectra(df_source_spect; method=normalization_method)
-    else
-        df_source_spect_norm = df_source_spect
-    end
-    return df_source_spect_norm
-end
-
-
-###################################################################################
-## (TIME) FREQ TRANSFORMS
-###################################################################################
-
-function compute_cwt(data::Vector{Float64}, fs::Float64; 
-                     ω₀=6.0, min_freq=1.0, max_freq=fs/4, n_freqs=50)
-    
-    n = length(data)
-    dt = 1.0 / fs
-    t = (0:(n-1)) .* dt
-    
-    # Create logarithmically spaced frequencies between min_freq and max_freq
-    freqs = exp.(range(log(min_freq), log(max_freq), length=n_freqs))
-    
-    # Prepare output matrix
-    powers = zeros(n_freqs, n)
-    
-    # Calculate wavelet transform for each frequency
-    for (i, freq) in enumerate(freqs)
-        # Scale for this frequency
-        scale = ω₀ / (2π * freq)
-        
-        # Create time-centered wavelet
-        t_center = n*dt/2
-        t_wavelet = t .- t_center
-        
-        # Create Morlet wavelet
-        wavelet = @. exp(im * ω₀ * t_wavelet/scale) * exp(-(t_wavelet/scale)^2 / 2)
-        
-        # Normalize
-        wavelet ./= norm(wavelet)
-        
-        # Compute convolution via FFT
-        data_fft = fft(data)
-        wavelet_fft = fft(wavelet)
-        conv_result = ifft(data_fft .* wavelet_fft)
-        
-        # Store power for this frequency
-        powers[i, :] = abs.(conv_result).^2
-    end
-
-    return freqs, powers
-end
-
-"""
-    compute_stft(data::Vector{Float64}, fs::Float64; 
-                window_size=256, overlap=0.75, 
-                min_freq=1.0, max_freq=fs/4, n_freqs=50)
-
-Compute Short-Time Fourier Transform (STFT) of the input data.
-
-# Arguments
-- `data`: Input time series data
-- `fs`: Sampling frequency (Hz)
-- `window_size`: Size of each time window (samples)
-- `overlap`: Overlap between consecutive windows (fraction between 0 and 1)
-- `min_freq`: Minimum frequency to analyze (Hz)
-- `max_freq`: Maximum frequency to analyze (Hz)
-- `n_freqs`: Number of frequency bins
-
-# Returns
-- `freqs`: Vector of frequencies (Hz)
-- `powers`: Power matrix (frequencies × times)
-"""
-function compute_stft(data::Vector{Float64}, fs::Float64; 
-                     window_size=256, overlap=0.75,
-                     min_freq=1.0, max_freq=fs/4, n_freqs=50,
-                     smoothing="none", time_sigma=1.0, freq_sigma=1.0,
-                     time_window=3, freq_window=3)
-    
-    # Calculate hop size and prepare windows
-    hop_size = round(Int, window_size * (1 - overlap))
-    window_func = DSP.hanning(window_size)
-    
-    # Calculate the number of frames
-    n_frames = 1 + div(length(data) - window_size, hop_size)
-    
-    # Create logarithmically spaced frequencies between min_freq and max_freq
-    freqs = exp.(range(log(min_freq), log(max_freq), length=n_freqs))
-    
-    # Calculate frequency bin indices (for later extraction)
-    fft_freqs = fftfreq(window_size, fs) |> fftshift
-    freq_indices = Vector{Int}(undef, n_freqs)
-    
-    for (i, f) in enumerate(freqs)
-        # Find closest frequency bin
-        _, idx = findmin(abs.(fft_freqs .- f))
-        freq_indices[i] = idx
-    end
-    
-    # Prepare output matrix
-    powers = zeros(n_freqs, n_frames)
-    
-    # Process each frame
-    for frame in 1:n_frames
-        # Extract frame data
-        start_idx = (frame - 1) * hop_size + 1
-        end_idx = min(start_idx + window_size - 1, length(data))
-        
-        # Apply window function
-        if end_idx - start_idx + 1 == window_size
-            frame_data = data[start_idx:end_idx] .* window_func
-        else
-            # Zero-pad if near the end
-            frame_data = zeros(window_size)
-            frame_data[1:(end_idx-start_idx+1)] = data[start_idx:end_idx] .* window_func[1:(end_idx-start_idx+1)]
-        end
-        
-        # Compute FFT
-        fft_result = fft(frame_data) |> fftshift
-        
-        # Extract powers at the desired frequencies
-        for (i, idx) in enumerate(freq_indices)
-            powers[i, frame] = abs2(fft_result[idx])
-        end
-    end
-
-    # After calculating powers, apply smoothing
-    if smoothing != "none"
-        powers = smooth_tf_powers(powers; 
-                                 method=smoothing,
-                                 time_sigma=time_sigma, 
-                                 freq_sigma=freq_sigma,
-                                 time_window=time_window,
-                                 freq_window=freq_window)
-    end
-    
-    
-    return freqs, powers, window_size, hop_size
-end
-
-
-function compute_welch_pow_spectrum(data::AbstractVector{<:Real}, fs::Real;
+function compute_welch_psd(data::AbstractVector{<:Real}, fs::Real;
                                     window_type::Function=DSP.hanning,
                                     xlims::Union{Tuple{Float64, Float64}, Nothing}=nothing,
                                     nperseg::Union{Int, Nothing}=nothing,
                                     nfft::Union{Int, Nothing}=nothing,
-                                    overlap::Float64=_default_overlap(),
+                                    overlap::Float64=0.1,
                                     workspace::Union{Nothing, WelchWorkspace}=nothing)
     len = length(data)
     len == 0 && return Float64[], Float64[]
     fs_val = Float64(fs)
     nperseg_val = nperseg === nothing ? min(len, 256) : min(nperseg, len)
-    nfft_val = max(_resolve_nfft(len, nfft), nperseg_val)
-    ws = _ensure_welch_workspace(workspace, nperseg_val, nfft_val, fs_val, window_type, overlap)
-    freq_view, psd_view = _welch_psd!(ws, data, xlims)
+    nfft_val = max(ENEEGMA._resolve_nfft(len, nfft), nperseg_val)
+    ws = ENEEGMA._ensure_welch_workspace(workspace, nperseg_val, nfft_val, fs_val, window_type, overlap)
+    freq_view, psd_view = ENEEGMA._welch_psd!(ws, data, xlims)
     return copy(freq_view), copy(psd_view)
-end
-
-"""
-    compute_welch_pow_spectra(df::DataFrame, fs::Float64; 
-                              signal_cols=nothing, window_type=DSP.hanning, xlims=nothing)
-
-Compute Welch power spectra for multiple signals in a DataFrame. Welch's method returns 
-power spectral density (PSD) — typically in units of V²/Hz (or arbitrary units if 
-uncalibrated).
-
-# Arguments
-- `df`: DataFrame containing time series data
-- `fs`: Sampling frequency (Hz)
-- `signal_cols`: Vector of column names to process (if nothing, excludes :time column)
-- `window_type`: Window function for Welch method
-- `xlims`: Tuple (fmin, fmax) to limit frequency range, or nothing for full range
-
-# Returns
-- DataFrame with columns: signal, frequency, power
-"""
-function compute_welch_pow_spectra(df::DataFrame, fs::Float64; 
-                                   signal_cols=nothing, window_type=DSP.hanning, xlims=nothing)
-    
-    # Get signal columns (exclude time column if not specified)
-    if signal_cols === nothing
-        signal_cols = filter(n -> n != "time", names(df))
-    end
-    
-    fr_df = DataFrame()
-    workspace = nothing
-    resolved_nfft = nothing
-    resolved_nperseg = nothing
-    
-    # Compute frequency domain data for each signal
-    for (ic, col) in enumerate(signal_cols)
-        signal_data = Vector{Float64}(df[!, col])
-        if workspace === nothing
-            resolved_nperseg = min(length(signal_data), 256)
-            resolved_nfft = max(_resolve_nfft(length(signal_data), nothing), resolved_nperseg)
-            workspace = WelchWorkspace(resolved_nperseg, resolved_nfft, fs; window_type=window_type, overlap=_default_overlap())
-        end
-        freqs, powers = compute_welch_pow_spectrum(signal_data, fs;
-                                                   window_type=window_type,
-                                                   xlims=xlims,
-                                                   nperseg=resolved_nperseg,
-                                                   nfft=resolved_nfft,
-                                                   workspace=workspace)
-        if ic == 1
-            fr_df.freq = freqs
-        end
-        fr_df[!, col] = powers
-    end
-    
-    return fr_df
 end
 
 ###################################################################################
@@ -690,7 +473,7 @@ function _apply_psd_preproc_op!(op::AbstractPSDPreprocessOp,
     return out
 end
 
-function run_psd_preproc_pipeline!(ws::SpectrumWorkspace,
+function _run_psd_preproc_pipeline!(ws::SpectrumWorkspace,
                                    psd::Vector{Float64},
                                    freqs::Vector{Float64},
                                    ops::Vector{AbstractPSDPreprocessOp})
@@ -751,7 +534,7 @@ control the preprocessing order. If omitted, the raw PSD is returned unless
 Returns `(freqs, smoothed_log_power)`.
 """
 function compute_preprocessed_welch_psd(
-    data::AbstractVector{<:Real},
+    signal::AbstractVector{<:Real},
     fs::Real;
     window_type::Function=DSP.hanning,
     xlims::Union{Tuple{Float64,Float64},Nothing}=(1., 48.),
@@ -760,29 +543,52 @@ function compute_preprocessed_welch_psd(
     poly_order::Int=2,
     rel_eps::Float64=1e-12,
     smooth_sigma::Float64=1.0,
+    overlap::Float64=0.1,
     preproc_pipeline::Union{Nothing, AbstractString}=nothing,
     loss_settings::Union{Nothing, LossSettings}=nothing,
+    data_settings::Union{Nothing, DataSettings}=nothing,
     workspace::Union{Nothing, SpectrumWorkspace}=nothing,
-    overlap::Float64=_default_overlap(),
 )
 
-    len = length(data)
+    len = length(signal)
     len == 0 && return Float64[], Float64[]
     fs_val = Float64(fs)
-    nperseg_val, nfft_val, overlap_val = _resolve_welch_params(len, fs_val, loss_settings, nfft, overlap)
+    nperseg_val, nfft_val, overlap_val = ENEEGMA._resolve_welch_params(len, fs_val, data_settings)
 
     fspan = xlims
     pipeline_spec = preproc_pipeline
 
+    ctx_window_size = window_size
+    ctx_poly_order = poly_order
+    ctx_rel_eps = rel_eps
+    ctx_sigma = smooth_sigma
+
     ws = workspace
+    
+    # Extract PSD preprocessing settings from data_settings if available
+    if data_settings !== nothing && hasproperty(data_settings, :psd)
+        psd_settings = data_settings.psd
+        ctx_window_size = psd_settings.window_size
+        ctx_poly_order = psd_settings.smooth_poly_order
+        ctx_rel_eps = psd_settings.rel_eps
+        ctx_sigma = psd_settings.smooth_sigma
+        pipeline_spec === nothing && (pipeline_spec = psd_settings.preproc_pipeline)
+        if psd_settings.workspace !== nothing
+            ws = psd_settings.workspace
+        end
+    end
+    
+    # Loss settings provides frequency range only
     if loss_settings !== nothing
         fspan = (loss_settings.fmin, loss_settings.fmax)
-        pipeline_spec === nothing && (pipeline_spec = loss_settings.psd_preproc)
     end
 
-    ws = _ensure_spectrum_workspace(ws, nperseg_val, nfft_val, fs_val, window_type, overlap_val)
+    ws = ENEEGMA._ensure_spectrum_workspace(ws, nperseg_val, nfft_val, fs_val, window_type, overlap_val)
+    if data_settings !== nothing && hasproperty(data_settings, :psd)
+        data_settings.psd.workspace = ws
+    end
 
-    freq_view, psd_view = _welch_psd!(ws.welch, data, fspan)
+    freq_view, psd_view = ENEEGMA._welch_psd!(ws.welch, signal, fspan)
     freqs = copy(freq_view)
     psd = copy(psd_view)
 
@@ -790,16 +596,72 @@ function compute_preprocessed_welch_psd(
     if effective_spec === nothing
         effective_spec = loss_settings === nothing ? "none" : loss_settings.psd_preproc
     end
-    canonical_spec = _canonicalize_psd_preproc_string(effective_spec)
+    canonical_spec = ENEEGMA._canonicalize_psd_preproc_string(effective_spec)
     if canonical_spec == "none"
         return freqs, psd
     end
 
-    ops = _parse_psd_preproc_pipeline!(canonical_spec)
-    psd = run_psd_preproc_pipeline!(ws, psd, freqs, ops)
+    ops = if loss_settings !== nothing && pipeline_spec === nothing
+        ENEEGMA._get_losssettings_psd_ops!(loss_settings,
+                                           canonical_spec,
+                                           ctx_window_size,
+                                           ctx_poly_order,
+                                           ctx_rel_eps,
+                                           ctx_sigma)
+    else
+        ctx = ENEEGMA.PSDPipelineContext(ctx_window_size, ctx_poly_order, ctx_rel_eps, ctx_sigma)
+        ENEEGMA.parse_psd_preproc_pipeline(canonical_spec, ctx)
+    end
+    psd = ENEEGMA._run_psd_preproc_pipeline!(ws, psd, freqs, ops)
 
     return freqs, psd
 end
+
+
+
+# ================================
+# == PSD computation with noise averaging ==
+# ================================
+
+function compute_noisy_preprocessed_welch_psd(model_prediction::AbstractVector{<:Real},
+                                fs::Real,
+                                loss_settings::LossSettings,
+                                data_settings::DataSettings)
+    reps = max(data_settings.psd.noise_avg_reps, 1)
+    sigma_effective = max(data_settings.measurement_noise_std, 0.0)
+
+    if sigma_effective <= 0
+        return ENEEGMA.compute_preprocessed_welch_psd(model_prediction, fs; 
+                                                      loss_settings=loss_settings,
+                                                      data_settings=data_settings)
+    end
+
+    seed_value = data_settings.psd_noise_seed
+    freqs = Float64[]
+    accum = Float64[]
+    for rep in 1:reps
+        # Create RNG for this repetition (or use nothing for non-deterministic)
+        rng = if seed_value === nothing
+            nothing  # Non-deterministic
+        else
+            Random.MersenneTwister(Int(seed_value) + rep - 1)
+        end
+        
+        noisy = Float64.(model_prediction)
+        apply_measurement_noise!(noisy, sigma_effective, rng)
+        freqs_rep, powers_rep = compute_preprocessed_welch_psd(noisy, fs; 
+                                                               loss_settings=loss_settings,
+                                                               data_settings=data_settings)
+        if isempty(freqs)
+            freqs = freqs_rep
+            accum = zeros(length(powers_rep))
+        end
+        accum .+= powers_rep
+    end
+    return freqs, accum ./ reps
+end
+
+
 
 ###################################################################################
 ## SMOOTHING
@@ -839,52 +701,6 @@ function smooth_power_spectrum(powers::Vector{Float64};
 end
 
 
-function smooth_tf_powers(powers::Matrix{Float64}; 
-                          method="gaussian", 
-                          time_sigma=1.0, 
-                          freq_sigma=1.0,
-                          time_window=3, 
-                          freq_window=3)
-    
-    if method == "none"
-        return powers
-    elseif method == "gaussian"
-        img = _require_imagefiltering("Gaussian")
-        σ = (freq_sigma, time_sigma)  # (y, x) format
-        return img.imfilter(powers, img.Kernel.gaussian(σ))
-    elseif method == "moving_avg"
-        # Simple moving average filter
-        result = copy(powers)
-        n_freqs, n_times = size(powers)
-        
-        # Apply moving average in frequency dimension
-        if freq_window > 1
-            for t in 1:n_times
-                for f in 1:n_freqs
-                    window_start = max(1, f - div(freq_window, 2))
-                    window_end = min(n_freqs, f + div(freq_window, 2))
-                    result[f, t] = mean(powers[window_start:window_end, t])
-                end
-            end
-        end
-        
-        # Apply moving average in time dimension
-        if time_window > 1
-            temp = copy(result)
-            for f in 1:n_freqs
-                for t in 1:n_times
-                    window_start = max(1, t - div(time_window, 2))
-                    window_end = min(n_times, t + div(time_window, 2))
-                    result[f, t] = mean(temp[f, window_start:window_end])
-                end
-            end
-        end
-        
-        return result
-    else
-        error("Unknown smoothing method: $method")
-    end
-end
 
 ###################################################################################
 ## NORMALIZATION
@@ -1014,331 +830,4 @@ function normalize_power_spectra(fr_data::DataFrame; method::String="db", signal
     return normalized_df
 end
 
-###################################################################################
-## FREQ BANDS
-###################################################################################
 
-"""
-    calculate_band_relative_powers(band_powers::Dict{String, Float64}, total_power::Float64; 
-                                  normalize_method::String="relative_total")
-
-Calculate relative powers for frequency bands based on normalization method.
-
-# Arguments
-- `band_powers`: Dictionary of band names and their absolute power values
-- `total_power`: Total power across all frequencies (for relative_total method)
-- `normalize_method`: Normalization method
-
-# Returns
-- Dictionary of band names and (absolute_power, relative_power) tuples
-"""
-function calculate_band_relative_powers(band_powers::Dict{String, Float64}, total_power::Float64; 
-                                       normalize_method::String="relative_total")
-    
-    results = Dict{String, Float64}()
-    
-    if normalize_method == "relative_total"
-        # Each band as percentage of total power across all frequencies
-        for (band_name, band_power) in band_powers
-            relative_power = (band_power / total_power) * 100
-            results[band_name] = relative_power
-        end
-        
-    elseif normalize_method == "relative_bands"
-        # Each band as percentage of sum of all band powers
-        total_band_power = sum(values(band_powers))
-        for (band_name, band_power) in band_powers
-            relative_power = total_band_power > 0 ? (band_power / total_band_power) * 100 : 0.0
-            results[band_name] = relative_power
-        end
-        
-    elseif normalize_method == "absolute"
-        # No normalization - just raw power values or if it was normalized already
-        for (band_name, band_power) in band_powers
-            results[band_name] = band_power
-        end
-        
-    else
-        error("Unknown normalization method: $normalize_method. Available: relative_total, relative_bands, absolute")
-    end
-    
-    return results
-end
-
-"""
-    extract_frequency_bands(freqs::Vector{Float64}, powers::Vector{Float64}; 
-                           bands::Dict{String, Tuple{Float64, Float64}}=nothing,
-                           normalize_method::String="relative_total")
-
-Extract power in specific frequency bands and calculate relative power for a single signal.
-"""
-function extract_frequency_band_powers(freqs::Vector{Float64}, powers::Vector{Float64}; 
-                                bands::Union{Dict{String, Tuple{Float64, Float64}}, Nothing}=nothing,
-                                normalize_method::String="relative_total")
-    
-    # Default EEG frequency bands if not provided
-    if bands === nothing
-        bands = get_freq_bands()
-    end
-    
-    @assert length(freqs) == length(powers) "Frequency and power vectors must have the same length"
-    
-    # Calculate total power for normalization
-    total_power = sum(powers)
-    
-    # Extract power for each band
-    band_powers = Dict{String, Float64}()
-    
-    for (band_name, (fmin, fmax)) in bands
-        # Find frequency indices within band
-        band_indices = findall(f -> fmin <= f <= fmax, freqs)
-        
-        if !isempty(band_indices)
-            # Sum power in this band (trapezoidal integration approximation)
-            band_power = sum(powers[band_indices])
-            band_powers[band_name] = band_power
-        else
-            vwarn("No frequencies found in band $band_name ($fmin-$fmax Hz)"; level=2)
-            band_powers[band_name] = 0.0
-        end
-    end
-    
-    # Use the modular normalization function
-    return calculate_band_relative_powers(band_powers, total_power; normalize_method=normalize_method)
-end
-
-
-
-function extract_frequency_band_powers(fr_data::DataFrame; 
-                                bands::Union{Dict{String, Tuple{Float64, Float64}}, Nothing}=nothing,
-                                normalize_method::String="relative_total")
-    
-    # Default EEG frequency bands if not provided
-    if bands === nothing
-        bands = get_freq_bands()
-        @info "Using default EEG frequency bands: $(keys(bands))"
-    end
-    
-    # Get signal columns (exclude freq column)
-    signal_cols = filter(n -> n != "freq", names(fr_data))
-    
-    # Initialize results DataFrame
-    results = DataFrame(
-        signal = String[],
-        band = String[],
-        power = Float64[],
-        relative_power = Float64[]
-    )
-    
-    # Process each signal
-    for signal_col in signal_cols
-        freqs = fr_data.freq
-        powers = fr_data[!, signal_col]
-        
-        # Calculate total power for normalization
-        total_power = sum(powers)
-        
-        # Extract power for each band
-        band_powers = Dict{String, Float64}()
-        
-        for (band_name, (fmin, fmax)) in bands
-            # Find frequency indices within band
-            band_indices = findall(f -> fmin <= f <= fmax, freqs)
-            
-            if !isempty(band_indices)
-                # Sum power in this band (trapezoidal integration approximation)
-                band_power = sum(powers[band_indices])
-                band_powers[band_name] = band_power
-            else
-                vwarn("No frequencies found in band $band_name ($fmin-$fmax Hz) for signal $signal_col"; level=2)
-                band_powers[band_name] = 0.0
-            end
-        end
-        
-        # Use the modular normalization function
-        normalized_results = calculate_band_relative_powers(band_powers, total_power; normalize_method=normalize_method)
-        
-        # Add results to DataFrame
-        for (band_name, (absolute_power, relative_power)) in normalized_results
-            push!(results, (signal_col, band_name, absolute_power, relative_power))
-        end
-    end
-    
-    return results
-end
-
-
-###################################################################################
-## EXAMPLES
-###################################################################################
-
-"""
-    Example Usage of Spectral Transform Functions
-
-This section demonstrates typical use cases for spectral analysis.
-"""
-
-# Example 1: Basic Welch Power Spectrum Calculation
-# ================================================
-# Compute power spectral density for a single signal using Welch's method
-#
-# data = randn(1000)  # 1000 samples of random data
-# fs = 100.0  # Sampling frequency: 100 Hz
-# freqs, powers = compute_welch_pow_spectrum(data, fs; xlims=(1.0, 50.0))
-#
-# This returns frequencies (1-50 Hz) and corresponding power values
-
-
-# Example 2: Multi-Signal DataFrame Processing
-# =============================================
-# Process multiple signals from a DataFrame with normalization
-#
-# df = DataFrame(
-#     time = range(0, 10, length=1000),
-#     signal_1 = randn(1000),
-#     signal_2 = randn(1000)
-# )
-# fs = 100.0
-# df_spectra = compute_welch_pow_spectra(df, fs)
-# df_spectra_db = normalize_power_spectra(df_spectra; method="db")
-#
-# Result: DataFrame with 'freq' column and normalized power for each signal
-
-
-# Example 3: Frequency Band Power Analysis (Single Signal)
-# =========================================================
-# Extract power in standard EEG bands (delta, theta, alpha, beta, gamma)
-#
-# freqs, powers = compute_welch_pow_spectrum(data, 100.0)
-# band_results = extract_frequency_band_powers(freqs, powers; 
-#                                             normalize_method="relative_total")
-#
-# Result: Dictionary with bands as keys, (absolute_power, relative_power) as values
-# Example output: Dict("delta" => (0.5, 15.2), "theta" => (1.2, 34.1), ...)
-
-
-# Example 4: Frequency Band Analysis (Multi-Signal DataFrame)
-# ============================================================
-# Process multiple signals and extract band powers
-#
-# df_spectra = compute_welch_pow_spectra(df, 100.0)
-# band_results = extract_frequency_band_powers(df_spectra; 
-#                                             normalize_method="relative_bands")
-#
-# Result: DataFrame with columns [signal, band, power, relative_power]
-#         One row per (signal, band) combination
-
-
-# Example 5: Short-Time Fourier Transform (STFT)
-# ===============================================
-# Compute time-frequency representation with smoothing
-#
-# data = randn(5000)  # 5 seconds at 1000 Hz
-# fs = 1000.0
-# freqs, powers, wsize, hop = compute_stft(data, fs; 
-#                                          window_size=512,
-#                                          overlap=0.75,
-#                                          min_freq=1.0,
-#                                          max_freq=100.0,
-#                                          smoothing="gaussian",
-#                                          freq_sigma=2.0,
-#                                          time_sigma=1.0)
-#
-# Result: freqs (vector), powers (n_freqs × n_times matrix)
-# Each column represents a time window, each row a frequency
-
-
-# Example 6: Continuous Wavelet Transform (CWT)
-# ==============================================
-# Compute CWT using Morlet wavelets
-#
-# data = randn(2000)
-# fs = 100.0
-# freqs, powers = compute_cwt(data, fs; 
-#                            ω₀=6.0,
-#                            min_freq=1.0,
-#                            max_freq=40.0,
-#                            n_freqs=40)
-#
-# Result: freqs (vector), powers (n_freqs × n_samples matrix)
-# Good time resolution; frequency resolution depends on ω₀
-
-
-# Example 7: Custom Frequency Bands
-# ==================================
-# Define and use custom frequency bands instead of standard EEG bands
-#
-# custom_bands = Dict(
-#     "low_freq" => (1.0, 10.0),
-#     "mid_freq" => (10.0, 30.0),
-#     "high_freq" => (30.0, 100.0)
-# )
-# freqs, powers = compute_welch_pow_spectrum(data, 100.0)
-# results = extract_frequency_band_powers(freqs, powers; 
-#                                         bands=custom_bands,
-#                                         normalize_method="relative_total")
-
-
-# Example 8: Different Normalization Methods
-# ===========================================
-# Compare various normalization approaches
-#
-# data = randn(1000)
-# fs = 100.0
-# freqs, powers = compute_welch_pow_spectrum(data, fs)
-#
-# # All normalization methods:
-# powers_db = normalize_power_spectrum(powers; method="db")           # Convert to dB
-# powers_rel = normalize_power_spectrum(powers; method="relative")    # Normalize by total
-# powers_z = normalize_power_spectrum(powers; method="zscore")        # Z-score
-# powers_mm = normalize_power_spectrum(powers; method="minmax")       # Scale to [0,1]
-# powers_pct = normalize_power_spectrum(powers; method="percent")     # Percentage
-# powers_log = normalize_power_spectrum(powers; method="log")         # Natural log
-# powers_log10 = normalize_power_spectrum(powers; method="log10")     # Log10
-# powers_rdb = normalize_power_spectrum(powers; method="relative_db") # Relative dB
-
-
-# Example 9: Complete Analysis Pipeline
-# ======================================
-# Full workflow from raw data to band analysis with visualization prep
-#
-# # Generate synthetic EEG-like data
-# using Random
-# Random.seed!(42)
-# t = range(0, 10, length=5000)  # 10 seconds at 500 Hz
-# signal = 0.5*sin.(2π*10*t) + 0.3*sin.(2π*20*t) + randn(length(t))*0.2  # 10Hz + 20Hz + noise
-#
-# df = DataFrame(time=t, eeg=signal)
-# fs = 500.0
-#
-# # Step 1: Compute power spectrum
-# df_psd = compute_welch_pow_spectra(df, fs; xlims=(1.0, 100.0))
-#
-# # Step 2: Normalize to dB scale
-# df_psd_db = normalize_power_spectra(df_psd; method="db")
-#
-# # Step 3: Extract band powers
-# band_powers = extract_frequency_band_powers(df_psd; normalize_method="relative_total")
-#
-# # Now ready for visualization or further analysis
-
-
-# Example 10: Time-Frequency Analysis with Custom Parameters
-# ===========================================================
-# Advanced STFT with fine control
-#
-# data = randn(10000)
-# fs = 1000.0
-#
-# freqs, powers, ws, hs = compute_stft(data, fs;
-#                                      window_size=1024,      # 1024-point windows
-#                                      overlap=0.875,          # 87.5% overlap
-#                                      min_freq=0.5,
-#                                      max_freq=200.0,
-#                                      n_freqs=100,
-#                                      smoothing="moving_avg", # Use moving average
-#                                      time_window=5,
-#                                      freq_window=3)
-#
-# # Powers is 100 × n_frames matrix
-# # Each column is a time snapshot, each row is a frequency

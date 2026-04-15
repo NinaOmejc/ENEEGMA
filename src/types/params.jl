@@ -117,12 +117,11 @@ function _normalize_param_type(param_type::Union{String, Symbol})::Symbol
     raw_sym = param_type isa Symbol ? param_type : Symbol(param_type)
     lowered = Symbol(lowercase(String(raw_sym)))
 
-    # Backward-compatible aliases:
+    # Normalize aliases to canonical types
     normalized =
         lowered == :coupling ? :population_coupling :
         lowered == :node_coupling ? :population_coupling :
         lowered == :sensory_coupling ? :population_coupling :
-        lowered == :scale ? :unknown :  # legacy; should be retagged upstream
         lowered
 
     return normalized in VALID_PARAM_TYPES ? normalized : :unknown
@@ -660,38 +659,38 @@ end
 
 # Arguments
 - `paramset::ParamSet`: Parameters to update
-- `settings::Settings`: Settings with optimization_settings.empirical_param_table_path
+- `settings::Settings`: Settings with optimization_settings.empirical_bounds_table_path
 
 # Behavior
-- If param_range_level == "empirical" AND empirical table path exists, applies empirical medians
+- If param_bound_scaling_level == "empirical" AND empirical table path exists, applies empirical medians
 - Otherwise keeps existing default values from model definitions
 """
 function update_param_defaults!(paramset::ParamSet, settings)
     os = settings.optimization_settings
     
-    # Only use empirical defaults when param_range_level is "empirical"
-    if os === nothing || !hasproperty(os, :param_range_level)
+    # Only use empirical defaults when param_bound_scaling_level is "empirical"
+    if os === nothing || !hasproperty(os, :param_bound_scaling_level)
         return paramset  # Keep model defaults
     end
     
-    level = lowercase(os.param_range_level)
+    level = lowercase(os.param_bound_scaling_level)
     if level != "empirical"
         return paramset  # Keep model defaults for non-empirical strategies
     end
     
     # Load and apply empirical defaults
     empirical_table = nothing
-    if hasproperty(os, :empirical_param_table_path) && 
-       os.empirical_param_table_path !== nothing && os.empirical_param_table_path != ""
+    if hasproperty(os, :empirical_bounds_table_path) && 
+       os.empirical_bounds_table_path !== nothing && os.empirical_bounds_table_path != ""
         try
-            empirical_table = CSV.read(os.empirical_param_table_path, DataFrame)
-            vinfo("Loaded empirical parameter table for defaults: $(os.empirical_param_table_path)"; level=2)
+            empirical_table = CSV.read(os.empirical_bounds_table_path, DataFrame)
+            vinfo("Loaded empirical parameter table for defaults: $(os.empirical_bounds_table_path)"; level=2)
         catch e
-            vwarn("Failed to load empirical parameter table from $(os.empirical_param_table_path): $e"; level=2)
+            vwarn("Failed to load empirical parameter table from $(os.empirical_bounds_table_path): $e"; level=2)
             return paramset
         end
     else
-        vwarn("param_range_level='empirical' requires empirical_param_table_path in settings"; level=2)
+        vwarn("param_bound_scaling_level='empirical' requires empirical_bounds_table_path in settings"; level=2)
         return paramset
     end
     
@@ -706,7 +705,7 @@ end
 
 """Set parameter bounds based on specified strategy.
 
-# Strategies (from settings.optimization_settings.param_range_level):
+# Strategies (from settings.optimization_settings.param_bound_scaling_level):
 - **"empirical"**: Use percentiles from empirical table
 - **"unbounded"**: Set all bounds to ±Inf (was called "type_based")
 - **"low", "medium", "high", "ultra"**: Multiplier-based ranges around defaults
@@ -723,34 +722,34 @@ set_param_bounds!(net.params, settings)  # Use strategy from settings
 function set_param_bounds!(paramset::ParamSet, settings)
     os = settings.optimization_settings
     
-    if os === nothing || !hasproperty(os, :param_range_level)
+    if os === nothing || !hasproperty(os, :param_bound_scaling_level)
         vwarn("No optimization settings found, skipping bounds update"; level=2)
         return paramset
     end
     
-    level = lowercase(os.param_range_level)
+    level = lowercase(os.param_bound_scaling_level)
     type_scales = hasproperty(os, :reparam_type_scales) && !isempty(os.reparam_type_scales) ? 
                   os.reparam_type_scales : nothing
     
     if level == "empirical"
         # Load empirical table and apply bounds
         empirical_table = nothing
-        if hasproperty(os, :empirical_param_table_path) && 
-           os.empirical_param_table_path !== nothing && os.empirical_param_table_path != ""
+        if hasproperty(os, :empirical_bounds_table_path) && 
+           os.empirical_bounds_table_path !== nothing && os.empirical_bounds_table_path != ""
             try
-                empirical_table = CSV.read(os.empirical_param_table_path, DataFrame)
-                vinfo("Loaded empirical parameter table for bounds: $(os.empirical_param_table_path)"; level=2)
+                empirical_table = CSV.read(os.empirical_bounds_table_path, DataFrame)
+                vinfo("Loaded empirical parameter table for bounds: $(os.empirical_bounds_table_path)"; level=2)
             catch e
-                error("param_range_level='empirical' requires valid empirical_param_table_path: $e")
+                error("param_bound_scaling_level='empirical' requires valid empirical_bounds_table_path: $e")
             end
         else
-            error("param_range_level='empirical' requires empirical_param_table_path in settings")
+            error("param_bound_scaling_level='empirical' requires empirical_bounds_table_path in settings")
         end
         
         task = hasproperty(settings.data_settings, :task_type) ? Symbol(settings.data_settings.task_type) : :rest
         bounds_task = hasproperty(os, :bounds_task) ? Symbol(os.bounds_task) : :global
-        lb_col = hasproperty(os, :empirical_lb_col) ? Symbol(os.empirical_lb_col) : Symbol("5perc")
-        ub_col = hasproperty(os, :empirical_ub_col) ? Symbol(os.empirical_ub_col) : Symbol("95perc")
+        lb_col = hasproperty(os, :empirical_lower_bound_column) ? Symbol(os.empirical_lower_bound_column) : Symbol("5perc")
+        ub_col = hasproperty(os, :empirical_upper_bound_column) ? Symbol(os.empirical_upper_bound_column) : Symbol("95perc")
         _apply_empirical_bounds!(paramset, empirical_table; task=task, bounds_task=bounds_task, lb_col=lb_col, ub_col=ub_col)
         return paramset
     end
@@ -775,7 +774,7 @@ function set_param_bounds!(paramset::ParamSet, settings)
     end
 
     # Multiplier-based bounds
-    haskey(PARAM_RANGE_MULTIPLIERS, level) || error("Unknown parameter range level: $(os.param_range_level). Valid options: 'empirical', 'unbounded', 'low', 'medium', 'high', 'ultra'")
+    haskey(PARAM_RANGE_MULTIPLIERS, level) || error("Unknown parameter range level: $(os.param_bound_scaling_level). Valid options: 'empirical', 'unbounded', 'low', 'medium', 'high', 'ultra'")
     lower_mult, upper_mult = PARAM_RANGE_MULTIPLIERS[level]
     zero_span = ZERO_DEFAULT_SPANS[level]
 
@@ -793,43 +792,6 @@ function set_param_bounds!(paramset::ParamSet, settings)
     end
     return paramset
 end
-
-
-# ==================================================================================
-#  LEGACY COMPATIBILITY WRAPPER
-# ==================================================================================
-
-"""Legacy wrapper for update_param_minmax! -> set_param_bounds!.
-
-**DEPRECATED**: Use `set_param_bounds!(paramset, settings)` or `configure_network_parameters!(net, settings)` instead.
-"""
-function update_param_minmax!(paramset::ParamSet, param_range_level::String="medium";
-                              type_scales::Union{Nothing, AbstractDict{Symbol, Float64}}=nothing,
-                              empirical_table::Union{Nothing, DataFrame}=nothing,
-                              task::Symbol=:rest,
-                              bounds_task::Symbol=:global)
-    vwarn("update_param_minmax! is deprecated. Use set_param_bounds!(paramset, settings) instead."; level=2)
-    
-    # Create minimal settings-like structure for backwards compatibility
-    # This is a hack to support old calling convention
-    if param_range_level == "empirical" && empirical_table !== nothing
-        _apply_empirical_bounds!(paramset, empirical_table; task=task, bounds_task=bounds_task)
-    elseif param_range_level == "type_based" || param_range_level == "unbounded"
-        for param in paramset.params
-            _apply_unbounded_range!(param)
-        end
-    else
-        haskey(PARAM_RANGE_MULTIPLIERS, lowercase(param_range_level)) || 
-            error("Unknown parameter range level: $param_range_level")
-        lower_mult, upper_mult = PARAM_RANGE_MULTIPLIERS[lowercase(param_range_level)]
-        zero_span = ZERO_DEFAULT_SPANS[lowercase(param_range_level)]
-        for param in paramset.params
-            _apply_multiplier_range!(param, lower_mult, upper_mult, zero_span)
-        end
-    end
-    return paramset
-end
-
 
 function param_in_paramset(paramset::ParamSet, param::Param)::Bool
     for p in paramset.params
@@ -1148,32 +1110,6 @@ function _apply_empirical_bounds!(paramset::ParamSet, joined_table::DataFrame;
     end
     
     return paramset
-end
-
-
-"""
-    set_params_empirically!(x, joined_table; task=:rest, bounds_task=:global, kwargs...)
-
-Set both defaults and bounds from empirical table.
-
-DEPRECATED: Use `update_param_defaults!` and `set_param_bounds!` separately for cleaner separation.
-
-- Bounds come from GLOBAL per-type p5/p95 across all tasks (default), or from the chosen task only.
-- Defaults come from task-specific medians (rest vs ssvep).
-- Table types are normalized via `_normalize_param_type` so legacy rows like \"scale\" don't leak through.
-- Enforces positivity for types in `POSITIVE_ONLY_PARAM_TYPES`.
-"""
-function set_params_empirically!(x, joined_table::DataFrame;
-                                        task::Symbol = :rest,
-                                        bounds_task::Symbol = :global,
-                                        kwargs...)
-    vwarn("set_params_empirically! is deprecated. Use update_param_defaults! and set_param_bounds! separately."; level=2)
-    
-    ps = x isa ParamSet ? x : getfield(x, :params)
-    _apply_empirical_defaults!(ps, joined_table; task=task, kwargs...)
-    _apply_empirical_bounds!(ps, joined_table; task=task, bounds_task=bounds_task, kwargs...)
-    
-    return x
 end
 
 

@@ -1,4 +1,4 @@
-function list_known_node_models()::Vector{String}
+function list_canonical_node_models()::Vector{String}
     return ["WilsonCowan ('WC')", 
             "AlphaRhythm ('ARM')",
             "JansenRit ('JR')", 
@@ -24,8 +24,8 @@ end
 # Return vector of model identifiers. 
 # style = :short  → ["WC","JR",...]
 # style = :long   → ["WilsonCowan","JansenRit",...]
-function list_known_node_models_codes(; style::Symbol = :short)
-    raw = list_known_node_models()
+function list_canonical_node_models_codes(; style::Symbol = :short)
+    raw = list_canonical_node_models()
     out = String[]
     for entry in raw
         m = match(r"^(.+?)\s*\('([^']+)'\)\s*$", entry)
@@ -39,10 +39,10 @@ function list_known_node_models_codes(; style::Symbol = :short)
     return out
 end
 
-function get_known_node_model_info!(node::Node)
+function get_canonical_node_model_info!(node::Node)
     model = node.build_setts.model
     
-    # If model is a RuleTree (grammar-sampled), cannot use known model lookup
+    # If model is a RuleTree (grammar-sampled), cannot use canonical model lookup
     # Return empty populations; will be built via configure_node_model! instead
     if model isa RuleTree
         return Population[], node
@@ -85,8 +85,8 @@ function get_known_node_model_info!(node::Node)
     elseif model == "PhaseDynamics" || model == "PD"
         return PhaseDynamics(node)
     else
-        error("Unknown known node model: $(model). 
-              Supported models are: $(list_known_node_models()).")
+        error("Unknown canonical node model: $(model). 
+              Supported models are: $(list_canonical_node_models()).")
     end
 end
 
@@ -269,7 +269,7 @@ function JansenRit(node::Node)
         "$(node.name)₊c15" => false,  # θ
         "$(node.name)₊c16" => true,   # outer connectivity
         "$(node.name)₊c17" => true,   # inner connectivity
-        "$(node.name)₊c18" => false,  # inhibitory sign (don’t touch)
+        "$(node.name)₊c18" => false,  # inhibitory sign (don't touch)
 
         # Excitatory interneuron
         "$(node.name)₊c21" => true,   # A1: gain
@@ -337,28 +337,28 @@ function Wendling(node::Node)
         "$(node.name)₊c27" => (108.0, ),  # C2
         "$(node.name)₊c28" => (135.0, ),  # C1
 
-        # ── slow inhibition Py ← I_slow ──────────────────────────────────
+        # ── slow inhibition Py ← I_slow ──────────────────────────────────
         "$(node.name)₊c31" => (50.0,  ),  # a3 (=b)
         "$(node.name)₊c32" => (0.8,  ),   # A3 (=B) / a3
         "$(node.name)₊c33" => (1.0,   ),   # not used
         "$(node.name)₊c34" => (2*2.5,   ), # e0
         "$(node.name)₊c35" => (0.56,  ),  # r
         "$(node.name)₊c36" => (6.0,   ),  # θ
-        "$(node.name)₊c37" => (33.75, ),  # C3 (= 0.25·C1)
-        "$(node.name)₊c38" => (33.75, ),  # C4 (= 0.25·C1)
+        "$(node.name)₊c37" => (33.75, ),  # C3 (= 0.25·C1)
+        "$(node.name)₊c38" => (33.75, ),  # C4 (= 0.25·C1)
 
-        # ── fast inhibition Py ← I_fast ──────────────────────────────────
+        # ── fast inhibition Py ← I_fast ──────────────────────────────────
         "$(node.name)₊c41" => (350.0, ),  # a4 (=g)
         "$(node.name)₊c42" => (20.0/350.0,  ),  # A4 (=G) / a4
         "$(node.name)₊c43" => (1.0,   ),   # not used
         "$(node.name)₊c44" => (2*2.5,   ),  # e0
         "$(node.name)₊c45" => (0.56,  ),  # r
         "$(node.name)₊c46" => (6.0,   ),  # θ
-        "$(node.name)₊c47" => (108.,  ),  # C5 (= 0.3·C1)
-        "$(node.name)₊c48" => (40.5, ),  # C6 (= 0.1·C1)
-        "$(node.name)₊c49" => (-13.5, ),  # C7 (= 0.8·C1)
+        "$(node.name)₊c47" => (108.,  ),  # C5 (= 0.3·C1)
+        "$(node.name)₊c48" => (40.5, ),  # C6 (= 0.1·C1)
+        "$(node.name)₊c49" => (-13.5, ),  # C7 (= 0.8·C1)
 
-        # ── I_slow → I_fast side loop ────────────────────────────────────
+        # ── I_slow → I_fast side loop ────────────────────────────────────
         "$(node.name)₊c51" => (50.0,  ),  # a3 (=b)
         "$(node.name)₊c52" => (0.8,  ),  # A3 (=B) / a3
         "$(node.name)₊c53" => (1.0,   ),   # not used

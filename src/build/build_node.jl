@@ -3,7 +3,7 @@ function build_nodes!(net::Network)::Network
     simsett = net.settings.simulation_settings
     sampsett = net.settings.sampling_settings
 
-    known_node_models = list_known_node_models()
+    canonical_node_models = list_canonical_node_models()
     nodes = Vector{Node}(undef, netsett.n_nodes)
     # node_id, node_model =1, netsett.node_models[1]
 
@@ -18,8 +18,8 @@ function build_nodes!(net::Network)::Network
             serialize_rule_tree(node_model)
         end
         
-        if any(occursin(model_str, known_node) for known_node in known_node_models)
-            pops, node = get_known_node_model_info!(node)
+        if any(occursin(model_str, canonical_node) for canonical_node in canonical_node_models)
+            pops, node = get_canonical_node_model_info!(node)
         else
             pops, node = configure_node_model!(node, sampsett)
         end

@@ -20,8 +20,6 @@ function set_task_settings(settings::Any)
         gs = settings.general_settings
         if hasproperty(gs, :verbosity_level)
             set_verbose(gs.verbosity_level)
-        else
-            set_verbose(gs.verbose)
         end
     end
 end
@@ -29,8 +27,8 @@ end
 """
     is_verbose(level)::Bool
 
-Check verbosity status. Prefers settings.general_settings.verbose if available,
-otherwise falls back to the global verbose flag.
+Check verbosity status. Uses settings.general_settings.verbosity_level if available,
+otherwise falls back to the global verbosity_level flag.
 """
 function _task_verbosity_level()
     task = current_task()
@@ -40,8 +38,6 @@ function _task_verbosity_level()
             gs = settings.general_settings
             if hasproperty(gs, :verbosity_level)
                 return gs.verbosity_level
-            elseif hasproperty(gs, :verbose)
-                return gs.verbose ? max(verbosity_level[], 1) : 0
             end
         end
     end

@@ -16,12 +16,14 @@ function prepare_data!(settings::Settings)
     isempty(signal) && error("Target timeseries is empty.")
 
     # Extract or synthesize time axis
-    times = _extract_or_synthesize_time_axis(eeg_data, fs, length(signal))
+    times = ENEEGMA._extract_or_synthesize_time_axis(eeg_data, fs, length(signal))
     
     # Extract settings early (needed for time axis resolution)
     ls = settings.optimization_settings.loss_settings
-    freqs, powers = compute_preprocessed_welch_psd(signal, fs; loss_settings=ls)
-    pipeline_has_log = psd_preproc_has_log(ls.psd_preproc)
+    loss_settings = settings.optimization_settings.loss_settings
+    ds = settings.data_settings
+    freqs, powers = ENEEGMA.compute_preprocessed_welch_psd(signal, fs; loss_settings=ls, data_settings=ds)
+    pipeline_has_log = ENEEGMA.psd_preproc_has_log(ds.psd.preproc_pipeline)
     repr = pipeline_has_log ? :log_power : :power
 
     maybe_initialize_std_measured_noise!(settings.data_settings, ls, signal, fs)
@@ -38,7 +40,7 @@ function prepare_data!(settings::Settings)
         freqs=freqs,
         powers=powers,
         psd_representation=repr,
-        measurement_noise_std=ls.measurement_noise_std,
+        measurement_noise_std=ds.measurement_noise_std,
         freq_peak_metadata=freq_peak_metadata
     )
 end
@@ -54,19 +56,60 @@ If found, returns it as Float64 vector.
 If not found, synthesizes time axis from sampling rate (fs).
 Raises error if neither available.
 
+Validates that the time column is likely in seconds by comparing the implied 
+sampling rate (from time column) with the provided sampling rate (fs).
+
 # Returns
 - `Vector{Float64}`: Time axis in seconds
 """
 function _extract_or_synthesize_time_axis(data, fs, signal_length::Int)
     for col_name in [:time, :t, :times]
         if haspropnn(data, col_name)
-            return Float64.(collect(data[!, col_name]))
+            time_col = Float64.(collect(data[!, col_name]))
+            _check_time_axis_units(time_col, fs, signal_length)
+            return time_col
         end
     end
     
     fs === nothing && error("No time column found in data, and no sampling rate (fs) provided in settings. Please add a time column ('time', 't', or 'times') or set fs in settings.")
     vwarn("No time column found. Synthesizing time axis from sampling rate (fs).")
     return _synthesize_time_axis(signal_length, fs)
+end
+
+"""
+    _check_time_axis_units(time_col, fs, signal_length)
+
+Validate that time column is likely in seconds by comparing implied vs provided sampling rates.
+
+Computes the sampling rate implied by the time column and compares it with the provided fs.
+Issues a warning if they differ significantly, suggesting the time column may be in 
+different units (milliseconds, minutes, etc.).
+
+# Arguments
+- `time_col::Vector{Float64}`: Extracted time column
+- `fs::Real`: Provided sampling rate in Hz
+- `signal_length::Int`: Length of signal (used as fallback check)
+"""
+function _check_time_axis_units(time_col::Vector{Float64}, fs::Union{Nothing, Real}, signal_length::Int)
+    fs === nothing && return
+    fs <= 0 && return
+    length(time_col) < 2 && return
+    
+    actual_duration = time_col[end] - time_col[1]
+    actual_duration <= 0 && return
+    
+    # Compute implied sampling rate from time column
+    implied_fs = (length(time_col) - 1) / actual_duration
+    ratio = implied_fs / fs
+    
+    # Warn if ratio suggests unit mismatch
+    if ratio > 900 && ratio < 1100
+        vwarn("Time column may be in milliseconds instead of seconds (implied sampling rate ≈ $(round(Int, implied_fs)) Hz vs expected $(round(Int, fs)) Hz). Please verify your time axis.", level=1)
+    elseif ratio > 50
+        vwarn("Time column may be in different units than seconds (implied sampling rate ≈ $(round(Int, implied_fs)) Hz vs expected $(round(Int, fs)) Hz). Please verify your time axis.", level=1)
+    elseif ratio < 0.01
+        vwarn("Time column may be in minutes or a larger unit instead of seconds (implied sampling rate ≈ $(round(Int, implied_fs)) Hz vs expected $(round(Int, fs)) Hz). Please verify your time axis.", level=1)
+    end
 end
 
 """
@@ -165,7 +208,7 @@ Compute ROI and background masks for weighted loss based on data settings.
 # Arguments
 - `freqs::Vector{Float64}`: Frequency axis
 - `powers::Vector{Float64}`: Power spectrum
-- `data_settings::DataSettings`: Contains region_definition_mode and related config
+- `data_settings::DataSettings`: Contains spectral_roi_definition_mode and related config
 - `ls::LossSettings`: Contains fmin, fmax for frequency range
 
 # Returns
@@ -177,10 +220,10 @@ Compute ROI and background masks for weighted loss based on data settings.
 """
 function compute_frequency_regions(freqs::Vector{Float64}, powers::Vector{Float64},
                                    data_settings::DataSettings, ls::LossSettings)
-    if data_settings.region_definition_mode == :manual
-        roi_mask = build_mask_from_regions(freqs, data_settings.manual_frequency_regions)
+    if data_settings.spectral_roi_definition_mode == :manual
+        roi_mask = build_mask_from_regions(freqs, data_settings.spectral_roi_manual)
     else  # :auto
-        roi_mask = detect_peaks_automatic(freqs, powers, data_settings.auto_peak_sensitivity;
+        roi_mask = detect_peaks_automatic(freqs, powers, data_settings.spectral_roi_auto_peak_sensitivity;
                                          fmin=ls.fmin, fmax=ls.fmax)
     end
     
@@ -228,55 +271,55 @@ estimate_sigma_init(::Nothing) = nothing
 sigma_floor is a frequency‑domain estimate: it computes the high‑frequency noise “floor” in the PSD and scales 
 a unit‑variance noise template to match that floor, so it’s tied to your Welch/PSD settings and fmin/fmax.
 """
-function estimate_sigma_floor(data::AbstractVector, fs::Real, ls::LossSettings)
+function estimate_sigma_floor(data::AbstractVector, fs::Real, data_settings::Union{Nothing, DataSettings}, ls::LossSettings)
     fs <= 0 && return nothing
     n = length(data)
     n < 4 && return nothing
 
     # IMPORTANT: use the SAME kwargs as your loss uses
     fspan = (ls.fmin, ls.fmax)
-    nperseg_val, nfft_val, overlap_val = _resolve_welch_params(n, Float64(fs), ls, nothing, _default_overlap())
-    freqs, data_psd = compute_welch_pow_spectrum(Float64.(data), fs; xlims=fspan, nperseg=nperseg_val, nfft=nfft_val, overlap=overlap_val)
+    nperseg_val, nfft_val, overlap_val = ENEEGMA._resolve_welch_params(n, Float64(fs), data_settings)
+    freqs, data_psd = ENEEGMA.compute_welch_psd(Float64.(data), fs; xlims=fspan, nperseg=nperseg_val, nfft=nfft_val, overlap=overlap_val)
     isempty(freqs) && return nothing
 
     hf_start = max(ls.fmax - 10.0, ls.fmin)
     mask = freqs .>= hf_start
     any(mask) || return nothing
-    S_data = median(data_psd[mask])
+    S_data = Statistics.median(data_psd[mask])
     (isfinite(S_data) && S_data > 0) || return nothing
 
     # Create appropriately seeded RNG for noise template
-    rng = if ls.loss_noise_seed !== nothing
-        Random.MersenneTwister(ls.loss_noise_seed)
+    rng = if data_settings !== nothing && data_settings.psd_noise_seed !== nothing
+        Random.MersenneTwister(data_settings.psd_noise_seed)
     else
         nothing
     end
-    unit = _measurement_noise_template(n, rng)   # deterministic N(0,1) if seed is set
-    freqs2, unit_psd = compute_welch_pow_spectrum(Float64.(unit), fs; xlims=fspan, nperseg=nperseg_val, nfft=nfft_val, overlap=overlap_val)
+    unit = ENEEGMA._measurement_noise_template(n, rng)   # deterministic N(0,1) if seed is set
+    freqs2, unit_psd = ENEEGMA.compute_welch_psd(Float64.(unit), fs; xlims=fspan, nperseg=nperseg_val, nfft=nfft_val, overlap=overlap_val)
     isempty(freqs2) && return nothing
 
     mask2 = freqs2 .>= hf_start
     any(mask2) || return nothing
-    S_unit = median(unit_psd[mask2])
+    S_unit = Statistics.median(unit_psd[mask2])
     (isfinite(S_unit) && S_unit > 0) || return nothing
 
     return sqrt(S_data / S_unit)
 end
 
 
-function estimate_sigma_floor(data::AbstractMatrix, fs::Real, loss_settings::LossSettings)
+function estimate_sigma_floor(data::AbstractMatrix, fs::Real, data_settings::Union{Nothing, DataSettings}, loss_settings::LossSettings)
     cols = size(data, 2)
     cols == 0 && return nothing
     vals = Float64[]
     for j in 1:cols
-        sigma = estimate_sigma_floor(view(data, :, j), fs, loss_settings)
+        sigma = estimate_sigma_floor(view(data, :, j), fs, data_settings, loss_settings)
         sigma === nothing || push!(vals, sigma)
     end
     isempty(vals) && return nothing
     return median(vals)
 end
 
-estimate_sigma_floor(::Nothing, ::Any, ::LossSettings) = nothing
+estimate_sigma_floor(::Nothing, ::Any, ::Union{Nothing, DataSettings}, ::LossSettings) = nothing
 
 
 function _is_valid_sigma(sigma::Union{Nothing, Real})
@@ -287,7 +330,7 @@ end
 
 function maybe_initialize_std_measured_noise!(data_settings::DataSettings,
                                               ls::LossSettings,
-                                              ts_data,
+                                              signal::AbstractVector{<:Real},
                                               fs::Union{Nothing, Real})
     """
     Estimate measurement noise sigma from data using time and frequency-domain methods.
@@ -296,15 +339,15 @@ function maybe_initialize_std_measured_noise!(data_settings::DataSettings,
     Otherwise, combines time-domain (MAD-based) and frequency-domain (PSD floor) estimates,
     preferring the frequency-domain estimate if available.
     """
-    if !data_settings.estimate_measurement_noise || ts_data === nothing
-        ls.measurement_noise_std = -1.0
+    if !data_settings.estimate_measurement_noise || signal === nothing
+        data_settings.measurement_noise_std = -1.0
         return nothing
     end
 
     # Estimate sigma from two independent methods
-    sigma_init = estimate_sigma_init(ts_data)
-    sigma_floor = (fs === nothing) ? nothing : estimate_sigma_floor(ts_data, Float64(fs), ls)
-    
+    sigma_init = estimate_sigma_init(signal)
+    sigma_floor = (fs === nothing) ? nothing : estimate_sigma_floor(signal, Float64(fs), data_settings, ls)
+
     # Collect valid estimates
     candidates = Float64[]
     _is_valid_sigma(sigma_init) && push!(candidates, sigma_init)
@@ -315,7 +358,7 @@ function maybe_initialize_std_measured_noise!(data_settings::DataSettings,
     sigma_guess = minimum(candidates)
     resolved_sigma = _is_valid_sigma(sigma_floor) ? sigma_floor : sigma_guess
     
-    ls.measurement_noise_std = resolved_sigma
+    data_settings.measurement_noise_std = resolved_sigma
     return nothing
 end
 

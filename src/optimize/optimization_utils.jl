@@ -300,9 +300,9 @@ end
 Apply a model recipe string to network settings, updating node models and network name.
 """
 function apply_model_to_settings!(settings::Settings, recipe::AbstractString, model_name::AbstractString, model_idx::Int)
-    if model_name in list_known_node_models_codes()
+    if model_name in list_canonical_node_models_codes()
         settings.network_settings.node_models = [model_name]
-        vinfo("Applied known node model: $(model_name)"; level=2)
+        vinfo("Applied canonical node model: $(model_name)"; level=2)
     else
         settings.network_settings.node_models = [recipe]
     end
@@ -427,68 +427,7 @@ end
 ## Population heuristics
 ## ------------------------------------------------------------------
 
-const _DEFAULT_POP_MIN = 12
-const _DEFAULT_POP_MAX = 128
-const _DEFAULT_POP_SCALE = 2.0
 
-"""
-    infer_population_size(decision_dim; min_pop=12, max_pop=64, scale=2.0)
-
-Suggest a CMA-ES/DE population size based on the number of decision variables.
-Ensures the returned population is even and clamped within [`min_pop`, `max_pop`].
-"""
-function infer_population_size(decision_dim::Int;
-                               min_pop::Int=_DEFAULT_POP_MIN,
-                               max_pop::Int=_DEFAULT_POP_MAX,
-                               scale::Float64=_DEFAULT_POP_SCALE)
-    n = max(decision_dim, 1)
-    lo = max(min_pop, 1)
-    hi = max(lo, max_pop)
-    raw = round(Int, scale * (4 + 3 * log(n)))
-    pop = clamp(raw, lo, hi)
-    iseven(pop) || (pop += 1)
-    return pop
-end
-
-
-"""
-    ensure_population_size!(os, decision_dim; kwargs...)
-
-Ensure that `os.optimizer_settings` has a valid population, inferring one when
-necessary. Returns the resolved population size (or 0 if not applicable).
-"""
-function ensure_population_size!(os::OptimizationSettings,
-                                 decision_dim::Int;
-                                 min_pop::Int=_DEFAULT_POP_MIN,
-                                 max_pop::Int=_DEFAULT_POP_MAX,
-                                 scale::Float64=_DEFAULT_POP_SCALE)
-    oz = os.optimizer_settings
-    if oz.population_size <= 0
-        oz.population_size = infer_population_size(decision_dim;
-                                    min_pop=min_pop,
-                                    max_pop=max_pop,
-                                    scale=scale)
-    end
-    return oz.population_size
-end
-
-function infer_sigma0(num_decision_vars::Int, scales::Dict{Symbol, Float64}; multiplier::Float64=1.0, min_sigma::Float64=0.2, max_sigma::Float64=5.0)::Float64
-    num_decision_vars = max(num_decision_vars, 1)
-    sigma_dim = max(sqrt(num_decision_vars) / 10, min_sigma)
-    sigma_scale = max(0.1 * max_scale_value(scales), min_sigma)
-    base = sqrt(sigma_dim * sigma_scale)
-    return clamp(multiplier * base, min_sigma, max_sigma)
-end
-
-function ensure_sigma0!(os::OptimizationSettings, decision_dim::Int)
-    oz = os.optimizer_settings
-    if oz.sigma0 > 0
-        return oz.sigma0
-    end
-    sigma = infer_sigma0(decision_dim, os.reparam_type_scales)
-    oz.sigma0 = sigma
-    return sigma
-end
 
 """
 Get local data path based on task type.
