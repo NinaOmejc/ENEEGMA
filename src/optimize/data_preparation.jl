@@ -289,8 +289,8 @@ function estimate_sigma_floor(data::AbstractVector, fs::Real, data_settings::Uni
     (isfinite(S_data) && S_data > 0) || return nothing
 
     # Create appropriately seeded RNG for noise template
-    rng = if data_settings !== nothing && data_settings.psd_noise_seed !== nothing
-        Random.MersenneTwister(data_settings.psd_noise_seed)
+    rng = if data_settings !== nothing && hasproperty(data_settings, :psd) && data_settings.psd.noise_seed !== nothing
+        Random.MersenneTwister(data_settings.psd.noise_seed)
     else
         nothing
     end

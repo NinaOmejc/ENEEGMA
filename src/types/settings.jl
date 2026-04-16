@@ -869,6 +869,7 @@ mutable struct PSDSettings <: AbstractSettings
     smooth_poly_order::Int                  # Savitzky-Golay polynomial order
     rel_eps::Float64                        # Relative epsilon for numerical stability
     smooth_sigma::Float64                   # Gaussian smoothing sigma
+    noise_seed::Union{Int, Nothing}         # Random seed for PSD noise (42=deterministic, nothing=random)
     workspace::Union{Nothing, Any}          # Cached SpectrumWorkspace (using Any to avoid circular dep)
 
     function PSDSettings(dict::Dict{String, Any}=Dict{String, Any}())
@@ -886,8 +887,16 @@ mutable struct PSDSettings <: AbstractSettings
         rel_eps = Float64(get(psd_dict, "rel_eps", 1e-12))
         smooth_sigma = Float64(get(psd_dict, "smooth_sigma", 1.0))
         
+        # Noise seed for deterministic vs random noise generation
+        noise_seed = if haskey(psd_dict, "noise_seed")
+            val = psd_dict["noise_seed"]
+            val === nothing ? nothing : Int(val)
+        else
+            42  # Default: deterministic
+        end
+        
         return new(preproc_pipeline, welch_window_sec, welch_overlap, welch_nperseg, welch_nfft,
-                   noise_avg_reps, window_size, smooth_poly_order, rel_eps, smooth_sigma, nothing)
+                   noise_avg_reps, window_size, smooth_poly_order, rel_eps, smooth_sigma, noise_seed, nothing)
     end
 end
 
@@ -921,8 +930,7 @@ mutable struct DataSettings <: AbstractSettings
     spectral_roi_auto_peak_sensitivity::Float64  # 0.0-1.0, higher=looser peak detection
     spectral_roi_manual::Vector{Tuple{Float64, Float64}}  # [(fmin, fmax), ...] for manual mode
     measurement_noise_std::Float64  # Measurement noise standard deviation (0=no noise, -1.0=not estimated)
-    psd_noise_seed::Union{Int, Nothing}  # Seed for PSD noise (42=deterministic, nothing=random)
-    psd::PSDSettings  # Nested PSD preprocessing settings
+    psd::PSDSettings  # Nested PSD preprocessing settings (includes noise_seed)
 
     function DataSettings(dict::Dict{String, Any})::DataSettings
         # Handle data_file: can be absolute or relative path
@@ -977,17 +985,9 @@ mutable struct DataSettings <: AbstractSettings
         
         # Measurement noise standard deviation 
         measurement_noise_std = Float64(get(dict, "measurement_noise_std", 0.0))
-        
-        # PSD noise seed for deterministic vs random noise
-        psd_noise_seed = if haskey(dict, "psd_noise_seed")
-            val = dict["psd_noise_seed"]
-            val === nothing ? nothing : Int(val)
-        else
-            42  # Default: deterministic
-        end
 
         return new(data_file, target_channel, task_type, fs, data_columns, estimate_measurement_noise,
-                   spectral_roi_definition_mode, spectral_roi_auto_peak_sensitivity, spectral_roi_manual, measurement_noise_std, psd_noise_seed, psd)
+                   spectral_roi_definition_mode, spectral_roi_auto_peak_sensitivity, spectral_roi_manual, measurement_noise_std, psd)
     end
 end
 

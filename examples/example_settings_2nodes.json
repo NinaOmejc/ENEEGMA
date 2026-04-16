@@ -64,7 +64,19 @@
     "fs": 256.0,
     "target_channel": "IC1",
     "measurement_noise_std": 0.0,
-    "psd_noise_seed": null
+    "psd": {
+      "preproc_pipeline": "log10",
+      "welch_window_sec": 2.0,
+      "welch_overlap": 0.1,
+      "welch_nperseg": 0,
+      "welch_nfft": 0,
+      "noise_avg_reps": 1,
+      "window_size": 5,
+      "smooth_poly_order": 2,
+      "rel_eps": 1e-12,
+      "smooth_sigma": 1.0,
+      "noise_seed": 42
+    }
   },
   "optimization_settings": {
     "method": "CMAES",

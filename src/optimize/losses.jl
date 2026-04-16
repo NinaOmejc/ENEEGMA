@@ -230,12 +230,9 @@ end
 # ================================
 
 # Draw a white-noise template (N(0,1)) of requested length
-# If psd_noise_seed is nothing/null → use non-deterministic random noise
-# If psd_noise_seed is an integer → use deterministic seeded noise
-# Draw a white-noise template (N(0,1)) of requested length
-# If psd_noise_seed is nothing/null → use non-deterministic random noise
-# If psd_noise_seed is an integer → use deterministic seeded RNG
-# Note: Default psd_noise_seed is 42 (deterministic). Set to nothing for non-deterministic behavior.
+# If noise_seed (in psd settings) is nothing/null → use non-deterministic random noise
+# If noise_seed is an integer → use deterministic seeded RNG
+# Note: Default noise_seed is 42 (deterministic). Set to nothing for non-deterministic behavior.
 # The RNG is created once during loss setup and reused for all evaluations
 function _measurement_noise_template(len::Int, rng::Union{Random.AbstractRNG, Nothing})
     if len <= 0

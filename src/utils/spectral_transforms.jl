@@ -636,7 +636,7 @@ function compute_noisy_preprocessed_welch_psd(model_prediction::AbstractVector{<
                                                       data_settings=data_settings)
     end
 
-    seed_value = data_settings.psd_noise_seed
+    seed_value = data_settings.psd.noise_seed
     freqs = Float64[]
     accum = Float64[]
     for rep in 1:reps
