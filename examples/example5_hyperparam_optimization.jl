@@ -1,5 +1,5 @@
-# Example 5: Hyperparameter Sweep Optimization
-# ==============================================
+# Example 5: Hyperparameter Optimization
+# ============================================================================
 # This example demonstrates systematic hyperparameter optimization:
 # 1. Load target data and configure neural network
 # 2. Define hyperparameter sweep axes
@@ -12,9 +12,9 @@ using CSV
 using DataFrames
 using JSON
 
-# =============================================================================
-# STEP 1: Load Settings and Data and build network as in previous examples
-# =============================================================================
+# ============================================================================
+# Step 1: Load Settings and Data and build network as in previous examples
+# ============================================================================
 println("Step 1: Loading settings and data...")
 settings = create_default_settings()
 
@@ -26,9 +26,9 @@ data = prepare_data!(settings)
 net = build_network(settings)
 set_all_params_tunable!(net.params)
 
-# =============================================================================
-# STEP 2: Configure Hyperparameter Sweep
-# =============================================================================
+# ============================================================================
+# Step 2: Configure Hyperparameter Sweep
+# ============================================================================
 
 # DEFAULT SWEEP AXES (automatically included):
 #   • param_bound_scaling_level: ["medium", "high"]
@@ -46,18 +46,18 @@ add_hyperparameter_axis!(settings,
     [0.5, 0.75, 1.0]
 )
 
-# =============================================================================
-# STEP 3: Review All Sweep Combinations
-# =============================================================================
+# ============================================================================
+# Step 3: Review All Sweep Combinations
+# ============================================================================
 show_hyperparameter_combos(settings)
 
 # Show specific combination (e.g., combination #3):
 combo_idx = 16
 show_hyperparameter_combos(settings; combo_idx=combo_idx)
 
-# =============================================================================
-# STEP 4: Run Hyperparameter Sweep
-# =============================================================================
+# ============================================================================
+# Step 4: Run Hyperparameter Sweep
+# ============================================================================
 
 # OPTION A: Run full sweep (all combinations)
 # run_hyperparameter_sweep(settings, data)

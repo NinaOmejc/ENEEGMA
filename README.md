@@ -41,7 +41,7 @@ The package includes five examples covering the complete workflow:
 
 ## Related paper
 
-If you use ENEEGMA in your research, please cite:
+For a detailed description of the framework, see [the paper](https://www.biorxiv.org/content/early/2026/04/14/2026.04.10.717643.full.pdf). If you use ENEEGMA in your research, please cite:
 
 ```bibtex
 @article {Omejc2026.04.10.717643,

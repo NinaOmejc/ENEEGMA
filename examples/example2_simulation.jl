@@ -1,5 +1,5 @@
 # Example 2: Network Simulation
-# ==============================
+# ============================================================================
 # This example demonstrates how to:
 #   1. Set up a network 
 #   2. Build the network structure
@@ -14,7 +14,7 @@ using DataFrames
 println("\nENEEGMA Network Simulation Example\n")
 
 # ============================================================================
-# SETTINGS
+# Step 1: Settings
 # ============================================================================
 settings = create_default_settings();
 settings.simulation_settings.tspan = (0.0, 100.0)  # Simulate for 100 seconds
@@ -23,7 +23,7 @@ settings.simulation_settings.tspan = (0.0, 100.0)  # Simulate for 100 seconds
 # print_settings_summary(settings; section="simulation_settings");
 
 # ============================================================================
-# BUILD NETWORK
+# Step 2: Build Network
 # ============================================================================
 net = build_network(settings);
 # Display network parameters and variable (state) initial condition ranges

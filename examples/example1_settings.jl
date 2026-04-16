@@ -1,5 +1,5 @@
 # Example 1: Settings Configuration Walkthrough
-# ===============================================
+# ============================================================================
 # Demonstrates creating, inspecting, and saving ENEEGMA settings.
 # Settings are stored as Settings objects with sensible defaults.
 using ENEEGMA

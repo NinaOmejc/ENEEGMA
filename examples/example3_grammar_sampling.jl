@@ -1,5 +1,5 @@
 # Example 3: Grammar-Based Model Sampling
-# ==========================================
+# ============================================================================
 # Demonstrates how to sample neural network model structures from a probabilistic context-free grammar (PCFG).
 # This uses the grammar defined in grammars/default_grammar.cfg to generate diverse model architectures.
 using ENEEGMA
@@ -8,14 +8,14 @@ using Plots
 println("\nENEEGMA Grammar-Based Model Sampling Example\n")
 
 # ============================================================================
-# Create SETTINGS with defaults
+# Step 1: Create Settings with Defaults
 # ============================================================================
 settings = create_default_settings();
 print_settings_summary(settings; section="sampling_settings")
 settings.general_settings.seed = 1  # Set seed for reproducible grammar sampling
 
 # ============================================================================
-# SAMPLE MODELS FROM GRAMMAR
+# Step 2: Sample Models from Grammar
 # ============================================================================
 # Sample models from grammar using settings configuration
 # sample_from_grammar(settings) automatically extracts:

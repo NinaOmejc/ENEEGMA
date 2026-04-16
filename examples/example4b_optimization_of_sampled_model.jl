@@ -1,5 +1,5 @@
-# Example 4: Parameter Optimization with Grammar-Sampled Models
-# ===============================================================
+# Example 4b: Parameter Optimization of Sampled Model
+# ============================================================================
 # This example demonstrates how to:
 # 1. Load target data and prepare for optimization
 # 2. Load candidate models from grammar sampling results
