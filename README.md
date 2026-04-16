@@ -30,45 +30,14 @@ Pkg.develop(url="https://github.com/NinaOmejc/ENEEGMA.git")
 
 ## Examples
 
-Five comprehensive examples demonstrate the complete workflow from configuration to optimization:
+The package includes five examples covering the complete workflow:
 
-### Example 1: Settings Configuration
-Learn how to load, customize, and save settings with sensible defaults.
-```bash
-julia examples/example1_settings.jl
-```
-For a full list of settings and explanations, see [settings_info.md](settings_info.md).
-
-### Example 2: Neural Population Model Simulation
-Build a network and run simulations with multiple random initializations.
-```bash
-julia examples/example2_simulation.jl
-```
-
-### Example 3: Grammar-based Model Sampling
-Generate diverse candidate models using the formal grammar and explore their properties.
-```bash
-julia examples/example3_grammar_sampling.jl
-```
-
-### Example 4a: Parameter Optimization of Canonical Model
-Optimize parameters for a fixed canonical population model using empirical EEG data.
-```bash
-julia examples/example4a_optimization_of_canonical_model.jl
-```
-
-### Example 4b: Parameter Optimization of Sampled Model
-Optimize parameters for models generated from grammar sampling.
-```bash
-julia examples/example4b_optimization_of_sampled_model.jl
-```
-
-### Example 5: Hyperparameter Optimization
-Perform hyperparameter sweep to optimize loss function weights and other optimization settings.
-```bash
-julia examples/example5_hyperparam_optimization.jl
-```
-
+- **Settings Configuration** ([example1_settings.jl](examples/example1_settings.jl)): Load, customize, and save settings with sensible defaults. See [settings_info.md](settings_info.md) for full documentation.
+- **Neural Population Model Simulation** ([example2_simulation.jl](examples/example2_simulation.jl)): Build networks and run simulations with multiple random initializations.
+- **Grammar-based Model Sampling** ([example3_grammar_sampling.jl](examples/example3_grammar_sampling.jl)): Generate diverse candidate models using formal grammar.
+- **Parameter Optimization - Canonical** ([example4a_optimization_of_canonical_model.jl](examples/example4a_optimization_of_canonical_model.jl)): Optimize parameters for fixed canonical models.
+- **Parameter Optimization - Sampled** ([example4b_optimization_of_sampled_model.jl](examples/example4b_optimization_of_sampled_model.jl)): Optimize parameters for grammar-generated models.
+- **Hyperparameter Optimization** ([example5_hyperparam_optimization.jl](examples/example5_hyperparam_optimization.jl)): Perform hyperparameter sweep to optimize loss function weights.
 
 ## Related paper
 
