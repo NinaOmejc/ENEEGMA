@@ -21,10 +21,10 @@ It enables:
 ```julia
 # Add to your Julia environment
 using Pkg
-Pkg.add(url="https://github.com/NinaOmejc/ENEEGMA.jl.git")
+Pkg.add(url="https://github.com/NinaOmejc/ENEEGMA.git")
 
 # Or development mode
-Pkg.develop(url="https://github.com/NinaOmejc/ENEEGMA.jl.git")
+Pkg.develop(url="https://github.com/NinaOmejc/ENEEGMA.git")
 ```
 
 ## Examples
