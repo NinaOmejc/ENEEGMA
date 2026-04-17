@@ -176,6 +176,19 @@ function run_hyperparameter_sweep(settings::Union{Nothing, Settings},
     combo_keys, combos = ENEEGMA.build_sweep_combos(settings)
     total = length(combos)
     vinfo("$(length(combos)) hyperparameter combinations to test\n"; level=2)
+    
+    # Create ONE numbered folder for the entire sweep
+    gs = settings.general_settings
+    ns = settings.network_settings
+    base_output_dir = ENEEGMA.construct_output_dir(gs, ns)
+    sweep_output_dir = ENEEGMA.find_next_numbered_folder(base_output_dir, "hyperparam_sweep")
+    mkpath(sweep_output_dir)
+    settings.optimization_settings.output_dir = sweep_output_dir
+    vinfo("Created hyperparameter sweep folder: $sweep_output_dir"; level=1)
+    
+    # Save settings to the sweep folder
+    settings_path = joinpath(sweep_output_dir, "settings.json")
+    ENEEGMA.save_settings(settings, settings_path)
 
     if combo_idx !== nothing
         vinfo("\n[Hyperparameter Sweep $(combo_idx) / $(length(combos))]"; level=1)

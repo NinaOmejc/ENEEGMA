@@ -20,6 +20,26 @@ function load_data(ds::DataSettings)
 end
 
 """
+    normalize_parameter_name(name::String)::String
+
+Normalize parameter names for JSON output and display.
+Converts naming convention: __[letter] → _x
+Example: N1__c11 → N1_x11
+
+This handles parameter names with double underscores followed by a single letter,
+common in symbolically-generated parameter names.
+
+# Arguments
+- `name::String`: Parameter name to normalize
+
+# Returns
+String: Normalized parameter name
+"""
+function normalize_parameter_name(name::String)::String
+    return replace(name, r"__[a-z]" => "_x")
+end
+
+"""
     load_settings_from_file(filepath::String)::Dict{String, Any}
 
 Load settings from a JSON file with validation.
@@ -74,6 +94,40 @@ function construct_output_dir(gs::GeneralSettings, ns::NetworkSettings)::String
         mkpath(output_dir)
     end
     return output_dir
+end
+
+"""
+    find_next_numbered_folder(base_path::String, prefix::String="optimization")::String
+
+Find the next available numbered folder in a directory, creating it if needed.
+
+Creates folders with numeric suffixes (e.g., `optimization_1/`, `optimization_2/`) 
+incrementally. Used for organizing job outputs so each run gets its own numbered folder.
+
+This function is reusable for both optimization and hyperparameter sweep jobs,
+as well as grammar sampling results.
+
+# Arguments
+- `base_path::String`: Base directory where numbered folders should be created
+- `prefix::String`: Prefix for folder names (default: "optimization")
+
+# Returns
+String: Full path to the next available numbered folder (e.g., "./results/exp/optimization_1")
+
+# Example
+```julia
+output_dir = find_next_numbered_folder("./results/my_exp", "optimization")
+# Returns: "./results/my_exp/optimization_1/" if it doesn't exist
+# Returns: "./results/my_exp/optimization_2/" if optimization_1 already exists
+```
+"""
+function find_next_numbered_folder(base_path::String, prefix::String="optimization")::String
+    mkpath(base_path)
+    idx = 1
+    while isdir(joinpath(base_path, "$(prefix)_$idx"))
+        idx += 1
+    end
+    return joinpath(base_path, "$(prefix)_$idx")
 end
 
 """

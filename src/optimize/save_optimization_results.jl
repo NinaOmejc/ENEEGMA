@@ -3,11 +3,10 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
                                     optlogger::Vector{OptLogEntry},       
                                     setter::Function,  
                                     net::Network, 
-                                    target_data::Data,
+                                    data::Data,
                                     settings::Settings;
                                     blocks::Union{Nothing, Any}=nothing,
                                     restart_idx::Union{Int, Nothing}=nothing,
-                                    optimization_timestamp::Union{String, Nothing}=nothing,
                                     hyperparam_combo::Union{Tuple, Nothing}=nothing,
                                     hyperparam_idx::Union{Int, Nothing}=nothing,
                                     hyperparam_keys::Union{Vector{String}, Nothing}=nothing,
@@ -25,61 +24,77 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     param_range_entries, init_range_entries = ENEEGMA.native_range_entries(net, blocks)
     best_loss = min(optsol.minimum, min_optlogger_loss)
 
-    # Organize outputs by candidate model - use universal function
-    candidate_path = ENEEGMA.construct_output_dir(general_settings, settings.network_settings)
+    # Use provided optimization output directory, or construct from settings
+    if settings.optimization_settings.output_dir === nothing
+        candidate_path = ENEEGMA.construct_output_dir(general_settings, settings.network_settings)
+        optimization_path = ENEEGMA.find_next_numbered_folder(candidate_path, "optimization")
+        mkpath(optimization_path)
+    else
+        optimization_path = settings.optimization_settings.output_dir 
+    end
     
-    # Create timestamped optimization subdirectory to allow multiple runs without overwriting
-    # Use provided timestamp if available (shared across all restarts), otherwise generate new one
-    timestamp_str = optimization_timestamp === nothing ? Dates.format(now(), "yyyymmdd_HHMMSS") : optimization_timestamp
-    optimization_path = joinpath(candidate_path, "optimization_$(timestamp_str)")
-    mkpath(optimization_path)
+    # Create figures subdirectory for all plots
+    figures_dir = joinpath(optimization_path, "figures")
+    mkpath(figures_dir)
 
     restart_str = restart_idx === nothing ? "" : "_r$(restart_idx)"
     hyperparam_str = hyperparam_idx === nothing ? "" : "_h$(hyperparam_idx)"
     # Include exp_name at the beginning for all output files
     base_prefix = "$(general_settings.exp_name)_$(net.name)$(hyperparam_str)$(restart_str)"
 
+    # Save loss evolution plot to figures folder
     fname_loss = "$(base_prefix)_loss_evolution_over_iterations.png"
-    path_loss = joinpath(optimization_path, fname_loss)
+    path_loss = joinpath(figures_dir, fname_loss)
     ENEEGMA.plot_loss_over_iterations(optlogger, general_settings, path_loss)
+    
+    # Save optlogger CSV to main optimization folder
     ENEEGMA.save_optlogger(optlogger, settings; fullfname_csv=joinpath(optimization_path, "$(base_prefix)_optlogger.csv"))
 
     # Simulate and evaluate model with best parameters using centralized evaluate_model function
-    opt_params = setter(net.problem.p, params_native)
+    opt_params = setter(net.problem.p, params_native);
+
     result = ENEEGMA.evaluate_model(
-        net, opt_params, inits_native, target_data, settings;
+        net, opt_params, inits_native, data, settings;
         evaluation_metrics=["loss", "r2", "iae"],
-        demean=true
-    )
+        demean=true,
+        transient_period_duration=settings.data_settings.psd.transient_period_duration
+    );
     
     if !result.success
         vwarn("Failed to simulate model with best parameters: $(result.error_msg)"; level=2)
         vwarn("Attempting to save results with fallback values..."; level=2)
     end
     
-    sol = result.sol
+    times = data.times
     model_prediction = result.model_prediction
     freqs = result.freqs
     modeled_powers = result.model_psd
     
-    save_modeled_psd(modeled_powers, freqs, settings; 
-                                fullfname_csv=joinpath(optimization_path, "$(base_prefix)_modeled_psd.csv"))
+    ENEEGMA.save_modeled_psd(modeled_powers, freqs, settings; 
+                            fullfname_csv=joinpath(optimization_path, "$(base_prefix)_modeled_psd.csv"))
 
     fname_obs_ts = "$(base_prefix)_observed_vs_modeled_timeseries.png"
-    path_obs_ts = joinpath(optimization_path, fname_obs_ts)
-    plot_observed_vs_modelled_ts_windows(sol, target_data, settings, net;
-                                                fullfname_fig=path_obs_ts)
+    path_obs_ts = joinpath(figures_dir, fname_obs_ts)
+    # Use unified visualization function from visualization.jl
+    ENEEGMA.plot_timeseries_windows(times, model_prediction;
+                                     observed_signal=data.signal,
+                                     zoom_window=(2.0, 5.0),
+                                     title_prefix="Observed vs Modeled Timeseries",
+                                     fullfname_fig=path_obs_ts,
+                                     general_settings=general_settings);
 
     fname_obs_freq = "$(base_prefix)_observed_vs_modeled_spectrum.png"
-    path_obs_freq = joinpath(optimization_path, fname_obs_freq)
-    plot_observed_vs_modelled_psd(modeled_powers, target_data.powers, freqs;
-                                   fullfname_fig=path_obs_freq,
-                                   general_settings=general_settings)
+    path_obs_freq = joinpath(figures_dir, fname_obs_freq)
+    # Use unified visualization function from visualization.jl
+    ENEEGMA.plot_psd_comparison(freqs, modeled_powers, data.powers;
+                                title="Power Spectral Density Comparison",
+                                fullfname_fig=path_obs_freq,
+                                general_settings=general_settings)
 
     # PLOT: Parameter exploration
     fname_param = "$(base_prefix)_parameter_exploration.png"
-    path_param = joinpath(optimization_path, fname_param)
-    plot_param_exploration(optlogger, net; 
+    path_param = joinpath(figures_dir, fname_param)
+    ENEEGMA.plot_param_exploration(optlogger, net; 
                                 true_parameters=true_parameters,
                                 loss_settings=loss_settings,
                                 fullfname_fig=path_param,
@@ -88,10 +103,10 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     # PLOT: Frequency spectra evolution
     fname_freq_plot = "$(base_prefix)_spectrum_evolution.png"
     fname_freq_anim = "$(base_prefix)_spectrum_evolution.gif"
-    freq_plot_path = joinpath(optimization_path, fname_freq_plot)
-    freq_anim_path = joinpath(optimization_path, fname_freq_anim)
-    plot_psd_spetra_evolution(optlogger, net, setter;
-                    target_data=target_data,
+    freq_plot_path = joinpath(figures_dir, fname_freq_plot)
+    freq_anim_path = joinpath(figures_dir, fname_freq_anim)
+    ENEEGMA.plot_psd_spetra_evolution(optlogger, net, setter;
+                    data=data,
                     settings=settings,
                     fullfname_fig=freq_plot_path,
                     fullfname_anim=freq_anim_path)
@@ -188,13 +203,6 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     results_path = joinpath(optimization_path, fname_results)
     write_compact_json(results_path, results)
 
-end
-
-function normalize_parameter_name(name::String)::String
-    # Convert naming convention: __[letter] → _x
-    # Example: N1__c11 → N1_x11
-    # This handles parameter names with double underscores followed by a single letter
-    return replace(name, r"__[a-z]" => "_x")
 end
 
 function best_params_inits(optsol::SciMLBase.OptimizationSolution,
@@ -417,18 +425,21 @@ function plot_observed_vs_modelled_psd(data_modeled::Union{Vector{Float64}, Matr
     
     plot!(p, plot_title="Frequency Domain Comparison", titlefontsize=12)
 
-    savefig(p, fullfname_fig)
-
+    try
+        savefig(p, fullfname_fig)
+    catch e
+        vwarn("Failed to save frequency domain comparison plot to $fullfname_fig: $e"; level=2)
+    end
 
     return nothing
 end
 
 function plot_observed_vs_modelled_psd(data_modeled::Union{Vector{Float64}, Matrix{Float64}},
-                                        target_data::Data;
+                                        data::Data;
                                         fullfname_fig::String="obs_vs_mod_freq.png",
                                         general_settings::Union{Nothing, GeneralSettings}=nothing
     )::Nothing
-    return plot_observed_vs_modelled_psd(data_modeled, target_data.powers, target_data.freqs;
+    return plot_observed_vs_modelled_psd(data_modeled, data.powers, data.freqs;
                                           fullfname_fig=fullfname_fig,
                                           general_settings=general_settings)
 end
@@ -522,10 +533,12 @@ function plot_param_exploration(optlogger::Vector{OptLogEntry},
                 # jitter y so points don't overlap
                 yr = 0.0 .+ 0.02 .* (rand(length(xr)) .- 0.5)
 
+                # Use mean alpha and color from restart
                 scatter!(sp, xr, yr;
                          markersize=5,
                          markerstrokewidth=0,
-                         alpha=alphas,
+                         alpha=mean(alphas),
+                         color=base_c,
                          label = j == 1 ? "restart $r" : "")
             end
         end
@@ -545,7 +558,11 @@ function plot_param_exploration(optlogger::Vector{OptLogEntry},
     end
 
     plot!(p, plot_title = "Parameter exploration across optimization")
-    savefig(p, fullfname_fig)
+    try
+        savefig(p, fullfname_fig)
+    catch e
+        vwarn("Failed to save parameter exploration plot to $fullfname_fig: $e"; level=2)
+    end
 
     return nothing
 end
@@ -562,7 +579,7 @@ measurement-noise parameter by injecting noise prior to PSD computation.
 function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
                               net::Network,
                               setter::Function;
-                              target_data::Union{Data, Vector{Float64}, Matrix{Float64}, DataFrame}=Float64[],
+                              data::Union{Data, Vector{Float64}, Matrix{Float64}, DataFrame}=Float64[],
                               settings::Union{Nothing, Settings}=nothing,
                               fullfname_fig::Union{Nothing, String}=nothing,
                               fullfname_anim::Union{Nothing, String}=nothing,
@@ -578,13 +595,13 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
         return nothing
     end
 
-    gen = settings === nothing ? net.settings.general_settings : settings.general_settings
-    sim = settings === nothing ? net.settings.simulation_settings : settings.simulation_settings
-    loss = settings === nothing ? net.settings.optimization_settings.loss_settings : settings.optimization_settings.loss_settings
-    data = settings === nothing ? net.settings.data_settings : settings.data_settings
+    gs = settings.general_settings
+    ss = settings.simulation_settings
+    ls = settings.optimization_settings.loss_settings
+    ds = settings.data_settings
 
-    solver = get_solver(net.problem, sim)
-    solver_kwargs = get_solver_kwargs(net.problem, sim)
+    solver = get_solver(net.problem, ss)
+    solver_kwargs = get_solver_kwargs(net.problem, ss)
     n_state_vars = length(net.problem.u0)
     n_params = length(entries[1].params) - n_state_vars
 
@@ -597,7 +614,7 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
 
         param_block = params_vec[1:n_params]
         init_block = params_vec[n_params + 1 : n_params + n_state_vars]
-        sigma_val = data.measurement_noise_std
+        sigma_val = ds.measurement_noise_std
         new_params = setter(net.problem.p, param_block)
         try
             sol = simulate_network(net.problem; new_params=new_params, new_inits=init_block,
@@ -607,10 +624,11 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
                 continue
             end
             model_prediction = Matrix(df)[:, 2]
-            sampling_rate = length(sol.t) > 1 ? 1.0 / (sol.t[2] - sol.t[1]) : 1.0 / sim.saveat
-            freqs, modeled_powers = compute_noisy_preprocessed_welch_psd(model_prediction, sampling_rate, loss, data)
+            sampling_rate = length(sol.t) > 1 ? 1.0 / (sol.t[2] - sol.t[1]) : 1.0 / ss.saveat
+            freqs, modeled_powers = compute_noisy_preprocessed_welch_psd(model_prediction, sampling_rate, ls, ds)
             # Skip entries with empty or invalid power spectra
             if !isempty(modeled_powers) && all(isfinite, modeled_powers)
+                vinfo("Restart $(entry.irestart), Iter $(entry.iter): signal_len=$(length(model_prediction)), freq_points=$(length(freqs))"; level=2)
                 push!(spectra, (iter=entry.iter, loss=entry.loss, restart=entry.irestart,
                                 freqs=freqs, powers=modeled_powers, sigma=sigma_val))
             end
@@ -631,7 +649,33 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
         return nothing
     end
 
-    target_freqs, target_curve = target_data isa Data ? (target_data.freqs, target_data.powers) : (nothing, nothing)
+    # Standardize frequency grid across all spectra to finest resolution
+    # Find spectrum with most frequency points (finer resolution)
+    finest_freq_idx = argmax(length(spec.freqs) for spec in spectra)
+    finest_freqs = spectra[finest_freq_idx].freqs
+    
+    # Interpolate all spectra to common frequency grid
+    spectra_standardized = []
+    for spec in spectra
+        if length(spec.freqs) == length(finest_freqs) && isapprox(spec.freqs, finest_freqs)
+            # Already on standard grid
+            push!(spectra_standardized, spec)
+        else
+            # Interpolate to standard grid
+            try
+                interp_func = linear_interpolation(spec.freqs, spec.powers; extrapolation_bc=Flat())
+                standardized_powers = interp_func.(finest_freqs)
+                push!(spectra_standardized, (iter=spec.iter, loss=spec.loss, restart=spec.restart,
+                                            freqs=finest_freqs, powers=standardized_powers, sigma=spec.sigma))
+            catch
+                # If interpolation fails, keep original
+                push!(spectra_standardized, spec)
+            end
+        end
+    end
+    spectra = spectra_standardized
+
+    target_freqs, target_curve = data isa Data ? (data.freqs, data.powers) : (nothing, nothing)
     
     # Interpolate target to model's frequency resolution (lower resolution) for plotting efficiency
     plot_freqs = nothing
@@ -665,8 +709,8 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
     upper_pad = 0.1 * span
     ylims_tuple = (power_min - lower_pad, power_max + upper_pad)
 
-    fig_path = isnothing(fullfname_fig) ? "$(gen.path_out)\\$(gen.exp_name)_$(net.name)_freq_sweep.png" : fullfname_fig
-    anim_path = isnothing(fullfname_anim) ? "$(gen.path_out)\\$(gen.exp_name)_$(net.name)_freq_sweep.gif" : fullfname_anim
+    fig_path = isnothing(fullfname_fig) ? "$(gs.path_out)\\$(gs.exp_name)_$(net.name)_freq_sweep.png" : fullfname_fig
+    anim_path = isnothing(fullfname_anim) ? "$(gs.path_out)\\$(gs.exp_name)_$(net.name)_freq_sweep.gif" : fullfname_anim
 
     p = plot(title="Frequency spectra evolution", xlabel="Frequency (Hz)", ylabel="Norm Log10 Power")
     for (idx, spec) in enumerate(spectra)
@@ -678,7 +722,11 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
         plot!(p, overlay_freqs, plot_target_curve; label="Target", color=:black, linewidth=4, linestyle=:solid)
     end
     ylims!(p, ylims_tuple)
-    savefig(p, fig_path)
+    try
+        savefig(p, fig_path)
+    catch e
+        vwarn("Failed to save spectrum evolution plot to $fig_path: $e"; level=2)
+    end
 
     if length(spectra) > 1
         anim = @animate for spec in spectra
@@ -707,15 +755,15 @@ end
 
 
 function compute_r2_for_params(net::Network,
-                               target_data::Data,
+                               data::Data,
                                param_symbols::Vector{Symbol},
                                params_native::Vector{Float64},
                                inits_native::Vector{Float64})::Float64
-    sim = net.settings.simulation_settings
-    loss = net.settings.optimization_settings.loss_settings
-    data = net.settings.data_settings
-    solver = get_solver(net.problem, sim)
-    solver_kwargs = get_solver_kwargs(net.problem, sim)
+    ss = net.settings.simulation_settings
+    ls = net.settings.optimization_settings.loss_settings
+    ds = net.settings.data_settings
+    solver = get_solver(net.problem, ss)
+    solver_kwargs = get_solver_kwargs(net.problem, ss)
 
     setter = make_namedtuple_setter(Tuple(param_symbols))
     opt_params = setter(net.problem.p, params_native)
@@ -731,9 +779,9 @@ function compute_r2_for_params(net::Network,
         return NaN
     end
     model_prediction = Matrix(df)[:, 2]
-    fs = length(sol.t) > 1 ? 1.0 / (sol.t[2] - sol.t[1]) : 1.0 / sim.saveat
-    _, modeled_powers = compute_noisy_preprocessed_welch_psd(model_prediction, fs, loss, data)
-    target_freqs, target_curve = target_data.freqs, target_data.powers
+    fs = length(sol.t) > 1 ? 1.0 / (sol.t[2] - sol.t[1]) : 1.0 / ss.saveat
+    _, modeled_powers = compute_noisy_preprocessed_welch_psd(model_prediction, fs, ls, ds)
+    target_freqs, target_curve = data.freqs, data.powers
     if target_curve === nothing || length(target_curve) != length(modeled_powers)
         return NaN
     end
@@ -772,30 +820,34 @@ function plot_loss_over_iterations(optlogger::Vector{OptLogEntry},
                                    general_settings::GeneralSettings,
                                    fullfname_fig::AbstractString)
     general_settings.make_plots || return nothing
-    plot([optlogger[i].iter for i in eachindex(optlogger)],
-         [optlogger[i].loss for i in eachindex(optlogger)],
-         xlabel="Iteration", ylabel="Loss")
-    savefig(fullfname_fig)
+    try
+        plot([optlogger[i].iter for i in eachindex(optlogger)],
+             [optlogger[i].loss for i in eachindex(optlogger)],
+             xlabel="Iteration", ylabel="Loss")
+        savefig(fullfname_fig)
+    catch e
+        vwarn("Failed to plot loss evolution to $fullfname_fig: $e"; level=2)
+    end
     return nothing
 end
 
 function plot_observed_vs_modelled_ts_windows(sol::SciMLBase.AbstractODESolution,
-                                              target_data::Union{Data, Vector{Float64}, Matrix{Float64}, DataFrame},
+                                              data::Union{Data, Vector{Float64}, Matrix{Float64}, DataFrame},
                                               settings::Union{Nothing, Settings},
                                               net::Network;
                                               zoom_window::Tuple{Float64, Float64}=(2.0, 5.0),
                                               fullfname_fig::Union{Nothing, AbstractString}=nothing)
     gen_settings = settings === nothing ? net.settings.general_settings : settings.general_settings
     gen_settings.make_plots || return nothing
-    target_data isa Data || return nothing
+    data isa Data || return nothing
 
     df = DataFrame(sol)
     size(df, 2) >= 2 || return nothing
 
     model_times = sol.t
     model_ts = Vector(df[:, 2])
-    obs_times = target_data.times
-    obs_ts = target_data.signal
+    obs_times = data.times
+    obs_ts = data.signal
 
     p = plot(layout=(2, 1), size=(900, 500), legend=:topright)
     plot!(p[1], obs_times, obs_ts, label="Observed", xlabel="", ylabel="")
@@ -807,7 +859,11 @@ function plot_observed_vs_modelled_ts_windows(sol::SciMLBase.AbstractODESolution
               joinpath(gen_settings.path_out,
                        "$(net.name)_$(gen_settings.exp_name)_plot_obs_vs_mod_ts.png") :
               String(fullfname_fig)
-    savefig(p, outpath)
+    try
+        savefig(p, outpath)
+    catch e
+        vwarn("Failed to save observed vs modelled timeseries plot to $outpath: $e"; level=2)
+    end
     return nothing
 end
 

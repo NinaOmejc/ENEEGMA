@@ -10,8 +10,12 @@ This module provides a single source of truth for:
 This ensures consistency across optimization, evaluation, and analysis scripts.
 """
 
+# ============================================================================
+# PRIMARY FUNCTIONS
+# ============================================================================
+
 """
-    simulate_and_extract(net::Network, params, inits, settings::Settings; demean=true)
+    simulate_and_extract(net::Network, params, inits, settings::Settings; demean=true, remove_transient_period=true)
 
 Simulate the network with given parameters and initial conditions, then extract and process
 the brain source prediction.
@@ -22,12 +26,18 @@ the brain source prediction.
 - `inits`: Initial condition values (can be NamedTuple or Vector)
 - `settings::Settings`: Settings object containing simulation configuration
 - `demean::Bool=true`: Whether to subtract the mean from the prediction
+- `remove_transient_period::Bool=true`: Whether to skip the configured transient period from the simulation
 
 # Returns
 - `sol`: ODE solution object
 - `model_prediction::Vector{Float64}`: Extracted and processed brain source time series
 - `success::Bool`: Whether simulation succeeded
 - `error_msg::String`: Error message if simulation failed, empty otherwise
+
+# Notes
+When `remove_transient_period=true`, the transient period is discarded to allow
+the system to settle into steady-state before analysis. Set to `false` to use the entire simulation
+window (useful when comparing directly with observed data that doesn't have this offset).
 """
 
 function simulate_and_extract(
@@ -35,7 +45,8 @@ function simulate_and_extract(
     params,
     inits,
     settings::Settings;
-    demean::Bool=true
+    demean::Bool=true,
+    transient_period_duration::Float64=2.0
 )
     simulation_settings = settings.simulation_settings
     
@@ -53,32 +64,27 @@ function simulate_and_extract(
             solver_kwargs=solver_kwargs
         )
         
-        # Check solution status
-        if !SciMLBase.successful_retcode(sol)
-            error_msg = "Simulation failed with retcode: $(sol.retcode)"
-            vwarn("$(error_msg)"; level=2)
-            return sol, Float64[], false, error_msg
-        end
+        # Extract brain source index
+        brain_source_idx = ENEEGMA.get_brain_source_idx(net)
         
-        # Extract brain source
-        brain_source_idx = get_brain_source_idx(net)
-        
-        # Filter time points (skip transient period)
+        # Get tspan and transient settings
         tspan = simulation_settings.tspan
         if tspan === nothing
             error("SimulationSettings.tspan must be specified")
         end
-        transient_time = tspan[1] + 2.0  # Skip first 2 seconds after tspan start
-        keep_idx = findall(t -> t >= transient_time, sol.t)
         
-        if isempty(keep_idx)
-            error_msg = "No simulation time points after transient period (t=$(transient_time)s)"
+        fs_actual = 1.0 / solver_kwargs[:saveat]  # Infer sampling frequency from time step
+        keep_idx = ENEEGMA.get_indices_after_transient_removal(sol.t, transient_period_duration, tspan[1], fs_actual)
+        
+        # Validate simulation success (comprehensive checks)
+        success, error_msg, model_prediction = validate_simulation_success(
+            sol, brain_source_idx, keep_idx, tspan[1], tspan[2], transient_period_duration
+        )
+        
+        if !success
             vwarn("$(error_msg)"; level=2)
             return sol, Float64[], false, error_msg
         end
-        
-        # Extract and process prediction
-        model_prediction = Vector{Float64}(sol[brain_source_idx, keep_idx])
         
         # Demean if requested (critical for PSD computation consistency)
         if demean
@@ -90,7 +96,6 @@ function simulate_and_extract(
     catch e
         error_msg = "Simulation error: $(e)"
         vwarn("$(error_msg)"; level=2)
-        # Return empty solution-like object
         return nothing, Float64[], false, error_msg
     end
 end
@@ -129,7 +134,8 @@ function evaluate_model(
     data::Data,
     settings::Settings;
     evaluation_metrics::AbstractVector=["loss", "r2", "iae"],
-    demean::Bool=true
+    demean::Bool=true,
+    transient_period_duration::Float64=2.0
 )
     data_settings = settings.data_settings
     loss_settings = settings.optimization_settings.loss_settings
@@ -145,7 +151,7 @@ function evaluate_model(
     
     # Simulate and extract prediction
     sol, model_prediction, success, error_msg = ENEEGMA.simulate_and_extract(
-        net, params, inits, settings; demean=demean)
+        net, params, inits, settings; demean=demean, transient_period_duration=transient_period_duration)
     
     # Normalize metric names (allows empty vector like [])
     metric_names = String.(evaluation_metrics)
@@ -334,3 +340,8 @@ function r2(psd_model, psd_data)
     ss_tot = sum((psd_data .- mean(psd_data)).^2)
     return 1 - ss_res/ss_tot
 end
+
+
+
+
+

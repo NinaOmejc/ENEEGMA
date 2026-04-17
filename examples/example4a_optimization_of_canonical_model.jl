@@ -59,7 +59,7 @@ set_all_params_tunable!(net.params);
 # Step 4: Run Optimization
 # ============================================================================
 print_settings_summary(settings; section="optimization_settings")
-settings.optimization_settings.n_restarts = 1
-settings.optimization_settings.time_limit_minutes = 1
+settings.optimization_settings.n_restarts = 5
+settings.optimization_settings.param_bound_scaling_level = "high"
 optsol, optlogger, setter, blocks = optimize_network(net, data, settings)
 

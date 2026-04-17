@@ -81,44 +81,18 @@ function compute_loss(new_params, args, metric_fun::Function)
     new_prob = remake(prob; p=updated_all_params, u0=iv, tspan=tspan)
     sol = safe_solve(new_prob, solver; solver_kwargs=solver_kwargs)
     
-    if !SciMLBase.successful_retcode(sol)
-        return 1e9
-    end
-
-    # Discard initial transient, e.g. first 1–2 s =
-    keep_idx = findall(t -> t >= (tspan[1] + 2), sol.t)
-    if isempty(keep_idx)
-        return 1e9  # Solver terminated before transient period ended
-    end
-    model_prediction = Vector(sol[brain_source_idx, keep_idx])
-
-    if any(!isfinite, model_prediction)
-        return 1e9
-    end
-
-    # crude growth detection to bail out exploding trajectories before PSD computation
-    n = length(model_prediction)
-    w = min(200, max(50, n ÷ 5))
-    max_rms_growth_threshold = 100.0  # Safety threshold: trajectory can grow up to 100x
-    if n ≥ 2w
-        # Compute RMS directly without allocating abs_trace
-        head_sum_sq = 0.0
-        tail_sum_sq = 0.0
-        @inbounds for i in 1:w
-            head_sum_sq += model_prediction[i]^2
-            tail_sum_sq += model_prediction[n - w + i]^2
-        end
-        head_rms = sqrt(head_sum_sq / w)
-        tail_rms = sqrt(tail_sum_sq / w)
-        if isfinite(head_rms) && head_rms > 0 && tail_rms > max_rms_growth_threshold * head_rms
-            return 1e9
-        end
-    end
-
-    # Check max absolute value for signal bounds (safety threshold)
-    max_abs_signal_threshold = 100.0  # Safety threshold: signal cannot exceed ±100
-    max_abs = maximum(abs, model_prediction)
-    if max_abs > max_abs_signal_threshold
+    # Create a temporary Settings object for compatibility with validation functions
+    # Extract transient duration from data_settings if available
+    transient_duration = data_settings.psd.transient_period_duration
+    fs_actual = 1.0 / solver_kwargs[:saveat]  # Infer sampling frequency from time step
+    keep_idx = ENEEGMA.get_indices_after_transient_removal(sol.t, transient_duration, tspan[1], fs_actual)
+    
+    # Validate simulation success (all checks in one place)
+    success, error_msg, model_prediction = ENEEGMA.validate_simulation_success(
+        sol, brain_source_idx, keep_idx, tspan[1], tspan[2], transient_duration
+    )
+    
+    if !success
         return 1e9
     end
 
@@ -137,6 +111,137 @@ end
 function loss_empty(new_params, args)
     return NaN  # Or some default high loss value like 1e9
 end
+
+
+# ============================================================================
+# HELPER FUNCTIONS FOR VALIDATION
+# ============================================================================
+
+"""
+    validate_simulation_success(
+        sol,
+        brain_source_idx::Int,
+        keep_idx,
+        tspan_start::Float64,
+        tspan_end::Float64,
+        transient_duration::Float64
+    )::Tuple{Bool, String, Vector{Float64}}
+
+Comprehensive validation of simulation success with multiple safety checks.
+
+Checks:
+1. ODE solver completed successfully (retcode)
+2. Valid keep indices after transient removal
+3. All model prediction values are finite
+4. Simulation wasn't terminated early (longer than expected based on tspan)
+5. No individual state variables grew explosively
+6. Model prediction max absolute value within bounds
+7. Model prediction doesn't show exponential growth (RMS growth check)
+
+# Returns
+- `(success::Bool, error_msg::String, model_prediction::Vector{Float64})`
+"""
+function validate_simulation_success(
+    sol,
+    brain_source_idx::Int,
+    keep_idx,
+    tspan_start::Float64,
+    tspan_end::Float64,
+    transient_duration::Float64
+)::Tuple{Bool, String, Vector{Float64}}
+    
+    # Check 1: Solver succeeded
+    if !SciMLBase.successful_retcode(sol)
+        return false, "Simulation failed with retcode: $(sol.retcode)", Float64[]
+    end
+    
+    # Check 2: Keep indices valid
+    if isempty(keep_idx)
+        return false, "No simulation time points after transient period", Float64[]
+    end
+    
+    # Extract prediction
+    local model_prediction
+    try
+        model_prediction = Vector{Float64}(sol[brain_source_idx, keep_idx])
+    catch e
+        return false, "Failed to extract brain source: $e", Float64[]
+    end
+    
+    # Check 3: Finite values in prediction
+    if any(!isfinite, model_prediction)
+        return false, "Model prediction contains non-finite values (Inf or NaN)", Float64[]
+    end
+    
+    # Check 4: Simulation terminated early (check if got enough time points)
+    # Calculate expected number of samples for full tspan
+    expected_duration_sec = (tspan_end - tspan_start) / 1000.0  # Convert ms to seconds
+    actual_duration_sec = (sol.t[end] - sol.t[1])
+    if actual_duration_sec < 0.9 * expected_duration_sec  # Allow 10% tolerance
+        return false, "Simulation terminated early (covered $(round(actual_duration_sec, digits=2))s of $(round(expected_duration_sec, digits=2))s)", Float64[]
+    end
+    
+    # Check 5: All state variables bounded (check for explosions in internal states)
+    # Look at early vs late RMS for each variable
+    n_steps = length(sol.t)
+    if n_steps >= 100
+        n_sample = min(50, n_steps ÷ 5)
+        
+        for var_idx in 1:length(sol.u[1])
+            # Compute early RMS from first n_sample steps
+            early_sum_sq = 0.0
+            for i in 1:n_sample
+                early_sum_sq += abs(sol.u[i][var_idx])^2
+            end
+            early_rms = sqrt(early_sum_sq / n_sample)
+            
+            # Compute late RMS from last n_sample steps
+            late_sum_sq = 0.0
+            for i in (n_steps - n_sample + 1):n_steps
+                late_sum_sq += abs(sol.u[i][var_idx])^2
+            end
+            late_rms = sqrt(late_sum_sq / n_sample)
+            
+            if early_rms > 0 && late_rms > 100.0 * early_rms
+                return false, "State variable $var_idx exploded (RMS grew from $(round(early_rms, digits=2)) to $(round(late_rms, digits=2)))", Float64[]
+            end
+        end
+    end
+    
+    # Check 6: Max absolute value within bounds
+    max_abs_signal_threshold = 100.0
+    max_abs = maximum(abs, model_prediction)
+    if max_abs > max_abs_signal_threshold
+        return false, "Signal exceeded threshold: max(|signal|) = $(round(max_abs, digits=2)) > $max_abs_signal_threshold", Float64[]
+    end
+    
+    # Check 7: Model prediction doesn't show exponential growth (RMS check)
+    n = length(model_prediction)
+    w = min(200, max(50, n ÷ 5))
+    max_rms_growth_threshold = 100.0
+    if n ≥ 2w
+        head_sum_sq = 0.0
+        tail_sum_sq = 0.0
+        @inbounds for i in 1:w
+            head_sum_sq += model_prediction[i]^2
+            tail_sum_sq += model_prediction[n - w + i]^2
+        end
+        head_rms = sqrt(head_sum_sq / w)
+        tail_rms = sqrt(tail_sum_sq / w)
+        if isfinite(head_rms) && head_rms > 0 && tail_rms > max_rms_growth_threshold * head_rms
+            growth_factor = round(tail_rms / head_rms, digits=1)
+            return false, "Prediction grew explosively (RMS growth $growth_factor x > threshold)", Float64[]
+        end
+    end
+    
+    return true, "", model_prediction
+end
+
+
+
+# ============================================================================
+# LOSS FUNCTION IMPLEMENTATIONS
+# ============================================================================
 
 """
     weighted_mae(model_prediction, target::Data, fs, loss_settings::LossSettings)

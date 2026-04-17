@@ -162,3 +162,38 @@ function get_eeg_signal(settings::Settings, df::DataFrame)::String
     end
 end
 
+# ============================================================================
+# TRANSIENT PERIOD UTILITIES
+# ============================================================================
+
+"""
+    get_indices_after_transient_removal(sol_t::Vector, transient_duration::Float64, tspan_start::Float64, fs::Union{Nothing, Float64}=nothing)::AbstractVector{Int}
+
+Compute indices to keep after removing transient period. Optimized for speed (called millions of times).
+
+Uses sample-based counting: transient_samples = round(transient_duration * fs) then returns (transient_samples+1):end.
+
+# Arguments
+- `fs::Union{Nothing, Float64}`: Sampling frequency in Hz. If nothing, infers from time vector.
+- Other args kept for API compatibility but currently unused for efficiency.
+"""
+function get_indices_after_transient_removal(sol_t::Vector, transient_duration::Float64, tspan_start::Float64, fs::Union{Nothing, Float64}=nothing)::AbstractVector{Int}
+    if transient_duration <= 0.0
+        return 1:length(sol_t)
+    end
+    
+    # Use provided fs, otherwise infer from time vector mean spacing
+    fs_use = if fs !== nothing
+        fs
+    else
+        length(sol_t) < 2 ? 1.0 : 1.0 / ((sol_t[end] - sol_t[1]) / (length(sol_t) - 1))
+    end
+    
+    # Sample-based counting: deterministic, no time-comparison ambiguity
+    transient_samples = Int(round(transient_duration * fs_use))
+    keep_start = min(transient_samples + 1, length(sol_t))
+    
+    return keep_start:length(sol_t)
+end
+
+

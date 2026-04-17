@@ -35,16 +35,16 @@
   "simulation_settings": {
     "tspan": [
       0.0,
-      1000.0
+      59.99609375
     ],
-    "dt": 0.1,
+    "dt": 0.0001,
     "solver": "Tsit5",
     "solver_kwargs": {
       "abstol": 1e-6,
       "reltol": 1e-5,
       "maxiters": 100000
     },
-    "saveat": 0.1
+    "saveat": 0.00390625
   },
   "sampling_settings": {
     "grammar_file": "",
@@ -53,10 +53,15 @@
     "grammar_seed": null
   },
   "data_settings": {
-    "data_path": "",
-    "data_fname": "",
+    "data_file": null,
+    "target_channel": "IC3",
+    "task_type": "rest",
     "fs": 256.0,
-    "target_channel": "IC1",
+    "data_columns": null,
+    "estimate_measurement_noise": true,
+    "spectral_roi_definition_mode": "manual",
+    "spectral_roi_auto_peak_sensitivity": 0.3,
+    "spectral_roi_manual": [[7.5, 14.0]],
     "measurement_noise_std": 0.0,
     "psd": {
       "preproc_pipeline": "log10",
@@ -69,6 +74,7 @@
       "smooth_poly_order": 2,
       "rel_eps": 1e-12,
       "smooth_sigma": 1.0,
+      "transient_period_duration": 2.0,
       "noise_seed": 42
     }
   },

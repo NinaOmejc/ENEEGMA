@@ -265,7 +265,10 @@ function Base.show(io::IO, net::Network)
     println(io, "\n[Sensory Input]")
     println(io, "  Function: $(net.sensory_input_str)")
     println(io, "  Connected nodes: $(findall(net.sensory_input_conn))")
-    println(io, "  Stochastic: $(net.sensory_randomness)")
+
+    # Problem type 
+    problem_type_str = split(string(typeof(net.problem)), "{")[1]
+    println(io, "\n[Problem Type]: $problem_type_str")
     
     println(io, "="^80 * "\n")
 end

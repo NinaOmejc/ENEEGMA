@@ -35,7 +35,7 @@ loaded_settings = load_settings(example_settings_path)
 # ============================================================================
 # Step 5: Modify Settings Programmatically
 # All settings fields are mutable and can be modified directly in code.
-# Here we change the simulation time span to 20 seconds (default is 10 seconds).
+# Here we change the simulation time span to 20 seconds.
 # ============================================================================
 loaded_settings.simulation_settings.tspan = (0.0, 20.0) # simulation time span in s
 

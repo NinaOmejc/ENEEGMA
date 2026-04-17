@@ -358,7 +358,7 @@ mutable struct SimulationSettings <: AbstractSettings
         simdict = get(dict, "simulation_settings", Dict{String, Any}())
 
         new(
-            Tuple{Float64, Float64}(get(simdict, "tspan", (0.0, 60.0))),
+            Tuple{Float64, Float64}(get(simdict, "tspan", (0.0, 59.99609375))),  # Default: 15360 points at 256 Hz (1/256 Hz sampling)
             Float64(get(simdict, "dt", 0.0001)),
             Float64(get(simdict, "saveat", 0.00390625)), # default 1/256 sec for good PSD resolution up to ~100 Hz
             get(simdict, "abstol", nothing),
@@ -637,6 +637,7 @@ mutable struct OptimizationSettings <: AbstractSettings
     loss_settings::LossSettings
     optimizer_settings::OptimizerSettings
     hyperparameter_sweep::HyperparameterSweepSettings
+    output_dir::Union{String, Nothing}  # Path to optimization job folder (e.g., optimization_1/)
 
     function OptimizationSettings(dict::Dict)::OptimizationSettings
         optdict = get(dict, "optimization_settings", Dict{String, Any}())
@@ -702,6 +703,12 @@ mutable struct OptimizationSettings <: AbstractSettings
             section isa AbstractDict ? Dict{String, Any}(section) : Dict{String, Any}()
         end
         hyper = HyperparameterSweepSettings(raw_sweep_section)
+        
+        # Output directory for this optimization job (set to nothing initially, will be set by optimize_network or run_hyperparameter_sweep)
+        output_dir = get(optdict, "output_dir", nothing)
+        if output_dir !== nothing
+            output_dir = String(output_dir)
+        end
 
     new(
             method,
@@ -720,7 +727,8 @@ mutable struct OptimizationSettings <: AbstractSettings
             Int64(get(optdict, "time_limit_minutes", 120)),
             lossset,
             optz,
-            hyper
+            hyper,
+            output_dir
         )
     end
 end
@@ -869,6 +877,7 @@ mutable struct PSDSettings <: AbstractSettings
     smooth_poly_order::Int                  # Savitzky-Golay polynomial order
     rel_eps::Float64                        # Relative epsilon for numerical stability
     smooth_sigma::Float64                   # Gaussian smoothing sigma
+    transient_period_duration::Float64      # Duration (seconds) of initial transient to skip (0.0 to disable)
     noise_seed::Union{Int, Nothing}         # Random seed for PSD noise (42=deterministic, nothing=random)
     workspace::Union{Nothing, Any}          # Cached SpectrumWorkspace (using Any to avoid circular dep)
 
@@ -886,6 +895,7 @@ mutable struct PSDSettings <: AbstractSettings
         smooth_poly_order = max(Int(get(psd_dict, "smooth_poly_order", 2)), 0)
         rel_eps = Float64(get(psd_dict, "rel_eps", 1e-12))
         smooth_sigma = Float64(get(psd_dict, "smooth_sigma", 1.0))
+        transient_period_duration = max(Float64(get(psd_dict, "transient_period_duration", 2.0)), 0.0)
         
         # Noise seed for deterministic vs random noise generation
         noise_seed = if haskey(psd_dict, "noise_seed")
@@ -896,7 +906,7 @@ mutable struct PSDSettings <: AbstractSettings
         end
         
         return new(preproc_pipeline, welch_window_sec, welch_overlap, welch_nperseg, welch_nfft,
-                   noise_avg_reps, window_size, smooth_poly_order, rel_eps, smooth_sigma, noise_seed, nothing)
+                   noise_avg_reps, window_size, smooth_poly_order, rel_eps, smooth_sigma, transient_period_duration, noise_seed, nothing)
     end
 end
 

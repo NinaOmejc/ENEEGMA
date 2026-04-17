@@ -18,6 +18,15 @@ function prepare_data!(settings::Settings)
     # Extract or synthesize time axis
     times = ENEEGMA._extract_or_synthesize_time_axis(eeg_data, fs, length(signal))
     
+    # Remove transient period from observed signal before PSD computation
+    transient_duration = settings.data_settings.psd.transient_period_duration
+    keep_idx = ENEEGMA.get_indices_after_transient_removal(times, transient_duration, times[1], fs)
+    
+    if !isempty(keep_idx)
+        signal = signal[keep_idx]
+        times = times[keep_idx]
+    end
+    
     # Extract settings early (needed for time axis resolution)
     ls = settings.optimization_settings.loss_settings
     loss_settings = settings.optimization_settings.loss_settings

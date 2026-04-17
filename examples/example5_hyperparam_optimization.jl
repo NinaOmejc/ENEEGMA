@@ -60,10 +60,10 @@ show_hyperparameter_combos(settings; combo_idx=combo_idx)
 # ============================================================================
 
 # OPTION A: Run full sweep (all combinations)
+settings.optimization_settings.n_restarts = 3
 # run_hyperparameter_sweep(settings, data)
 
 # OPTION B: Run specific combination (useful for debugging/testing)
-settings.optimization_settings.time_limit_minutes = 1
 run_hyperparameter_sweep(settings, data; combo_idx=combo_idx)
 
 println("Example complete! Results saved to: $(settings.general_settings.path_out)")

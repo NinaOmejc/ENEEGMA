@@ -63,8 +63,8 @@ export rule_id_map
 
 include("types/abstract_types.jl")
 include("types/settings.jl")
-include("types/params.jl")
 include("types/variables.jl")
+include("types/params.jl")
 include("types/network_types.jl")
 include("types/data.jl")
 include("types/optimization_types.jl")
@@ -79,8 +79,9 @@ export ParamTransform, ParamReparamTransform, Affine01, ExpPos, SoftplusPos, Sig
 export update_param_minmax!, update_param_values!, update_param_tunability!
 export update_param_defaults!, update_param_bounds!
 export get_param_minmax_values, get_param_default_values, get_param_tunability, get_param_type
-export sample_param_values, needs_tscale, MIN_PARAM_VAL, MAX_PARAM_VAL
+export sample_param_values, MIN_PARAM_VAL, MAX_PARAM_VAL
 export print_params_summary, set_all_params_tunable!
+export configure_network_parameters!
 
 # Variable management
 export StateVar, ExtraVar, Var, VarSet
@@ -102,11 +103,12 @@ include("utils/utils.jl")
 include("utils/io.jl")
 include("utils/extract_brain_source.jl")
 include("utils/spectral_transforms.jl")
+include("utils/visualization.jl")
 
 export set_verbose, vwarn, vinfo, verror, center
 export make_rng, haspropnn, get_eeg_signal, set_task_settings, is_verbose
 export create_default_settings, load_settings_from_file, save_settings, load_settings
-export settings_to_dict, print_settings_summary, load_data
+export settings_to_dict, print_settings_summary, load_data, normalize_parameter_name
 
 # Signal processing utilities
 export extract_brain_sources, extract_brain_source
@@ -115,6 +117,11 @@ export compute_cwt, compute_stft
 export compute_welch_psd, compute_preprocessed_welch_psd, compute_noisy_preprocessed_welch_psd
 export parse_psd_preproc_pipeline, psd_preproc_flags_from_spec
 export normalize_spectrum, normalize_spectra
+
+# Visualization utilities
+export plot_psd_single, plot_psd_comparison
+export plot_timeseries_windows, plot_simulation_results
+export find_next_numbered_folder, construct_output_dir, write_compact_json
 
 # ============================================================================
 # MODEL BUILDING
@@ -129,6 +136,8 @@ include("build/connectivity_functions.jl")
 include("build/connectivity_motifs.jl")
 include("build/input_dynamics.jl")
 include("build/output_dynamics.jl")
+
+export rebuild_network_problem!
 
 export build_population, build_populations
 export build_network, build_node
@@ -147,11 +156,13 @@ export add_conn_motif, add_conn_motif_builder, add_random_conn_motif
 # ============================================================================
 
 include("simulate/simulate_network.jl")
+include("simulate/save_simulation_results.jl")
 
 export simulate_network
 export prepare_ode_problem, solve_ode_system
 export simulate_network, safe_solve, get_solver, get_solver_kwargs
 export solver_needs_dt, sol2df, save_params_and_inits, save_ts_data
+export save_simulation_results
 
 # ============================================================================
 # OPTIMIZATION

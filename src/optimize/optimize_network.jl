@@ -14,10 +14,17 @@ function optimize_network(
     ss = settings.simulation_settings
     os = settings.optimization_settings
     ls = os.loss_settings
-    vinfo("Starting optimization of $(gs.exp_name) - $(net.name)"; level=1)
     
-    # Ensure output directories exist and save current settings
-    ENEEGMA.construct_output_dir(gs, ns)
+    # Create numbered optimization folder ONCE if not already set
+    if os.output_dir === nothing
+        base_output_dir = ENEEGMA.construct_output_dir(gs, ns)
+        optimization_output_dir = ENEEGMA.find_next_numbered_folder(base_output_dir, "optimization")
+        mkpath(optimization_output_dir)
+        os.output_dir = optimization_output_dir
+        vinfo("Created optimization folder: $optimization_output_dir"; level=2)
+    end
+    
+    vinfo("Starting optimization of $(gs.exp_name) - $(net.name)"; level=1)
 
     # get some optimization components
     solver = ENEEGMA.get_solver(net.problem, ss)
@@ -57,9 +64,6 @@ function optimize_network(
         data_settings=settings.data_settings,
     )
 
-    # Generate timestamp once for all restarts
-    optimization_timestamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
-
     best_optsol = nothing
     best_loss = Inf
     optlogger = OptLogEntry[]
@@ -72,7 +76,7 @@ function optimize_network(
         optsol, runlog, failure_reason = ENEEGMA.singlerun_optimization(irestart, optfun, optimizer, args, 
             tunable_params_symbols, tunables_lb, tunables_ub,
             os, start_time, net, param_spec, init_spec, initial_values_native, inits_lb, inits_ub
-        )
+        );
 
         append!(optlogger, runlog)
         if failure_reason !== nothing
@@ -89,7 +93,6 @@ function optimize_network(
             save_optimization_results(optsol, runlog, setter, net, data, settings; 
                                     blocks=blocks, 
                                     restart_idx=irestart,
-                                    optimization_timestamp=optimization_timestamp,
                                     hyperparam_combo=hyperparam_combo, 
                                     hyperparam_idx=hyperparam_idx, 
                                     hyperparam_keys=hyperparam_keys)

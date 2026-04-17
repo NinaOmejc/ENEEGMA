@@ -155,7 +155,7 @@ function simulate_network(prob::SciMLBase.AbstractDEProblem;
 
     # Remake problem with specified overrides (or return original if none specified)
     prob_remade = isempty(remake_kwargs) ? prob : DifferentialEquations.remake(prob; remake_kwargs...)
-
+ 
     # Solve the problem safely with callbacks for instability detection
     sol = safe_solve(prob_remade, solver; solver_kwargs=solver_kwargs)
 
@@ -336,7 +336,6 @@ function solver_needs_dt(solver, prob_is_stochastic::Bool=false)::Bool
     
     return false
 end
-
 
 
 function sol2df(sol::SciMLBase.AbstractTimeseriesSolution, net::Network)::DataFrame

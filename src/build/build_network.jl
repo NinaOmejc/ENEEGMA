@@ -156,7 +156,7 @@ function construct_network_dynamics!(net::Network)::Network
             # Check if THIS population needs tscale
             uses_voltage_gated = any(spec -> spec == "voltage_gated_dynamics", 
                                     pop.build_setts.input_dynamics_spec)
-            pop_needs_tscale = uses_voltage_gated || needs_tscale(pop_params)
+            pop_needs_tscale = uses_voltage_gated
             
             # Get equations for this population (based on variable parent_pop)
             pop_eqs = Equation[]

@@ -250,3 +250,96 @@ function sort_symbols(symbols::Union{Vector{Symbol}, Vector{Num},  Vector{Any}})
     return sorted_syms
 end
 
+
+"""
+    rebuild_network_problem!(net::Network, new_params::Union{Dict, NamedTuple})::Nothing
+
+Rebuild the network problem with updated parameters.
+
+Updates net.problem with new parameter values. This is useful after modifying parameters
+to ensure the problem reflects the current parameter state. The function handles both 
+Dict and NamedTuple parameter specifications, automatically converting Dicts to NamedTuples
+and merging with existing parameters to preserve unchanged values.
+
+# Arguments
+- `net::Network`: Network whose problem should be rebuilt
+- `new_params::Union{Dict, NamedTuple}`: Parameters to update as Dict{String/Symbol, Real} or NamedTuple
+
+# Returns
+- `nothing`
+
+# Example
+```julia
+net = build_network(settings)
+# Modify parameter defaults
+update_param_defaults!(net, Dict("N1₊tscale1" => 2.0, "N1₊c18" => 5.0))
+# Problem is automatically rebuilt - now simulate with updated params
+df = simulate_network(net)
+```
+"""
+function rebuild_network_problem!(net::Network, new_params::Union{Dict, NamedTuple})::Nothing
+    # Convert Dict to NamedTuple if needed
+    params_for_remake = new_params
+    
+    if new_params isa Dict
+        vinfo("Converting parameter Dict to NamedTuple"; level=2)
+        # Handle both String and Symbol keys by converting to Symbols
+        sym_dict = Dict(Symbol(k) => v for (k, v) in pairs(new_params))
+        new_params_nt = NamedTuple(sym_dict)
+        # Merge with existing parameters to preserve unchanged ones
+        params_for_remake = merge(net.problem.p, new_params_nt)
+    elseif new_params isa NamedTuple
+        # Merge NamedTuple with existing parameters to preserve unchanged ones
+        params_for_remake = merge(net.problem.p, new_params)
+    end
+    
+    # Rebuild problem with new parameters
+    net.problem = DifferentialEquations.remake(net.problem; p=params_for_remake)
+    vinfo("Network problem rebuilt with updated parameters"; level=2)
+    
+    return nothing
+end
+
+
+"""
+    update_param_defaults!(net::Network, dict::AbstractDict)::Network
+
+Update parameter defaults and rebuild the network problem.
+
+Provides a cleaner API for updating parameters when working with a Network object.
+Updates parameter default values in net.params and automatically rebuilds net.problem
+so it reflects the new parameter state. This eliminates the need to separately pass
+parameters to simulate_network().
+
+# Arguments
+- `net::Network`: Network whose parameters should be updated
+- `dict::AbstractDict`: Dictionary mapping parameter names to new default values
+
+# Returns
+- `net::Network`: The updated network (for method chaining)
+
+# Example
+```julia
+net = build_network(settings)
+
+# Update parameters and rebuild problem (single call)
+update_param_defaults!(net, Dict("N1₊tscale1" => 1.777, "N1₊c18" => 7.9))
+
+# Simulate with updated parameters (no need to pass new_params again)
+df = simulate_network(net)
+```
+
+# See Also
+- [`update_param_defaults!(::ParamSet, ::AbstractDict)`](@ref): Updates only the ParamSet
+- [`rebuild_network_problem!`](@ref): Rebuilds network problem after parameter changes
+"""
+function update_param_defaults!(net::Network, dict::AbstractDict)::Network
+    # Update parameter defaults in ParamSet
+    update_param_defaults!(net.params, dict)
+    
+    # Rebuild network problem with updated parameters
+    rebuild_network_problem!(net, dict)
+    
+    vinfo("Network $(net.name) parameters updated and problem rebuilt"; level=1)
+    return net
+end
