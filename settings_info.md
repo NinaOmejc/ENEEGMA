@@ -46,7 +46,7 @@ Neural network topology and dynamics configuration.
 | `node_models` | Array[String/RuleTree] | Length must equal `n_nodes` | `["MPR", "MPR", ...]` | Model type for each node (e.g., "MPR"=multi-population ramp model, "WC"=Wilson-Cowan, "FHN"=FitzHugh-Nagumo). Can also be RuleTree grammar objects. |
 | `node_coords` | Array[Array[Float, Float, Float]] | Length must equal `n_nodes` | `[[0, 10i, 0] for i=1:n_nodes]` | 3D coordinates `[x, y, z]` for each node. Used for visualization. |
 | `network_conn` | Matrix[Float] | Shape `(n_nodes, n_nodes)` | `zeros(n_nodes, n_nodes)` | Connection strength matrix. Element `[i,j]` is the weight from node `i` to node `j`. |
-| `network_conn_funcs` | Matrix[String] | Shape `(n_nodes, n_nodes)` | `fill("", n_nodes, n_nodes)` | Connection function strings (e.g., "sigmoid", "linear"). Maps connection dynamics. |
+| `network_conn_funcs` | Matrix[String] | Shape `(n_nodes, n_nodes)` | Diagonal: `""`, Off-diagonal: `"linear"` | Connection function strings (e.g., "linear", "sigmoid"). Maps connection dynamics. Default: "linear" for inter-node connections, "" (no self-connection) on diagonal. |
 | `network_delay` | Matrix[Float] | Shape `(n_nodes, n_nodes)` | `zeros(n_nodes, n_nodes)` | Synaptic delay (ms) for each connection. Element `[i,j]` is delay from node `i` to `j`. |
 | `sensory_input_conn` | Array[Int] | Length must equal `n_nodes` | `ones(n_nodes)` | Binary vector indicating which nodes receive sensory input (1=receives, 0=no input). Default: all nodes receive input. |
 | `sensory_input_func` | String | Valid Julia expression | `"rand(Normal(0.0, 1.0))"` | Function string for sensory input (e.g., `"sin(t)"`, `"randn()"`). Can reference time `t`. |

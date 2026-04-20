@@ -107,7 +107,7 @@ include("utils/visualization.jl")
 
 export set_verbose, vwarn, vinfo, verror, center
 export make_rng, haspropnn, get_eeg_signal, set_task_settings, is_verbose
-export create_default_settings, load_settings_from_file, save_settings, load_settings
+export create_default_settings, load_settings_from_file, save_settings, load_settings, check_settings
 export settings_to_dict, print_settings_summary, load_data, normalize_parameter_name
 
 # Signal processing utilities

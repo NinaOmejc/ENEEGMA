@@ -5,7 +5,9 @@
   "network_settings": {
     "n_nodes": 2,
     "node_names": ["N1", "N2"],
-    "network_conn": [[0.0, 0.1], [0.1, 0.0]],
-    "network_delay": [[0.0, 0.1], [0.1, 0.0]]
+    "network_conn": [[0.0, 0.1], 
+                     [0.1, 0.0]],
+    "network_delay": [[0.0, 0.0], 
+                      [0.0, 0.0]]
   }
 }

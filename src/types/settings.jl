@@ -150,7 +150,6 @@ mutable struct NetworkSettings <: AbstractSettings
         
         # n_nodes is required or defaults to 1
         n_nodes = Int64(get(netsett, "n_nodes", 1))
-        n_nodes > 0 || throw(ArgumentError("n_nodes must be > 0, got $n_nodes"))
         
         # Get or create node names - must match n_nodes
         node_names_raw = get(netsett, "node_names", nothing)
@@ -158,7 +157,6 @@ mutable struct NetworkSettings <: AbstractSettings
             ["N$i" for i in 1:n_nodes]
         else
             nn = Vector{String}(node_names_raw)
-            length(nn) == n_nodes || throw(ArgumentError("node_names length ($(length(nn))) must match n_nodes ($n_nodes)"))
             nn
         end
         
@@ -182,7 +180,6 @@ mutable struct NetworkSettings <: AbstractSettings
                 # Mixed or all RuleTree: keep as Vector{Union{String, RuleTree}}
                 Vector{Union{String, RuleTree}}(node_models_raw)
             end
-            length(nm) == n_nodes || throw(ArgumentError("node_models length ($(length(nm))) must match n_nodes ($n_nodes)"))
             nm
         end
         
@@ -192,7 +189,6 @@ mutable struct NetworkSettings <: AbstractSettings
             [(0.0, float(i)*10.0, 0.0) for i in 1:n_nodes]
         else
             nc = [(Float64(c[1]), Float64(c[2]), Float64(c[3])) for c in node_coords_raw]
-            length(nc) == n_nodes || throw(ArgumentError("node_coords length ($(length(nc))) must match n_nodes ($n_nodes)"))
             nc
         end
         
@@ -207,22 +203,38 @@ mutable struct NetworkSettings <: AbstractSettings
             else
                 Matrix{Float64}(hcat(network_conn_raw...)')
             end
-            (size(nc_mat) == (n_nodes, n_nodes)) || throw(ArgumentError("network_conn must be ($n_nodes × $n_nodes), got $(size(nc_mat))"))
             nc_mat
         end
         
         # Get or create connection functions matrix - must be n_nodes × n_nodes
         network_conn_funcs_raw = get(netsett, "network_conn_funcs", nothing)
         network_conn_funcs = if isnothing(network_conn_funcs_raw) || isempty(network_conn_funcs_raw)
-            fill("", n_nodes, n_nodes)
+            # Default: "linear" for off-diagonal (inter-node), "" for diagonal (no self-connection)
+            ncf = fill("", n_nodes, n_nodes)
+            for i in 1:n_nodes, j in 1:n_nodes
+                if i != j
+                    ncf[i, j] = "linear"
+                end
+            end
+            ncf
         else
             ncf = if network_conn_funcs_raw isa AbstractDict
                 parsed = _dict_to_matrix(network_conn_funcs_raw, String)
-                parsed === nothing ? fill("", n_nodes, n_nodes) : parsed
+                if parsed === nothing
+                    # Default: "linear" for off-diagonal, "" for diagonal
+                    ncf = fill("", n_nodes, n_nodes)
+                    for i in 1:n_nodes, j in 1:n_nodes
+                        if i != j
+                            ncf[i, j] = "linear"
+                        end
+                    end
+                    ncf
+                else
+                    parsed
+                end
             else
                 permutedims(Matrix{String}(hcat(network_conn_funcs_raw...)))
             end
-            (size(ncf) == (n_nodes, n_nodes)) || throw(ArgumentError("network_conn_funcs must be ($n_nodes × $n_nodes), got $(size(ncf))"))
             ncf
         end
         
@@ -237,7 +249,6 @@ mutable struct NetworkSettings <: AbstractSettings
             else
                 Matrix{Float64}(hcat(network_delay_raw...)')
             end
-            (size(nd_mat) == (n_nodes, n_nodes)) || throw(ArgumentError("network_delay must be ($n_nodes × $n_nodes), got $(size(nd_mat))"))
             nd_mat
         end
         
@@ -247,7 +258,6 @@ mutable struct NetworkSettings <: AbstractSettings
                 ones(Int, n_nodes)  # Default: all nodes receive input
             else
                 sic = Int.(v)
-                length(sic) == n_nodes || throw(ArgumentError("sensory_input_conn length ($(length(sic))) must match n_nodes ($n_nodes)"))
                 sic
             end
         end

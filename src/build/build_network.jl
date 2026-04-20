@@ -1,4 +1,5 @@
 function build_network(settings::Settings)::Network
+    check_settings(settings)
     
     net = ENEEGMA.Network(settings);
     ENEEGMA.build_nodes!(net);            
@@ -35,6 +36,7 @@ function construct_internode_conn_dynamics!(net::Network)::Network
                     continue
                 end
                 source_vars = get_vars_sending_internode_output(source_node.vars)
+                # source_var = source_vars.vars[1] 
                 for source_var in source_vars.vars
                     if ns.network_delay[target_node.id, source_node.id] != 0.0
                         source_var_final = ExtraVar(; name="h_$(name(source_var))",
@@ -440,6 +442,86 @@ function make_ode_problem_from_strings(rhs_strings, state_vars, param_vars, u0, 
     end
 
     return ODEProblem(f_wrapped, u0, tspan, p)
+end
+
+"""
+    make_dde_problem_from_strings(drift_strings, state_vars, delayed_vars, param_vars, u0, h, tspan, p; verbose=false)
+
+Creates a DDEProblem from string representations of the drift terms with delayed state variables.
+"""
+function make_dde_problem_from_strings(drift_strings, state_vars, delayed_vars, param_vars, u0, h, tspan, p; verbose=false)
+    
+    state_assignments = [:($(var) = u[$i]) for (i, var) in enumerate(state_vars)]
+    param_assignments = [:($(var) = p.$(var)) for var in param_vars]
+    
+    delayed_assignments = []
+    unique_delay_param_symbols = Symbol[] 
+
+    for dv_tuple in delayed_vars
+        hist_var_sym = dv_tuple[1]    # e.g., :h_y
+        delay_param_sym = dv_tuple[2] # e.g., :τ_y
+
+        base_var_name_str = string(hist_var_sym)
+        if !startswith(base_var_name_str, "h_")
+            error("Delayed variable symbol $(hist_var_sym) must start with 'h_'")
+        end
+        base_var_name = Symbol(base_var_name_str[3:end])
+        
+        idx_in_state_vars = findfirst(x -> x == base_var_name, state_vars)
+        if idx_in_state_vars === nothing
+            error("Base variable $(base_var_name) for history variable $(hist_var_sym) not found in state_vars")
+        end
+
+        if !(delay_param_sym in param_vars)
+            error("Delay parameter $(delay_param_sym) for history variable $(hist_var_sym) not found in param_vars. Ensure it is defined in `param_vars` and its value is in `p`.")
+        end
+        
+        push!(delayed_assignments, :($(hist_var_sym) = h(p, t - $(delay_param_sym))[$(idx_in_state_vars)]))
+        
+        if !(delay_param_sym in unique_delay_param_symbols)
+            push!(unique_delay_param_symbols, delay_param_sym)
+        end
+    end
+    
+    drift_assignments = []
+    for (i, eq_str) in enumerate(drift_strings)
+        parsed_eq = Meta.parse(eq_str)
+        push!(drift_assignments, :(du[$i] = $parsed_eq))
+    end
+    
+    drift_expr = quote
+        function f(du, u, h, p, t)
+            # Assign state variables
+            $(state_assignments...)
+            # Assign parameters
+            $(param_assignments...)
+            # Assign delayed variables
+            $(delayed_assignments...)
+            # Evaluate deterministic equations
+            $(drift_assignments...)
+            
+            return nothing
+        end
+    end
+
+    drift_f = eval(drift_expr)
+
+    drift_wrapped = let drift_f = drift_f
+        function (du, u, h, p, t)
+            Base.invokelatest(drift_f, du, u, h, p, t)
+            return nothing
+        end
+    end
+
+    actual_lags = Float64[] 
+    for delay_sym in unique_delay_param_symbols
+        param_idx = findfirst(x -> x == delay_sym, param_vars)
+        if param_idx === nothing
+            error("Delay parameter $(delay_sym) was not found in param_vars when constructing lag values. This indicates an internal logic error.")
+        end
+        push!(actual_lags, p[param_idx])
+    end
+    return DDEProblem(drift_wrapped, u0, h, tspan, p; constant_lags=actual_lags)
 end
 
 """

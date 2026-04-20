@@ -9,6 +9,9 @@ function optimize_network(
     hyperparam_idx::Union{Nothing, Int}=nothing,
     hyperparam_keys::Union{Nothing, Vector{String}}=nothing
     )
+    # Validate settings before proceeding
+    check_settings(settings)
+    
     gs = settings.general_settings
     ns = settings.network_settings
     ss = settings.simulation_settings

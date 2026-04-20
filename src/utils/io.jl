@@ -165,6 +165,153 @@ function create_default_settings()::Settings
 end
 
 """
+    check_settings(settings::Settings)::Bool
+
+Validate all settings for consistency and correctness.
+
+This function is independent from settings construction, allowing you to validate
+settings at any point in the workflow - after loading, after programmatic modifications,
+or before building/optimizing. Does not modify settings, only checks them.
+
+Validates:
+- Network settings:
+  * n_nodes must be > 0
+  * node_names, node_models, node_coords lengths match n_nodes
+  * network_conn, network_conn_funcs, network_delay are n_nodes × n_nodes
+  * sensory_input_conn length matches n_nodes
+  * Multi-node networks have inter-node connections (warns if not)
+- Simulation settings (if present):
+  * tspan: start < end
+  * saveat: positive and ≤ total simulation time
+  * solver: specified (uses default if missing)
+- Optimization settings (always present):
+  * method: only CMAES currently supported
+  * frequency range: fmin < fmax
+  * hyperparameter sweep: all sweep axes have values
+
+# Arguments
+- `settings::Settings`: Settings object to validate
+
+# Returns
+`true` if all validations pass
+
+# Throws
+- `ArgumentError`: If any validation fails with detailed error message
+
+# Example
+```julia
+settings = load_settings("config.json")
+settings.network_settings.n_nodes = 3  # User modification
+check_settings(settings)  # Validate before building
+model = build_network(settings)
+
+# Or validate before optimizing
+optimize_network(net, data, settings)  # Calls check_settings() automatically
+```
+
+# Notes
+- OptimizationSettings is always created by Settings constructor (never None)
+- SimulationSettings can be None for workflows that don't simulate
+- Validation is non-destructive; settings are never modified
+"""
+function check_settings(settings::Settings)::Bool
+    ns = settings.network_settings
+    n_nodes = ns.n_nodes
+    
+    # Validate n_nodes
+    n_nodes > 0 || throw(ArgumentError("n_nodes must be > 0, got $n_nodes"))
+    
+    # Validate node names match n_nodes
+    length(ns.node_names) == n_nodes || throw(ArgumentError(
+        "node_names length ($(length(ns.node_names))) must match n_nodes ($n_nodes)"
+    ))
+    
+    # Validate node models match n_nodes
+    length(ns.node_models) == n_nodes || throw(ArgumentError(
+        "node_models length ($(length(ns.node_models))) must match n_nodes ($n_nodes)"
+    ))
+    
+    # Validate node coordinates match n_nodes
+    length(ns.node_coords) == n_nodes || throw(ArgumentError(
+        "node_coords length ($(length(ns.node_coords))) must match n_nodes ($n_nodes)"
+    ))
+    
+    # Validate connectivity matrix dimensions
+    size(ns.network_conn) == (n_nodes, n_nodes) || throw(ArgumentError(
+        "network_conn must be ($n_nodes × $n_nodes), got $(size(ns.network_conn))"
+    ))
+    
+    # Validate connection functions matrix dimensions
+    size(ns.network_conn_funcs) == (n_nodes, n_nodes) || throw(ArgumentError(
+        "network_conn_funcs must be ($n_nodes × $n_nodes), got $(size(ns.network_conn_funcs))"
+    ))
+    
+    # Validate delay matrix dimensions
+    size(ns.network_delay) == (n_nodes, n_nodes) || throw(ArgumentError(
+        "network_delay must be ($n_nodes × $n_nodes), got $(size(ns.network_delay))"
+    ))
+    
+    # Validate sensory input connectivity length
+    length(ns.sensory_input_conn) == n_nodes || throw(ArgumentError(
+        "sensory_input_conn length ($(length(ns.sensory_input_conn))) must match n_nodes ($n_nodes)"
+    ))
+    
+    # Validate multi-node networks have inter-node connections
+    if n_nodes > 1
+        has_zero_conn = all(ns.network_conn[i,j] == 0.0 for i=1:n_nodes for j=1:n_nodes if i != j)
+        if has_zero_conn
+            vwarn("Multi-node network has no inter-node connections (network_conn matrix is all zeros). Nodes will evolve independently."; level=1)
+        end
+    end
+    
+    # ========== SIMULATION SETTINGS VALIDATION ==========
+    ss = settings.simulation_settings
+    if !isnothing(ss)
+        # Validate time span
+        ss.tspan[1] < ss.tspan[2] || throw(ArgumentError(
+            "Simulation tspan invalid: start ($(ss.tspan[1])) must be < end ($(ss.tspan[2]))"
+        ))
+        
+        # Validate saveat is positive and less than tspan
+        ss.saveat > 0.0 || throw(ArgumentError("saveat must be > 0, got $(ss.saveat)"))
+        ss.saveat <= (ss.tspan[2] - ss.tspan[1]) || vwarn(
+            "saveat ($(ss.saveat)) is larger than tspan ($(ss.tspan[2] - ss.tspan[1]))"; level=2
+        )
+        
+        # Validate solver is specified
+        isempty(ss.solver) && vwarn("solver not specified in simulation settings, will use default"; level=2)
+    end
+    
+    # ========== OPTIMIZATION SETTINGS VALIDATION ==========
+    os = settings.optimization_settings
+    # Note: OptimizationSettings is ALWAYS created in Settings constructor, so no None check needed
+    
+    # Validate method
+    os.method == "CMAES" || throw(ArgumentError(
+        "Optimization method '$(os.method)' is not supported. Only 'CMAES' is currently available."
+    ))
+    
+    # Validate frequency range
+    os.loss_settings.fmin >= os.loss_settings.fmax && throw(ArgumentError(
+        "fmin ($(os.loss_settings.fmin)) must be < fmax ($(os.loss_settings.fmax))"
+    ))
+    
+    # Validate hyperparameter sweep if present
+    hs = os.hyperparameter_sweep
+    if !isempty(hs.hyperparameters)
+        for (key, values) in hs.hyperparameters
+            isempty(values) && throw(ArgumentError(
+                "Hyperparameter '$key' has no values to sweep over"
+            ))
+        end
+        vinfo("Hyperparameter sweep configured with $(length(hs.hyperparameters)) axes"; level=2)
+    end
+    
+    vinfo("All settings validated successfully."; level=2)
+    return true
+end
+
+"""
     struct_to_ordered_dict(obj::T; exclude::Set{Symbol}=Set{Symbol}())::OrderedDict where T
 
 Reflection-based serialization: Convert any struct to OrderedDict by introspecting its fields.
