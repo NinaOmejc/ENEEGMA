@@ -86,7 +86,7 @@ Grammar-based network topology sampling configuration.
 
 | Setting | Type | Constraints | Default | Description |
 |---------|------|-------------|---------|-------------|
-| `grammar_file` | String | Valid file path | `"grammars/default_grammar.cfg"` | Path to grammar file (`.cfg` format). Can be absolute or relative path. |
+| `grammar_file` | String | Valid file path | `DEFAULT_GRAMMAR` | Path to grammar file (`.cfg` format). Defaults to `grammars/default_grammar.cfg` relative to package directory (automatically resolved via `pkgdir(@__MODULE__)`). Can specify custom absolute or relative paths. |
 | `n_samples` | Int | > 0 | `10` | Number of network topologies to sample from the grammar. |
 | `only_unique` | Bool | `true`, `false` | `true` | Filter out duplicate samples. |
 | `grammar_seed` | Int or null | Any integer or `null` | `null` | Random seed for grammar rule selection. If `null`, uses global seed or non-deterministic. |
@@ -138,7 +138,7 @@ Parameter optimization configuration.
 |---------|------|-------------|---------|-------------|
 | `method` | String | `"CMAES"` | `"CMAES"` | Optimization method. Only CMAES (Covariance Matrix Adaptation Evolution Strategy) currently supported. |
 | `param_bound_scaling_level` | String | `"low"`, `"medium"`, `"high"`, `"ultra"`, `"empirical"`, `"unbounded"` | `"medium"` | Parameter bounds scaling level. Scales literature-based parameter bounds by level-specific factors. |
-| `empirical_bounds_table_path` | String or null | Valid file path or `null` | `grammars/empirical_parameter_values.csv` | Path to CSV file containing empirical parameter bounds derived from statistical analysis. Can be absolute or relative (relative resolved from working directory). |
+| `empirical_bounds_table_path` | String or null | Valid file path or `null` | `grammars/empirical_parameter_values.csv` | Path to CSV file containing empirical parameter bounds. If relative, resolved from package directory via `pkgdir(@__MODULE__)`. Absolute paths are used as-is. |
 | `empirical_lower_bound_column` | String | Column name | `5perc` | Column name in empirical bounds table for lower bound values (e.g., 5th percentile). |
 | `empirical_upper_bound_column` | String | Column name | `95perc` | Column name in empirical bounds table for upper bound values (e.g., 95th percentile). |
 | `reparametrize` | Bool | `true`, `false` | `true` | Whether to use reparameterization strategy for parameter scaling. |

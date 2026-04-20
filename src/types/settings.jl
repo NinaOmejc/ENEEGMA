@@ -29,6 +29,9 @@ function _dict_to_matrix(raw::AbstractDict, ::Type{T}) where T
     return reshape(data, dims...)
 end
 
+# Default grammar file location
+const DEFAULT_GRAMMAR = joinpath(pkgdir(@__MODULE__), "grammars", "default_grammar.cfg")
+
 """    GeneralSettings
 
 General experiment and output configuration.
@@ -309,8 +312,8 @@ mutable struct SamplingSettings <: AbstractSettings
         sampdict = get(dict, "sampling_settings", Dict{String, Any}())
         
         # Construct grammar_file from path + filename (or use combined path if provided)
-        grammar_file_raw = get(sampdict, "grammar_file", "grammars/default_grammar.cfg")
-        grammar_file = grammar_file_raw === nothing || grammar_file_raw == "" ? "grammars/default_grammar.cfg" : String(grammar_file_raw)
+        grammar_file_raw = get(sampdict, "grammar_file", DEFAULT_GRAMMAR)
+        grammar_file = grammar_file_raw === nothing || grammar_file_raw == "" ? DEFAULT_GRAMMAR : String(grammar_file_raw)
 
         # Parse grammar seed - allow null/empty to mean "random"
         grammar_seed_raw = get(sampdict, "grammar_seed", nothing)
