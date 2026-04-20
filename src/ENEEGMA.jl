@@ -72,7 +72,7 @@ include("types/optimization_types.jl")
 export Settings, GeneralSettings, NetworkSettings, SimulationSettings, OptimizationSettings
 export OptimizerSettings, HyperparameterSweepSettings, HyperparameterAxis, SamplingSettings, DataSettings, LossSettings
 export Population, InputDynamics, SensoryInput, InternodeInput, InterpopulationInput
-export Data, OptLogEntry, ReparamSpec
+export Data, NodeData, OptLogEntry, ReparamSpec
 export ParamTransform, ParamReparamTransform, Affine01, ExpPos, SoftplusPos, SigmoidBound, TanhBound, Identity
 
 # Type management

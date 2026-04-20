@@ -1,6 +1,6 @@
 {
   "general_settings": {
-    "exp_name": "ExampleNetwork2"
+    "exp_name": "exp2nodes"
   },
   "network_settings": {
     "n_nodes": 2,

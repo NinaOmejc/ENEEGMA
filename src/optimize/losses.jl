@@ -60,7 +60,7 @@ function compute_loss(new_params, args, metric_fun::Function)
     setter        = args.setter
     all_params    = args.all_params
     tspan         = args.tspan
-    brain_source_idx = args.brain_source_idx
+    brain_source_indices = args.brain_source_indices
     solver        = args.solver
     solver_kwargs = args.solver_kwargs
     loss_settings = args.loss_settings
@@ -81,25 +81,26 @@ function compute_loss(new_params, args, metric_fun::Function)
     new_prob = remake(prob; p=updated_all_params, u0=iv, tspan=tspan)
     sol = safe_solve(new_prob, solver; solver_kwargs=solver_kwargs)
     
-    # Create a temporary Settings object for compatibility with validation functions
     # Extract transient duration from data_settings if available
     transient_duration = data_settings.psd.transient_period_duration
     fs_actual = 1.0 / solver_kwargs[:saveat]  # Infer sampling frequency from time step
     keep_idx = ENEEGMA.get_indices_after_transient_removal(sol.t, transient_duration, tspan[1], fs_actual)
     
-    # Validate simulation success (all checks in one place)
-    success, error_msg, model_prediction = ENEEGMA.validate_simulation_success(
-        sol, brain_source_idx, keep_idx, tspan[1], tspan[2], transient_duration
+    # Validate simulation success and extract per-node model predictions
+    success, error_msg, model_predictions = ENEEGMA.validate_simulation_success(
+        sol, brain_source_indices, keep_idx, tspan[1], tspan[2], transient_duration
     )
     
     if !success
         return 1e9
     end
 
-    # do demean
-    model_prediction .-= Statistics.mean(model_prediction)
+    # Demean each node's model prediction
+    for node_name in keys(model_predictions)
+        model_predictions[node_name] .-= Statistics.mean(model_predictions[node_name])
+    end
 
-    loss = metric_fun(model_prediction, data, 1/solver_kwargs[:saveat], loss_settings, data_settings)
+    loss = metric_fun(model_predictions, data, 1/solver_kwargs[:saveat], loss_settings, data_settings)
     
     if !isfinite(loss)
         return 1e9
@@ -120,57 +121,61 @@ end
 """
     validate_simulation_success(
         sol,
-        brain_source_idx::Int,
+        brain_source_indices::Dict{String, Int},
         keep_idx,
         tspan_start::Float64,
         tspan_end::Float64,
         transient_duration::Float64
-    )::Tuple{Bool, String, Vector{Float64}}
+    )::Tuple{Bool, String, Dict{String, Vector{Float64}}}
 
-Comprehensive validation of simulation success with multiple safety checks.
+Comprehensive validation of simulation success with per-node model predictions.
 
-Checks:
+Extracts model predictions for all nodes and performs safety checks:
 1. ODE solver completed successfully (retcode)
 2. Valid keep indices after transient removal
-3. All model prediction values are finite
+3. All model predictions are finite
 4. Simulation wasn't terminated early (longer than expected based on tspan)
 5. No individual state variables grew explosively
-6. Model prediction max absolute value within bounds
-7. Model prediction doesn't show exponential growth (RMS growth check)
+6. Model prediction max absolute values within bounds
+7. Model predictions don't show exponential growth (RMS growth check)
 
 # Returns
-- `(success::Bool, error_msg::String, model_prediction::Vector{Float64})`
+- `(success::Bool, error_msg::String, model_predictions::Dict{String, Vector{Float64}})`
 """
 function validate_simulation_success(
     sol,
-    brain_source_idx::Int,
+    brain_source_indices::Dict{String, Int},
     keep_idx,
     tspan_start::Float64,
     tspan_end::Float64,
     transient_duration::Float64
-)::Tuple{Bool, String, Vector{Float64}}
+)::Tuple{Bool, String, Dict{String, Vector{Float64}}}
     
     # Check 1: Solver succeeded
     if !SciMLBase.successful_retcode(sol)
-        return false, "Simulation failed with retcode: $(sol.retcode)", Float64[]
+        return false, "Simulation failed with retcode: $(sol.retcode)", Dict{String, Vector{Float64}}()
     end
     
     # Check 2: Keep indices valid
     if isempty(keep_idx)
-        return false, "No simulation time points after transient period", Float64[]
+        return false, "No simulation time points after transient period", Dict{String, Vector{Float64}}()
     end
     
-    # Extract prediction
-    local model_prediction
+    # Extract predictions for all nodes
+    model_predictions = Dict{String, Vector{Float64}}()
     try
-        model_prediction = Vector{Float64}(sol[brain_source_idx, keep_idx])
+        for (node_name, brain_idx) in brain_source_indices
+            model_predictions[node_name] = Vector{Float64}(sol[brain_idx, keep_idx])
+        end
     catch e
-        return false, "Failed to extract brain source: $e", Float64[]
+        return false, "Failed to extract brain sources: $e", Dict{String, Vector{Float64}}()
     end
     
-    # Check 3: Finite values in prediction
-    if any(!isfinite, model_prediction)
-        return false, "Model prediction contains non-finite values (Inf or NaN)", Float64[]
+    # Check 3: Finite values in all predictions
+    for (node_name, pred) in model_predictions
+        if any(!isfinite, pred)
+            return false, "Model prediction for node $node_name contains non-finite values (Inf or NaN)", Dict{String, Vector{Float64}}()
+        end
     end
     
     # Check 4: Simulation terminated early (check if got enough time points)
@@ -178,7 +183,7 @@ function validate_simulation_success(
     expected_duration_sec = (tspan_end - tspan_start) / 1000.0  # Convert ms to seconds
     actual_duration_sec = (sol.t[end] - sol.t[1])
     if actual_duration_sec < 0.9 * expected_duration_sec  # Allow 10% tolerance
-        return false, "Simulation terminated early (covered $(round(actual_duration_sec, digits=2))s of $(round(expected_duration_sec, digits=2))s)", Float64[]
+        return false, "Simulation terminated early (covered $(round(actual_duration_sec, digits=2))s of $(round(expected_duration_sec, digits=2))s)", Dict{String, Vector{Float64}}()
     end
     
     # Check 5: All state variables bounded (check for explosions in internal states)
@@ -203,40 +208,76 @@ function validate_simulation_success(
             late_rms = sqrt(late_sum_sq / n_sample)
             
             if early_rms > 0 && late_rms > 100.0 * early_rms
-                return false, "State variable $var_idx exploded (RMS grew from $(round(early_rms, digits=2)) to $(round(late_rms, digits=2)))", Float64[]
+                return false, "State variable $var_idx exploded (RMS grew from $(round(early_rms, digits=2)) to $(round(late_rms, digits=2)))", Dict{String, Vector{Float64}}()
             end
         end
     end
     
-    # Check 6: Max absolute value within bounds
+    # Check 6: Max absolute value within bounds for each node
     max_abs_signal_threshold = 100.0
-    max_abs = maximum(abs, model_prediction)
-    if max_abs > max_abs_signal_threshold
-        return false, "Signal exceeded threshold: max(|signal|) = $(round(max_abs, digits=2)) > $max_abs_signal_threshold", Float64[]
+    for (node_name, pred) in model_predictions
+        max_abs = maximum(abs, pred)
+        if max_abs > max_abs_signal_threshold
+            return false, "Signal for node $node_name exceeded threshold: max(|signal|) = $(round(max_abs, digits=2)) > $max_abs_signal_threshold", Dict{String, Vector{Float64}}()
+        end
     end
     
-    # Check 7: Model prediction doesn't show exponential growth (RMS check)
-    n = length(model_prediction)
-    w = min(200, max(50, n ÷ 5))
+    # Check 7: Model predictions don't show exponential growth (RMS check)
     max_rms_growth_threshold = 100.0
-    if n ≥ 2w
-        head_sum_sq = 0.0
-        tail_sum_sq = 0.0
-        @inbounds for i in 1:w
-            head_sum_sq += model_prediction[i]^2
-            tail_sum_sq += model_prediction[n - w + i]^2
-        end
-        head_rms = sqrt(head_sum_sq / w)
-        tail_rms = sqrt(tail_sum_sq / w)
-        if isfinite(head_rms) && head_rms > 0 && tail_rms > max_rms_growth_threshold * head_rms
-            growth_factor = round(tail_rms / head_rms, digits=1)
-            return false, "Prediction grew explosively (RMS growth $growth_factor x > threshold)", Float64[]
+    for (node_name, pred) in model_predictions
+        n = length(pred)
+        w = min(200, max(50, n ÷ 5))
+        if n ≥ 2w
+            head_sum_sq = 0.0
+            tail_sum_sq = 0.0
+            @inbounds for i in 1:w
+                head_sum_sq += pred[i]^2
+                tail_sum_sq += pred[n - w + i]^2
+            end
+            head_rms = sqrt(head_sum_sq / w)
+            tail_rms = sqrt(tail_sum_sq / w)
+            if isfinite(head_rms) && head_rms > 0 && tail_rms > max_rms_growth_threshold * head_rms
+                growth_factor = round(tail_rms / head_rms, digits=1)
+                return false, "Prediction for node $node_name grew explosively (RMS growth $growth_factor x > threshold)", Dict{String, Vector{Float64}}()
+            end
         end
     end
     
-    return true, "", model_prediction
+    return true, "", model_predictions
 end
 
+
+"""
+    validate_simulation_success(sol, brain_source_idx::Int, keep_idx, tspan_start, tspan_end, transient_duration)
+
+Backward-compatibility overload for single-node evaluation.
+Extracts the single prediction corresponding to the given brain_source_idx.
+
+# Returns
+- `(success::Bool, error_msg::String, model_prediction::Vector{Float64})`
+"""
+function validate_simulation_success(
+    sol,
+    brain_source_idx::Int,
+    keep_idx,
+    tspan_start::Float64,
+    tspan_end::Float64,
+    transient_duration::Float64
+)::Tuple{Bool, String, Vector{Float64}}
+    # Create a single-element dict and call the dict version
+    brain_source_indices = Dict("node_1" => brain_source_idx)
+    success, error_msg, model_predictions = validate_simulation_success(
+        sol, brain_source_indices, keep_idx, tspan_start, tspan_end, transient_duration
+    )
+    
+    if success
+        # Extract the single prediction from the dict
+        model_prediction = first(values(model_predictions))
+        return true, "", model_prediction
+    else
+        return false, error_msg, Float64[]
+    end
+end
 
 
 # ============================================================================
@@ -244,60 +285,85 @@ end
 # ============================================================================
 
 """
-    weighted_mae(model_prediction, target::Data, fs, loss_settings::LossSettings)
+    weighted_mae(model_predictions::Dict{String, Vector{Float64}}, target::Data, fs, loss_settings::LossSettings)
 
-Unified frequency-domain MAE loss with region-based weighting.
+Unified frequency-domain MAE loss with per-node, region-based weighting.
 
-Computes MAE between model and target PSDs, with different weights applied to:
-- ROI (regions of interest): peaks, harmonics, or manually specified bands
-- Background: all other frequency regions
+For each node:
+1. Extracts the node's model prediction from the dict
+2. Computes model PSD from that prediction
+3. Computes MAE between model and target PSDs
+4. Applies region-based weighting (ROI vs background)
+5. Averages losses across all nodes with equal weighting
 
-Masks and weights are pre-computed and stored in target.freq_peak_metadata during data preparation.
+Masks and weights are pre-computed and stored in each node's freq_peak_metadata during data preparation.
 If no metadata is available, defaults to uniform (unweighted) MAE.
 
 # Arguments
-- `model_prediction`: Time-domain model prediction
-- `target::Data`: Target data with freq_peak_metadata containing masks
+- `model_predictions::Dict{String, Vector{Float64}}`: Per-node time-domain model predictions
+- `target::Data`: Target data with node_data dict containing per-node freq_peak_metadata
 - `fs::Float64`: Sampling frequency
 - `loss_settings::LossSettings`: Contains PSD settings and region weights
 
 # Returns
-- `Float64`: Weighted MAE loss
+- `Float64`: Averaged weighted MAE loss across all nodes
 """
-function weighted_mae(model_prediction, target::Data, fs, loss_settings::LossSettings, 
+function weighted_mae(model_predictions::Dict{String, Vector{Float64}}, target::Data, fs, loss_settings::LossSettings, 
                       data_settings::Union{Nothing, DataSettings}=nothing)
     
-    # Compute model PSD
-    model_freqs, modeled_powers = ENEEGMA.compute_noisy_preprocessed_welch_psd(model_prediction, fs, loss_settings, data_settings)
-    aligned_model = ENEEGMA._interpolate_psd(model_freqs, modeled_powers, target.freqs)
-    
-    # Without region masks: simple uniform MAE
-    if target.freq_peak_metadata === nothing
-        return Statistics.mean(abs.(target.powers .- aligned_model))
+    if isempty(target.node_data)
+        error("weighted_mae: Data has no node data loaded")
     end
     
-    pm = target.freq_peak_metadata
-    roi_mask = pm.roi_mask
-    bg_mask = pm.bg_mask
+    node_losses = Float64[]
     
-    # Compute MAE in each region
-    roi_diff = abs.(target.powers[roi_mask] .- aligned_model[roi_mask])
-    bg_diff = abs.(target.powers[bg_mask] .- aligned_model[bg_mask])
-    
-    roi_mae = isempty(roi_diff) ? 0.0 : Statistics.mean(roi_diff)
-    bg_mae = isempty(bg_diff) ? 0.0 : Statistics.mean(bg_diff)
-    
-    # Weighted combination
-    roi_weight = pm.roi_weight
-    bg_weight = pm.bg_weight
-    total_weight = roi_weight + bg_weight
-    
-    if total_weight <= 0
-        # Fallback: equal weighting if both are zero
-        return 0.5 * (roi_mae + bg_mae)
+    # Compute loss for each node using its own model prediction
+    for (node_name, node_info) in target.node_data
+        if !haskey(model_predictions, node_name)
+            error("weighted_mae: No model prediction for node $node_name. Available: $(keys(model_predictions))")
+        end
+        
+        model_pred = model_predictions[node_name]
+        
+        # Compute model PSD for this node's prediction
+        model_freqs, modeled_powers = ENEEGMA.compute_noisy_preprocessed_welch_psd(model_pred, fs, loss_settings, data_settings)
+        aligned_model = ENEEGMA._interpolate_psd(model_freqs, modeled_powers, node_info.freqs)
+        
+        # Compute loss for this node
+        if node_info.freq_peak_metadata === nothing
+            # Uniform MAE
+            node_loss = Statistics.mean(abs.(node_info.powers .- aligned_model))
+        else
+            pm = node_info.freq_peak_metadata
+            roi_mask = pm.roi_mask
+            bg_mask = pm.bg_mask
+            
+            # Compute MAE in each region
+            roi_diff = abs.(node_info.powers[roi_mask] .- aligned_model[roi_mask])
+            bg_diff = abs.(node_info.powers[bg_mask] .- aligned_model[bg_mask])
+            
+            roi_mae = isempty(roi_diff) ? 0.0 : Statistics.mean(roi_diff)
+            bg_mae = isempty(bg_diff) ? 0.0 : Statistics.mean(bg_diff)
+            
+            # Weighted combination
+            roi_weight = pm.roi_weight
+            bg_weight = pm.bg_weight
+            total_weight = roi_weight + bg_weight
+            
+            if total_weight <= 0
+                node_loss = 0.5 * (roi_mae + bg_mae)
+            else
+                node_loss = (roi_weight * roi_mae + bg_weight * bg_mae) / total_weight
+            end
+        end
+        
+        push!(node_losses, node_loss)
     end
     
-    return (roi_weight * roi_mae + bg_weight * bg_mae) / total_weight
+    # Combine per-node losses: average (equal weighting for all nodes)
+    combined_loss = Statistics.mean(node_losses)
+    
+    return combined_loss
 end
 
 

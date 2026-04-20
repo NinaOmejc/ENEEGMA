@@ -145,8 +145,13 @@ mutable struct NetworkSettings <: AbstractSettings
         # Get network settings dict
         netsett = get(settings, "network_settings", Dict{String, Any}())
         
-        # Get network name with explicit default
-        name = String(get(netsett, "name", "example-net"))
+        # Get network name with explicit default and better error message
+        name_raw = get(netsett, "name", "example-net")
+        name = try
+            String(name_raw)
+        catch e
+            throw(ArgumentError("NetworkSettings: 'name' must be a string, got $(typeof(name_raw)). Value: $name_raw"))
+        end
         
         # n_nodes is required or defaults to 1
         n_nodes = Int64(get(netsett, "n_nodes", 1))
@@ -156,8 +161,13 @@ mutable struct NetworkSettings <: AbstractSettings
         node_names = if isnothing(node_names_raw) || isempty(node_names_raw)
             ["N$i" for i in 1:n_nodes]
         else
-            nn = Vector{String}(node_names_raw)
-            nn
+            try
+                nn = Vector{String}(node_names_raw)
+                nn
+            catch e
+                throw(ArgumentError("NetworkSettings: 'node_names' must be an array of strings, got $(typeof(node_names_raw)). " *
+                    "Value: $node_names_raw. Each element must be a string (e.g., [\"N1\", \"N2\"])."))
+            end
         end
         
         # Get or create node models - must match n_nodes (supports both String and RuleTree)
@@ -175,7 +185,12 @@ mutable struct NetworkSettings <: AbstractSettings
                 end
             end
             nm = if is_all_strings
-                Vector{String}(node_models_raw)
+                try
+                    Vector{String}(node_models_raw)
+                catch e
+                    throw(ArgumentError("NetworkSettings: 'node_models' must be an array of strings, got $(typeof(node_models_raw)). " *
+                        "Value: $node_models_raw. Each element must be a string (e.g., [\"WC\", \"HH\"])."))
+                end
             else
                 # Mixed or all RuleTree: keep as Vector{Union{String, RuleTree}}
                 Vector{Union{String, RuleTree}}(node_models_raw)
@@ -257,13 +272,25 @@ mutable struct NetworkSettings <: AbstractSettings
             if isnothing(v) || isempty(v)
                 ones(Int, n_nodes)  # Default: all nodes receive input
             else
-                sic = Int.(v)
-                sic
+                try
+                    sic = Int.(v)
+                    sic
+                catch e
+                    throw(ArgumentError("NetworkSettings: 'sensory_input_conn' must be an array of integers, got $(typeof(v)). " *
+                        "Value: $v. Each element must be 0 or 1 (e.g., [1, 0] means N1 gets SI, N2 doesn't)."))
+                end
             end
         end
 
         # Get sensory input function
-        sensory_input_func = String(get(netsett, "sensory_input_func", "rand(Normal(0.0, 1.0))"))
+        sensory_input_func_raw = get(netsett, "sensory_input_func", "rand(Normal(0.0, 1.0))")
+        sensory_input_func = try
+            String(sensory_input_func_raw)
+        catch e
+            throw(ArgumentError("NetworkSettings: 'sensory_input_func' must be a string, got $(typeof(sensory_input_func_raw)). " *
+                "Value: $sensory_input_func_raw. " *
+                "This should be a string expression like 'sin(t)' or 'rand()'."))
+        end
 
         # Get seed for sensory input
         sensory_seed = get(netsett, "sensory_seed", nothing)
@@ -282,7 +309,14 @@ mutable struct NetworkSettings <: AbstractSettings
         end
 
         # Get EEG output function
-        eeg_output = String(get(netsett, "eeg_output", ""))
+        eeg_output_raw = get(netsett, "eeg_output", "")
+        eeg_output = try
+            String(eeg_output_raw)
+        catch e
+            throw(ArgumentError("NetworkSettings: 'eeg_output' must be a string, got $(typeof(eeg_output_raw)). " *
+                "Value: $eeg_output_raw. " *
+                "This should be a string expression for EEG output calculation."))
+        end
 
         return new(
             name,
@@ -944,7 +978,7 @@ Note: DataSettings can be `nothing` if no data is used (e.g., for pure network b
 """
 mutable struct DataSettings <: AbstractSettings
     data_file::Union{String, Nothing}
-    target_channel::Union{String, Nothing}
+    target_channel::Union{String, Dict{String, String}, Nothing}
     task_type::Union{String, Nothing}
     fs::Union{Float64, Nothing}
     data_columns::Union{Vector{String}, Nothing}
@@ -981,7 +1015,18 @@ mutable struct DataSettings <: AbstractSettings
             end
         end
         
-        target_channel = haskey(dict, "target_channel") ? (dict["target_channel"] === nothing ? nothing : String(dict["target_channel"])) : "IC3"
+        target_channel_raw = get(dict, "target_channel", "IC3")
+        # Handle both String (single-node) and Dict (multi-node) formats
+        target_channel = if target_channel_raw === nothing
+            nothing
+        elseif target_channel_raw isa AbstractDict
+            # Multi-node: Dict{String, String} mapping node names to channels
+            Dict{String, String}(target_channel_raw)
+        else
+            # Single-node: String channel name
+            String(target_channel_raw)
+        end
+        
         task_type = haskey(dict, "task_type") ? (dict["task_type"] === nothing ? nothing : String(dict["task_type"])) : "rest"
         fs = haskey(dict, "fs") ? (dict["fs"] === nothing ? nothing : Float64(dict["fs"])) : 256.0
         data_columns = haskey(dict, "data_columns") ? (dict["data_columns"] === nothing ? nothing : Vector{String}(dict["data_columns"])) : nothing
@@ -994,11 +1039,23 @@ mutable struct DataSettings <: AbstractSettings
         
         spectral_roi_auto_peak_sensitivity = clamp(Float64(get(dict, "spectral_roi_auto_peak_sensitivity", 0.3)), 0.0, 1.0)
         
-        spectral_roi_manual = get(dict, "spectral_roi_manual", [(7.5, 14.0)])
+        spectral_roi_manual = get(dict, "spectral_roi_manual", [[7.5, 14.0]])
         if spectral_roi_manual isa Vector
-            spectral_roi_manual = Vector{Tuple{Float64, Float64}}(
-                [(Float64(r[1]), Float64(r[2])) for r in spectral_roi_manual]
-            )
+            try
+                spectral_roi_manual = Vector{Tuple{Float64, Float64}}(
+                    [begin
+                        if r isa AbstractVector && length(r) >= 2
+                            (Float64(r[1]), Float64(r[2]))
+                        else
+                            throw(ArgumentError("Invalid ROI format: $r"))
+                        end
+                    end for r in spectral_roi_manual]
+                )
+            catch e
+                throw(ArgumentError("DataSettings: 'spectral_roi_manual' must be an array of 2-element arrays, " *
+                    "e.g., [[4.0, 8.0], [12.0, 20.0]]. Got: $spectral_roi_manual. " *
+                    "Note: JSON tuples (4.0, 8.0) are NOT valid—use [4.0, 8.0] instead. Error: $e"))
+            end
         else
             spectral_roi_manual = Tuple{Float64, Float64}[]
         end

@@ -70,6 +70,13 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     freqs = result.freqs
     modeled_powers = result.model_psd
     
+    # Extract data from first node (supports single-node workflows)
+    first_node_key = first(keys(data.node_data))
+    first_node_data = data.node_data[first_node_key]
+    observed_signal = first_node_data.signal
+    observed_freqs = first_node_data.freqs
+    observed_powers = first_node_data.powers
+    
     ENEEGMA.save_modeled_psd(modeled_powers, freqs, settings; 
                             fullfname_csv=joinpath(optimization_path, "$(base_prefix)_modeled_psd.csv"))
 
@@ -77,7 +84,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     path_obs_ts = joinpath(figures_dir, fname_obs_ts)
     # Use unified visualization function from visualization.jl
     ENEEGMA.plot_timeseries_windows(times, model_prediction;
-                                     observed_signal=data.signal,
+                                     observed_signal=observed_signal,
                                      zoom_window=(2.0, 5.0),
                                      title_prefix="Observed vs Modeled Timeseries",
                                      fullfname_fig=path_obs_ts,
@@ -86,7 +93,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     fname_obs_freq = "$(base_prefix)_observed_vs_modeled_spectrum.png"
     path_obs_freq = joinpath(figures_dir, fname_obs_freq)
     # Use unified visualization function from visualization.jl
-    ENEEGMA.plot_psd_comparison(freqs, modeled_powers, data.powers;
+    ENEEGMA.plot_psd_comparison(freqs, modeled_powers, observed_powers;
                                 title="Power Spectral Density Comparison",
                                 fullfname_fig=path_obs_freq,
                                 general_settings=general_settings)
@@ -439,7 +446,9 @@ function plot_observed_vs_modelled_psd(data_modeled::Union{Vector{Float64}, Matr
                                         fullfname_fig::String="obs_vs_mod_freq.png",
                                         general_settings::Union{Nothing, GeneralSettings}=nothing
     )::Nothing
-    return plot_observed_vs_modelled_psd(data_modeled, data.powers, data.freqs;
+    first_node_key = first(keys(data.node_data))
+    first_node_data = data.node_data[first_node_key]
+    return plot_observed_vs_modelled_psd(data_modeled, first_node_data.powers, first_node_data.freqs;
                                           fullfname_fig=fullfname_fig,
                                           general_settings=general_settings)
 end
@@ -675,7 +684,13 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
     end
     spectra = spectra_standardized
 
-    target_freqs, target_curve = data isa Data ? (data.freqs, data.powers) : (nothing, nothing)
+    target_freqs, target_curve = if data isa Data
+        first_node_key = first(keys(data.node_data))
+        first_node_data = data.node_data[first_node_key]
+        (first_node_data.freqs, first_node_data.powers)
+    else
+        (nothing, nothing)
+    end
     
     # Interpolate target to model's frequency resolution (lower resolution) for plotting efficiency
     plot_freqs = nothing
@@ -781,7 +796,9 @@ function compute_r2_for_params(net::Network,
     model_prediction = Matrix(df)[:, 2]
     fs = length(sol.t) > 1 ? 1.0 / (sol.t[2] - sol.t[1]) : 1.0 / ss.saveat
     _, modeled_powers = compute_noisy_preprocessed_welch_psd(model_prediction, fs, ls, ds)
-    target_freqs, target_curve = data.freqs, data.powers
+    first_node_key = first(keys(data.node_data))
+    first_node_data = data.node_data[first_node_key]
+    target_freqs, target_curve = first_node_data.freqs, first_node_data.powers
     if target_curve === nothing || length(target_curve) != length(modeled_powers)
         return NaN
     end
@@ -847,7 +864,9 @@ function plot_observed_vs_modelled_ts_windows(sol::SciMLBase.AbstractODESolution
     model_times = sol.t
     model_ts = Vector(df[:, 2])
     obs_times = data.times
-    obs_ts = data.signal
+    first_node_key = first(keys(data.node_data))
+    first_node_data = data.node_data[first_node_key]
+    obs_ts = first_node_data.signal
 
     p = plot(layout=(2, 1), size=(900, 500), legend=:topright)
     plot!(p[1], obs_times, obs_ts, label="Observed", xlabel="", ylabel="")

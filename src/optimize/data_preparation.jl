@@ -6,51 +6,107 @@ and cached metadata used by optimization losses.
 # Data struct is defined in src/types/data.jl
 
 function prepare_data!(settings::Settings)
-
     eeg_data = load_data(settings.data_settings)
     fs = settings.data_settings.fs
-
-    # extract signal
-    channel = settings.data_settings.target_channel
-    signal = Float64.(eeg_data[!, Symbol(channel)])
-    isempty(signal) && error("Target timeseries is empty.")
-
-    # Extract or synthesize time axis
-    times = ENEEGMA._extract_or_synthesize_time_axis(eeg_data, fs, length(signal))
+    target_channel = settings.data_settings.target_channel
+    node_names = settings.network_settings.node_names
     
-    # Remove transient period from observed signal before PSD computation
-    transient_duration = settings.data_settings.psd.transient_period_duration
-    keep_idx = ENEEGMA.get_indices_after_transient_removal(times, transient_duration, times[1], fs)
+    # Extract or synthesize time axis (shared across all nodes)
+    signal_length_estimate = nrow(eeg_data)
+    times = ENEEGMA._extract_or_synthesize_time_axis(eeg_data, fs, signal_length_estimate)
     
-    if !isempty(keep_idx)
-        signal = signal[keep_idx]
-        times = times[keep_idx]
+    # Build dict of node data
+    node_data_dict = Dict{String, ENEEGMA.NodeData}()
+    
+    # Determine node->channel mapping
+    if target_channel isa String
+        # Single-node: map the single channel to the first (only) node
+        channel_mapping = Dict(node_names[1] => target_channel)
+    else
+        # Multi-node: use provided dict
+        channel_mapping = target_channel::Dict{String, String}
     end
     
-    # Extract settings early (needed for time axis resolution)
     ls = settings.optimization_settings.loss_settings
-    loss_settings = settings.optimization_settings.loss_settings
     ds = settings.data_settings
-    freqs, powers = ENEEGMA.compute_preprocessed_welch_psd(signal, fs; loss_settings=ls, data_settings=ds)
-    pipeline_has_log = ENEEGMA.psd_preproc_has_log(ds.psd.preproc_pipeline)
-    repr = pipeline_has_log ? :log_power : :power
-
-    maybe_initialize_std_measured_noise!(settings.data_settings, ls, signal, fs)
-
-    # Compute frequency regions for weighted loss
-    freq_peak_metadata = compute_frequency_regions(freqs, powers, settings.data_settings, ls)
-
-    # Return Data with signal, PSD, measurement noise, and region masks
+    
+    # Load data for each node that has a channel mapping
+    for node_name in node_names
+        if !haskey(channel_mapping, node_name)
+            vwarn("Node '$node_name' not found in target_channel mapping, skipping data loading"; level=2)
+            continue
+        end
+        
+        channel = channel_mapping[node_name]
+        signal = Float64.(eeg_data[!, Symbol(channel)])
+        isempty(signal) && error("Target timeseries for node '$node_name' (channel '$channel') is empty.")
+        
+        # Ensure times matches signal length
+        times_node = times[1:length(signal)]
+        
+        # Remove transient period
+        transient_duration = ds.psd.transient_period_duration
+        keep_idx = ENEEGMA.get_indices_after_transient_removal(times_node, transient_duration, times_node[1], fs)
+        
+        if !isempty(keep_idx)
+            signal = signal[keep_idx]
+            times_node = times_node[keep_idx]
+        end
+        
+        # Compute PSD for this node
+        freqs, powers = ENEEGMA.compute_preprocessed_welch_psd(signal, fs; loss_settings=ls, data_settings=ds)
+        
+        # Estimate measurement noise for this node
+        measurement_noise_std = if !ds.estimate_measurement_noise || signal === nothing
+            -1.0
+        else
+            sigma_init = estimate_sigma_init(signal)
+            sigma_floor = estimate_sigma_floor(signal, Float64(fs), ds, ls)
+            
+            candidates = Float64[]
+            _is_valid_sigma(sigma_init) && push!(candidates, sigma_init)
+            _is_valid_sigma(sigma_floor) && push!(candidates, sigma_floor)
+            
+            if isempty(candidates)
+                -1.0
+            else
+                sigma_guess = minimum(candidates)
+                _is_valid_sigma(sigma_floor) ? sigma_floor : sigma_guess
+            end
+        end
+        
+        # Compute frequency regions for this node
+        freq_peak_metadata = compute_frequency_regions(freqs, powers, ds, ls)
+        
+        # Determine PSD representation
+        pipeline_has_log = ENEEGMA.psd_preproc_has_log(ds.psd.preproc_pipeline)
+        repr = pipeline_has_log ? :log_power : :power
+        
+        # Create and store NodeData
+        node_data_dict[node_name] = ENEEGMA.NodeData(
+            channel=channel,
+            signal=signal,
+            freqs=freqs,
+            powers=powers,
+            measurement_noise_std=measurement_noise_std,
+            psd_representation=repr,
+            freq_peak_metadata=freq_peak_metadata
+        )
+    end
+    
+    # Verify at least one node was loaded
+    if isempty(node_data_dict)
+        error("No nodes with data loaded. Check target_channel and node_names.")
+    end
+    
+    # Use first loaded signal's times for the shared Data structure
+    first_times = node_data_dict[first(keys(node_data_dict))].signal  # Get signal to extract length
+    
+    # Return Data with all node_data
     return Data(
-        channel=channel,
-        times=times,
-        signal=signal,
+        node_data=node_data_dict,
         sampling_rate=fs,
-        freqs=freqs,
-        powers=powers,
-        psd_representation=repr,
-        measurement_noise_std=ds.measurement_noise_std,
-        freq_peak_metadata=freq_peak_metadata
+        times=times[1:length(node_data_dict[first(keys(node_data_dict))].signal)]
     )
 end
 

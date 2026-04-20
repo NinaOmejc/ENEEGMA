@@ -307,6 +307,29 @@ function check_settings(settings::Settings)::Bool
         vinfo("Hyperparameter sweep configured with $(length(hs.hyperparameters)) axes"; level=2)
     end
     
+    # ========== DATA SETTINGS VALIDATION ==========
+    ds = settings.data_settings
+    if !isnothing(ds) && ds.target_channel isa Dict
+        # Multi-node: validate that all dict keys exist in node_names
+        dict_keys = Set(keys(ds.target_channel))
+        node_names_set = Set(ns.node_names)
+        
+        missing_nodes = setdiff(dict_keys, node_names_set)
+        !isempty(missing_nodes) && throw(ArgumentError(
+            "target_channel dict contains keys that don't match node_names. " *
+            "Extra keys: $(collect(missing_nodes)). Available node_names: $(ns.node_names)"
+        ))
+        
+        # Warn if some nodes don't have data channels specified
+        missing_data = setdiff(node_names_set, dict_keys)
+        !isempty(missing_data) && vwarn(
+            "Nodes without target_channel mapping: $(collect(missing_data)). " *
+            "These nodes will not load data during prepare_data!()."; level=2
+        )
+        
+        vinfo("Data settings validated: $(length(dict_keys)) node(s) mapped to data channel(s)"; level=2)
+    end
+    
     vinfo("All settings validated successfully."; level=2)
     return true
 end
@@ -622,6 +645,9 @@ function format_value_short(value::Any)::String
     elseif value isa Vector
         if isempty(value)
             return "[]"
+        elseif length(value) == 1
+            # Single-item vector: print the item itself
+            return string(value[1])
         elseif all(v -> v isa Number || v isa Bool || v isa Nothing, value)
             # Simple vector of numbers/bools
             return join(value, ", ")
@@ -632,7 +658,7 @@ function format_value_short(value::Any)::String
             # Vector of 3-tuples (like node coordinates) - signal for multi-line
             return "COORDINATES_MULTILINE"
         else
-            # Complex vector
+            # Complex vector with multiple items
             return string(length(value)) * " items"
         end
     elseif value isa AbstractDict

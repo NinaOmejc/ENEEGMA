@@ -141,6 +141,44 @@ function get_brain_source_idx(net::Network)::Int
     return brain_source_idx
 end
 
+
+"""
+    get_brain_source_indices(net::Network, node_names::Vector{String})::Dict{String, Int}
+
+Get brain source state indices for all nodes.
+
+Maps each node name to the index of its brain_source state variable in the network's
+state vector. Used for multi-node loss computation where each node has independent data.
+
+# Arguments
+- `net::Network`: The network structure
+- `node_names::Vector{String}`: List of node names to get indices for
+
+# Returns
+- `Dict{String, Int}`: Mapping of node names to brain source state indices
+"""
+function get_brain_source_indices(net::Network, node_names::Vector{String})::Dict{String, Int}
+    indices = Dict{String, Int}()
+    state_syms = get_symbols(get_state_vars(net.vars); sort=true)
+    state_syms_sym = Symbol.(state_syms)
+    
+    for (idx, node) in enumerate(net.nodes)
+        node_name = String(node.name)
+        if node_name in node_names
+            brain_source_name = String(node.brain_source)
+            brain_idx = findfirst(==(Symbol(brain_source_name)), state_syms_sym)
+            if brain_idx !== nothing && brain_idx >= 1
+                indices[node_name] = brain_idx
+            else
+                # Fallback: use node index as fallback
+                indices[node_name] = idx
+            end
+        end
+    end
+    
+    return indices
+end
+
 """
     load_model_from_csv(models_path::String, model_idx::Int) -> String
 
