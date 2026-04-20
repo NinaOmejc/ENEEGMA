@@ -136,10 +136,10 @@ function poly_kernel(pop::Population, input_idx::Int=1)
     length(eqs) == 2 || throw(ArgumentError("poly_kernel expects two polynomials separated by ',' but got: '$poly_eq'"))
     eqs = replace.(eqs, '(' => ' ', ')' => ' ')
 
-    params = Param[]
+    params = ENEEGMA.Param[]
     next_idx = Ref(1)
     mkparam(desc::AbstractString) = begin
-        p = Param("$(pop.parent_node.name)₊c$(pop.id)$(highest_param_idx + next_idx[])", :poly_coeff,
+        p = ENEEGMA.Param("$(pop.parent_node.name)₊c$(pop.id)$(highest_param_idx + next_idx[])", :poly_coeff,
                   pop; description=desc)
         push!(params, p)
         next_idx[] += 1
@@ -148,20 +148,20 @@ function poly_kernel(pop::Population, input_idx::Int=1)
 
     # Build sum of products for an equation string like "x2 + x1 * x2"
     function build_sum(eqstr::String)
-        isempty(strip(eqstr)) && return Num(0)
+        isempty(strip(eqstr)) && return Symbolics.Num(0)
         terms = split(eqstr, '+')
-        rhs = Num(0)
+        rhs = Symbolics.Num(0)
         for t in terms
             t = strip(t)
             isempty(t) && continue
             factors = split(t, '*')
-            prod = Num(1)
+            prod = Symbolics.Num(1)
             for f in factors
                 f = strip(f)
                 if f == "x1"
-                    prod *= symbol(x1)
+                    prod *= ENEEGMA.symbol(x1)
                 elseif f == "x2"
-                    prod *= symbol(x2)
+                    prod *= ENEEGMA.symbol(x2)
                 elseif isempty(f)
                     continue
                 else
@@ -183,13 +183,23 @@ function poly_kernel(pop::Population, input_idx::Int=1)
     # For now, add input only to the second equation
     c1_in = mkparam("poly input scaling")
     c2_in = mkparam("poly input scaling")
-    rhs1 = rhs1 + c1_in.symbol * symbol(input)
-    rhs2 = rhs2 + c2_in.symbol * symbol(input)
+
+    if x1.gets_sensory_input || x1.gets_internode_input || x1.gets_interpop_input
+        rhs1 = rhs1 + c1_in.symbol * ENEEGMA.symbol(input)
+    else
+        rhs1 = rhs1
+    end
+
+    if x2.gets_sensory_input || x2.gets_internode_input || x2.gets_interpop_input
+        rhs2 = rhs2 + c2_in.symbol * ENEEGMA.symbol(input)
+    else
+        rhs2 = rhs2
+    end
 
     input_dynamics_params = ParamSet(params)
     input_dynamics = [
-        D(symbol(x1)) ~ rhs1,
-        D(symbol(x2)) ~ rhs2
+        D(ENEEGMA.symbol(x1)) ~ rhs1,
+        D(ENEEGMA.symbol(x2)) ~ rhs2
     ]
 
     return (input_dynamics, input_dynamics_vars, input_dynamics_params)

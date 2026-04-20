@@ -606,7 +606,7 @@ end
 """
     format_value_short(value::Any)::String
     
-Format a value for short display (single line).
+Format a value for short display (single line or multi-line for matrices/coordinates).
 """
 function format_value_short(value::Any)::String
     if value === nothing
@@ -617,6 +617,8 @@ function format_value_short(value::Any)::String
         return string(value)
     elseif value isa AbstractString
         return value
+    elseif value isa Matrix
+        return "MATRIX_MULTILINE"  # Signal for multi-line handling
     elseif value isa Vector
         if isempty(value)
             return "[]"
@@ -626,6 +628,9 @@ function format_value_short(value::Any)::String
         elseif all(v -> v isa AbstractString, value)
             # Vector of strings
             return join(value, ", ")
+        elseif all(v -> v isa Tuple && length(v) == 3, value)
+            # Vector of 3-tuples (like node coordinates) - signal for multi-line
+            return "COORDINATES_MULTILINE"
         else
             # Complex vector
             return string(length(value)) * " items"
@@ -637,6 +642,106 @@ function format_value_short(value::Any)::String
     else
         return string(value)
     end
+end
+
+"""
+    format_matrix_multiline(matrix::AbstractMatrix, indent::Int=4)::String
+
+Format a matrix with each row on a separate line for readability.
+All rows are indented consistently with opening bracket on first row.
+Subsequent rows aligned to start column with a single space indent.
+Empty strings are displayed as "" for clarity.
+"""
+function format_matrix_multiline(matrix::AbstractMatrix, indent::Int=4)::String
+    if isempty(matrix)
+        return "[]"
+    end
+    
+    rows = size(matrix, 1)
+    cols = size(matrix, 2)
+    
+    # Calculate field width for alignment
+    max_width = 0
+    formatted_vals = Matrix{String}(undef, rows, cols)
+    for i in 1:rows
+        for j in 1:cols
+            val = matrix[i, j]
+            # Display empty strings as "" for clarity
+            if val isa String && isempty(val)
+                formatted_vals[i,j] = "\"\""
+            else
+                formatted_vals[i,j] = string(val)
+            end
+            max_width = max(max_width, length(formatted_vals[i, j]))
+        end
+    end
+    
+    # Build formatted rows with alignment
+    prefix = " "^indent
+    lines = String[]
+    
+    for i in 1:rows
+        row_parts = String[]
+        for j in 1:cols
+            val_str = formatted_vals[i, j]
+            # Right-align values
+            padded = lpad(val_str, max_width)
+            push!(row_parts, padded)
+        end
+        
+        # Construct row with proper brackets
+        if i == 1
+            # First row: opening bracket + values with full indent
+            row_str = prefix * "[" * join(row_parts, " ")
+        else
+            # Subsequent rows: values aligned to bracket column (single space)
+            row_str = prefix * " " * join(row_parts, " ")
+        end
+        
+        # Add row separator or closing bracket
+        if i < rows
+            row_str *= ";"
+        else
+            row_str *= "]"
+        end
+        
+        push!(lines, row_str)
+    end
+    
+    return join(lines, "\n")
+end
+
+"""
+    format_coordinates_multiline(coords::Vector{Tuple}, indent::Int=4)::String
+
+Format a vector of coordinate tuples with each on a separate line in matrix notation.
+First row has opening bracket, subsequent rows aligned with single space indent.
+"""
+function format_coordinates_multiline(coords::Vector{<:Tuple}, indent::Int=4)::String
+    if isempty(coords)
+        return "[]"
+    end
+    
+    prefix = " "^indent
+    lines = String[]
+    
+    for (i, coord) in enumerate(coords)
+        # Format coordinate values with space separation
+        coord_vals = join(coord, " ")
+        
+        if i == 1
+            # First row: start bracket with full indent
+            push!(lines, prefix * "[" * coord_vals * ";")
+        elseif i < length(coords)
+            # Middle rows: single space indent for alignment
+            push!(lines, prefix * " " * coord_vals * ";")
+        else
+            # Last row: single space indent with closing bracket
+            push!(lines, prefix * " " * coord_vals * "]")
+        end
+    end
+    
+    return join(lines, "\n")
 end
 
 """
@@ -686,6 +791,7 @@ end
     print_dict_short(dict::AbstractDict, section_name::String, indent::Int=0)
     
 Print dictionary contents in short format, automatically iterating over keys.
+Handles multi-line formatting for matrices and coordinate vectors.
 """
 function print_dict_short(dict::AbstractDict, section_name::String, indent::Int=2)
     isempty(dict) && return
@@ -696,14 +802,29 @@ function print_dict_short(dict::AbstractDict, section_name::String, indent::Int=
         # Skip certain internal keys
         key in ("workspace",) && continue
         
-        # Format the value
-        val_str = format_value_short(value)
-        
         # Handle nested dicts separately for readability
         if value isa AbstractDict && !isempty(value)
             println("$prefix$key:")
             print_dict_short(value, "", indent + 2)
+        elseif value isa Matrix
+            # Format matrix with rows on separate lines
+            println("$prefix$key:")
+            matrix_str = format_matrix_multiline(value, indent + 2)
+            println(matrix_str)
+        elseif value isa Vector && all(v -> v isa Tuple && length(v) == 3, value) && !isempty(value)
+            # Vector of 3-tuples (coordinates) - multi-line
+            println("$prefix$key:")
+            coords_str = format_coordinates_multiline(value, indent + 2)
+            println(coords_str)
         else
+            # Format single-line value
+            val_str = format_value_short(value)
+            
+            # Skip MULTILINE signals that weren't caught above
+            if val_str in ("MATRIX_MULTILINE", "COORDINATES_MULTILINE")
+                val_str = string(value)
+            end
+            
             println("$prefix$key: $val_str")
         end
     end
@@ -823,16 +944,6 @@ settings = load_settings("experiments/my_settings.json")
 function load_settings(settings_path::String)::Settings
     # Load settings from file
     settings = load_settings_from_file(settings_path)
-
-    # Ensure general_settings exists
-    general_dict = nothing
-    if haskey(settings, "general_settings") && settings["general_settings"] !== nothing
-        general_dict = settings["general_settings"]
-    end
-    if general_dict === nothing
-        general_dict = Dict{String, Any}()
-        settings["general_settings"] = general_dict
-    end
 
     # Build Settings object from loaded settings dict
     # The Settings constructors handle all default values internally

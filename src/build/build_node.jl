@@ -4,11 +4,11 @@ function build_nodes!(net::Network)::Network
     sampsett = net.settings.sampling_settings
 
     canonical_node_models = list_canonical_node_models()
-    nodes = Vector{Node}(undef, netsett.n_nodes)
+    nodes = Vector{ENEEGMA.Node}(undef, netsett.n_nodes)
     # node_id, node_model =1, netsett.node_models[1]
 
     for (node_id, node_model) in enumerate(netsett.node_models)
-        node = Node(node_id, netsett.node_names[node_id], node_model; node_coordinates=netsett.node_coords[node_id])
+        node = ENEEGMA.Node(node_id, netsett.node_names[node_id], node_model; node_coordinates=netsett.node_coords[node_id])
 
         # Convert RuleTree to string representation for model checking
         model_str = if node_model isa String
@@ -23,7 +23,7 @@ function build_nodes!(net::Network)::Network
         else
             pops, node = configure_node_model!(node, sampsett)
         end
-        node.populations = [build_population_dynamics(pop, simsett) for pop in pops]
+        node.populations = [ENEEGMA.build_population_dynamics(pop, simsett) for pop in pops]
         node.n_pops = length(node.populations)
         nodes[node_id] = build_node_dynamics!(node)
     end
@@ -45,26 +45,26 @@ function build_node_dynamics!(node::Node)::Node
         
         # --- Group inputs ---
         input_groups = Dict{Int, Dict{String, VarSet}}()
-        _group_interpop_inputs!(input_groups, node, pop)
-        _group_sensory_inputs!(input_groups, additional_node_vars, pop)
-        _group_internode_inputs!(input_groups, additional_node_vars, pop)
+        ENEEGMA._group_interpop_inputs!(input_groups, node, pop)
+        ENEEGMA._group_sensory_inputs!(input_groups, additional_node_vars, pop)
+        ENEEGMA._group_internode_inputs!(input_groups, additional_node_vars, pop)
 
         # --- Build and substitute all grouped connection terms ---
-        # target_input_idx, groups, conn_fun, conn_vars = 1, input_groups[1], "fourier_basis",input_groups[1]["fourier_basis"]   # avoid "unused variable" warnings
-        substitutions = Dict{Num, Num}()
+        # target_input_idx, groups, conn_fun, conn_vars = 1, input_groups[1], "baseline_sigmoid",input_groups[1]["baseline_sigmoid"]   # avoid "unused variable" warnings
+        substitutions = Dict{Symbolics.Num, Symbolics.Num}()
         for (target_input_idx, groups) in input_groups
-            total_term_for_input = Num(0)
+            total_term_for_input = Symbolics.Num(0)
             for (conn_fun, conn_vars) in groups
                 if !isempty(conn_vars.vars)
-                    pc_term, pc_params = build_pop_conn_dynamics(pop, conn_vars, conn_fun)
+                    pc_term, pc_params = ENEEGMA.build_pop_conn_dynamics(pop, conn_vars, conn_fun)
                     total_term_for_input += pc_term
-                    join_paramsets!(pop.params, [pc_params])
+                    ENEEGMA.join_paramsets!(pop.params, [pc_params])
                 end
             end
             
             placeholder_var_name = "$(pop.parent_node.name)₊inputs$(target_input_idx)"
-            placeholder_var = get_var_by_name(pop.vars, placeholder_var_name)
-            substitutions[symbol(placeholder_var)] = total_term_for_input
+            placeholder_var = ENEEGMA.get_var_by_name(pop.vars, placeholder_var_name)
+            substitutions[ENEEGMA.symbol(placeholder_var)] = total_term_for_input
         end
 
         # Apply all substitutions at once
@@ -77,9 +77,9 @@ function build_node_dynamics!(node::Node)::Node
         # --- Add additive noise directly to target state equations (after substitution) ---
         if pop.build_setts.noise_dynamics_spec == "additive"
             # Register one additive noise var at node scope (for binding in construct_network_problem!)
-            noise_var = ExtraVar(; name="$(pop.parent_node.name)₊n$(pop.id)", type="additive_noise", eq_idx=0, parent_pop=pop, is_additive_noise=true)
-            add_var!(additional_node_vars, noise_var)
-            noise_fun = string2symbolicfun(name(noise_var))
+            noise_var = ENEEGMA.ExtraVar(; name="$(pop.parent_node.name)₊n$(pop.id)", type="additive_noise", eq_idx=0, parent_pop=pop, is_additive_noise=true)
+            ENEEGMA.add_var!(additional_node_vars, noise_var)
+            noise_fun = ENEEGMA.string2symbolicfun(name(noise_var))
 
             # For every equation D(x) ~ rhs, if x.gets_additive_noise => rhs += noise_fun(t)
             for i in eachindex(pop.dynamics)

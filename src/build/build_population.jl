@@ -31,12 +31,12 @@ end
 function build_input_dynamics!(pop::Population)
     
     supported_dynamics = get_input_dynamics()
-    # i, iinput_spec = 2, pop.build_setts.input_dynamics_spec[2]
+    # i, iinput_spec = 1, pop.build_setts.input_dynamics_spec[1]
     for (i, iinput_spec) in enumerate(pop.build_setts.input_dynamics_spec)
         if occursin(r"\bx1\b|\bx2\b", iinput_spec)
             iinput_spec = "poly_kernel"
         end
-        chosen_dynamics = get_dynamics(iinput_spec, supported_dynamics)
+        chosen_dynamics = ENEEGMA.get_dynamics(iinput_spec, supported_dynamics)
         dyn, vars, params = chosen_dynamics(pop, i)
         push!(pop.input_dynamics, InputDynamics(dyn, vars, params))
         pop.n_state_vars += length(dyn)
