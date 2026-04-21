@@ -131,7 +131,7 @@ mutable struct Node <: AbstractNode
         params = ParamSet()
         populations = Vector{Population}()
         n_pops = 0
-        brain_source = ""
+        brain_source = "$(name)₊x11"  # default brain source is first state variable of the node
         build_setts = NodeBuildSetts(
             model,
             0,

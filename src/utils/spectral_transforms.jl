@@ -661,6 +661,44 @@ function compute_noisy_preprocessed_welch_psd(model_prediction::AbstractVector{<
     return freqs, accum ./ reps
 end
 
+"""
+    compute_psd_for_all_sources(df_sources::DataFrame, fs::Real; source_cols=nothing, kwargs...)
+
+Compute PSDs for each source-signal column in `df_sources` by reusing
+`compute_preprocessed_welch_psd`.
+
+The input is expected to contain a `time` column plus one or more source columns,
+for example the output of `extract_brain_sources`. The returned dictionary is keyed
+by source column name and stores `(freqs, powers)` tuples for direct use in
+`plot_simulation_results`.
+
+# Arguments
+- `df_sources::DataFrame`: DataFrame with `time` and source-signal columns
+- `fs::Real`: Sampling frequency in Hz
+- `source_cols`: Optional subset of source columns to process. Defaults to all
+  columns except `time`.
+- `kwargs...`: Passed directly to `compute_preprocessed_welch_psd`
+
+# Returns
+- `Dict{String, Tuple{Vector{Float64}, Vector{Float64}}}`: PSD data for each source
+"""
+function compute_psd_for_all_sources(df_sources::DataFrame,
+                                     fs::Real;
+                                     source_cols=nothing,
+                                     kwargs...)
+    selected_cols = source_cols === nothing ?
+        [String(col) for col in names(df_sources) if String(col) != "time"] :
+        String.(source_cols)
+
+    psd_dict = Dict{String, Tuple{Vector{Float64}, Vector{Float64}}}()
+    for col in selected_cols
+        freqs, powers = compute_preprocessed_welch_psd(df_sources[!, Symbol(col)], fs; kwargs...)
+        psd_dict[col] = (freqs, powers)
+    end
+
+    return psd_dict
+end
+
 
 
 ###################################################################################

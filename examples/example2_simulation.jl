@@ -36,23 +36,28 @@ df = simulate_network(net)
 
 # Save simulation results: creates simulation_N/ folder with composite plot and CSV
 # The composite plot includes: full timeseries, zoomed 2-sec window, and PSD
-simulation_path = save_simulation_results(df, net, settings)
+save_simulation_results(df, net, settings)
 
 # ============================================================================
 # Manual Plotting Example: Using plot_simulation_results directly
 # ============================================================================
 # You can also use plot_simulation_results directly for custom visualization
 fs = 1.0 / settings.simulation_settings.saveat
-signal_name = get_eeg_signal(settings, df)
-signal = df[!, Symbol(signal_name)]
-freqs, powers = ENEEGMA.compute_preprocessed_welch_psd(signal, fs; data_settings=settings.data_settings)
+df_sources = ENEEGMA.extract_brain_sources(settings, net, df)
 
-# Create and display composite plot without saving to file
-ENEEGMA.plot_simulation_results(df.time, signal, freqs, powers;
-                                 zoom_window=(2.0, 5.0),
-                                 signal_name=signal_name,
-                                 use_log=true,
-                                 general_settings=settings.general_settings)
+psd_dict = ENEEGMA.compute_psd_for_all_sources(df_sources, fs)
+
+# Build output file names using standardized format: exp_name_net_name_simulated
+base_prefix = "$(general_settings.exp_name)_$(net.name)_simulated"
+
+# Save composite plot (3xN panels) for all source signals
+fname_plot = "$(base_prefix).png"
+path_plot = joinpath(simulation_output_dir, fname_plot)
+ENEEGMA.plot_simulation_results(df_sources; psd_dict=psd_dict,
+                                    zoom_window=(2.0, 5.0),
+                                    fullfname_fig=path_plot,
+                                    data_settings=settings.data_settings,
+                                    general_settings=general_settings)
 
 # ============================================================================
 # Step 4: Resample Initial Conditions and Simulate Again

@@ -56,7 +56,7 @@ function optimize_network(
 
     # create setter function for updating NamedTuple of **all params** (not just tunables) inside Problem. Nothing to do with inits here.
     setter = ENEEGMA.make_namedtuple_setter(Tuple(tunable_params_symbols))
-    brain_source_indices = ENEEGMA.get_brain_source_indices(net, settings.network_settings.node_names)
+    brain_source_indices = ENEEGMA.get_eeg_output_indices(net, settings)
 
     args = (
         prob=net.problem, data=data, setter=setter,

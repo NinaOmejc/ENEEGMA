@@ -52,7 +52,7 @@ Neural network topology and dynamics configuration.
 | `sensory_input_func` | String | Valid Julia expression | `"rand(Normal(0.0, 1.0))"` | Function string for sensory input (e.g., `"sin(t)"`, `"randn()"`). Can reference time `t`. |
 | `sensory_seed` | Int or null | Any integer or `null` | `null` | Random seed for sensory input generation. If `null`, uses global seed or non-deterministic. |
 | `init_seed` | Int or null | Any integer or `null` | `null` | Random seed for initial condition sampling. Allows independent control separate from sensory input randomness. If `null`, uses global seed or non-deterministic. |
-| `eeg_output` | String | Valid Julia expression or empty | `""` | EEG measurement function (e.g., which states to record). Empty string means no EEG output. |
+| `eeg_output` | Dict[String, String] | Mapping of node names to expressions | `{}` (empty dict) | Optional mapping of which state variables to use as EEG output for each node (e.g., `{"N1": "N1₊x11", "N2": "N2₊x21"}`). Settings extract from JSON as-is without auto-population. **Empty dict means use internal node.brain_source defaults** (set during network building based on canonical model type). Each node's default is its first state variable (e.g., "N1₊x11"). Non-empty entries override brain_source for specified nodes. Also supports combination expressions (e.g., "N2₊x21 - N2₊x31"). |
 
 ---
 

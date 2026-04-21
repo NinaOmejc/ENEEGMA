@@ -59,33 +59,33 @@ function save_simulation_results(df::DataFrame,
         mkpath(simulation_output_dir)
     end
 
-    # Extract signal and compute PSD
-    signal_name = ENEEGMA.get_eeg_signal(settings, df)
-    signal = df[!, Symbol(signal_name)]
+    # Extract all source signals and compute PSD for each
+    df_sources, expr_map = ENEEGMA.extract_brain_sources(settings, net, df; return_source_expressions=true)
     
     # Calculate sampling frequency
     fs = 1.0 / simulation_settings.saveat
     
-    # Compute PSD using centralized function
-    freqs, powers = ENEEGMA.compute_preprocessed_welch_psd(signal, fs)
+    # Compute PSD for all source signals
+    psd_dict = ENEEGMA.compute_psd_for_all_sources(df_sources, fs)
 
     # Build output file names using standardized format: exp_name_net_name_simulated
     base_prefix = "$(general_settings.exp_name)_$(net.name)_simulated"
 
-    # Save composite plot (3 panels: full ts, zoomed ts, PSD) to figures folder
+    # Save composite plot (3xN panels) for all source signals
     fname_plot = "$(base_prefix).png"
     path_plot = joinpath(simulation_output_dir, fname_plot)
-    ENEEGMA.plot_simulation_results(df.time, signal, freqs, powers;
+    ENEEGMA.plot_simulation_results(df_sources;
+                                     psd_dict=psd_dict,
                                      zoom_window=(2.0, 5.0),
-                                     signal_name=signal_name,
                                      fullfname_fig=path_plot,
+                                     data_settings=settings.data_settings,
                                      general_settings=general_settings)
 
-    # Save timeseries DataFrame to CSV in simulation folder root
+    # Save source signals DataFrame to CSV (includes time + all source columns)
     fname_csv = "$(base_prefix).csv"
     path_csv = joinpath(simulation_output_dir, fname_csv)
-    CSV.write(path_csv, df)
-    vinfo("Saved simulation timeseries to CSV: $path_csv"; level=2)
+    CSV.write(path_csv, df_sources)
+    vinfo("Saved brain source signals to CSV: $path_csv"; level=2)
 
     # Build metadata section
     timestamp_str = Dates.format(Dates.now(), "yyyy-mm-ddTHH:MM:SSZ")
@@ -95,17 +95,17 @@ function save_simulation_results(df::DataFrame,
     metadata = OrderedDict(
         "settings_file" => settings_path_normalized,
         "timestamp" => timestamp_str,
-        "eeg_output" => signal_name,
+        "eeg_output" => expr_map,
         "time_points" => length(df.time),
         "duration_seconds" => df.time[end] - df.time[1]
     )
 
     # Extract current parameter values from network
+    param_defaults = ENEEGMA.get_param_default_values(net.params; return_type="named_tuple", sort=true)
     current_params_dict = OrderedDict{String, Any}()
-    for param in net.params.params
-        param_name = string(param.symbol)
-        normalized_name = ENEEGMA.normalize_parameter_name(param_name)
-        current_params_dict[normalized_name] = param.default
+    for (param_name, param_default) in pairs(param_defaults)
+        normalized_name = ENEEGMA.normalize_parameter_name(String(param_name))
+        current_params_dict[normalized_name] = param_default
     end
 
     # Extract initial condition values from network problem

@@ -330,6 +330,50 @@ function check_settings(settings::Settings)::Bool
         vinfo("Data settings validated: $(length(dict_keys)) node(s) mapped to data channel(s)"; level=2)
     end
     
+    # ========== EEG OUTPUT VALIDATION & DEFAULTS ==========
+    # Ensure eeg_output is properly initialized with defaults if empty
+    eo = ns.eeg_output
+    
+    # Validate that eeg_output is a Dict{String, String}
+    eo isa Dict || throw(ArgumentError(
+        "eeg_output must be a Dict, got $(typeof(eo))"
+    ))
+    
+    # If empty, populate with defaults (first state variable for each node)
+    if ~isempty(eo)
+
+        # Validate keys in eeg_output match node names
+        eeo_keys = Set(keys(eo))
+        node_names_set = Set(ns.node_names)
+        
+        # Warn about extra keys in eeg_output
+        extra_keys = setdiff(eeo_keys, node_names_set)
+        !isempty(extra_keys) && vwarn(
+            "eeg_output contains keys that don't match node_names: $(collect(extra_keys))"; level=2
+        )
+        
+        # Add defaults for nodes missing from eeg_output
+        missing_nodes = setdiff(node_names_set, eeo_keys)
+        if !isempty(missing_nodes)
+            vwarn(
+                "eeg_output missing entries for nodes: $(collect(missing_nodes)). " *
+                "Adding defaults (first state variable for each)."; level=2
+            )
+            for node_name in missing_nodes
+                ns.eeg_output[node_name] = "$(node_name)₊x11"
+            end
+        end
+        
+        # Validate all values are strings
+        for (key, val) in eo
+            val isa String || throw(ArgumentError(
+                "eeg_output values must be strings, got $(typeof(val)) for key '$key': '$val'"
+            ))
+        end
+    end
+    
+    vinfo("EEG output validated: $(length(ns.eeg_output)) node(s) configured"; level=2)
+    
     vinfo("All settings validated successfully."; level=2)
     return true
 end

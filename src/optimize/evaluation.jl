@@ -64,8 +64,13 @@ function simulate_and_extract(
             solver_kwargs=solver_kwargs
         )
         
-        # Extract brain source index
-        brain_source_idx = ENEEGMA.get_brain_source_idx(net)
+        # Extract brain source indices for all nodes
+        eeg_output_indices = ENEEGMA.get_eeg_output_indices(net, settings)
+        
+        # Use first node's index for main prediction (backward compatible with single-node workflows)
+        # For multi-node scenarios, can be extended to handle all nodes
+        first_node_name = first(keys(eeg_output_indices))
+        brain_source_idx = eeg_output_indices[first_node_name]
         
         # Get tspan and transient settings
         tspan = simulation_settings.tspan

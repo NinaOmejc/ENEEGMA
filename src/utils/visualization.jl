@@ -300,12 +300,9 @@ Used for visualization of simulation-only runs.
 # Returns
 Nothing (saves to file if fullfname_fig provided)
 """
-function plot_simulation_results(times::Vector{Float64},
-                                 signal::Vector{Float64},
-                                 freqs::Vector{Float64},
-                                 powers::Vector{Float64};
+function plot_simulation_results(df_sources::DataFrame;
+                                 psd_dict::Union{Nothing, Dict{String, Tuple{Vector{Float64}, Vector{Float64}}}}=nothing,
                                  zoom_window::Tuple{Float64, Float64}=(2.0, 5.0),
-                                 signal_name::String="Signal",
                                  fullfname_fig::Union{Nothing, String}=nothing,
                                  use_log::Bool=true,
                                  data_settings::Union{Nothing, DataSettings}=nothing,
@@ -315,50 +312,81 @@ function plot_simulation_results(times::Vector{Float64},
     end
 
     try
-        # Create 3-panel subplot layout
-        p = plot(layout=(3, 1), size=(900, 900), legend=:topright);
-
-        # Subplot 1: Full timeseries
-        plot!(p[1], times, signal;
-              label=signal_name,
-              xlabel="",
-              ylabel="Amplitude",
-              title="Full Timeseries",
-              linewidth=1.5);
-
-        # Subplot 2: Zoomed timeseries (2-second window)
-        # Calculate ylims based on the signal segment within the zoom window
-        zoom_indices = findall(t -> zoom_window[1] <= t <= zoom_window[2], times)
-        if !isempty(zoom_indices)
-            zoom_signal = signal[zoom_indices]
-            zoom_min = minimum(zoom_signal)
-            zoom_max = maximum(zoom_signal)
-            # Add 10% margin to zoom limits
-            margin = 0.1 * (zoom_max - zoom_min)
-            zoom_ylims = (zoom_min - margin, zoom_max + margin)
-        else
-            zoom_ylims = :auto
+        times = df_sources.time
+        source_cols = [col for col in names(df_sources) if col != "time"]
+        n_sources = length(source_cols)
+        
+        # Limit to max 5 sources
+        if n_sources > 5
+            vwarn("More than 5 source signals found, skipping plot (max 5 supported)"; level=2)
+            return nothing
         end
         
-        plot!(p[2], times, signal;
-              label=signal_name,
-              xlabel="Time (s)",
-              ylabel="Amplitude",
-              title="Zoomed Window (2 sec)",
-              xlims=zoom_window,
-              ylims=zoom_ylims,
-              linewidth=1.5);
+        if n_sources == 0
+            vwarn("No source signals found in df_sources"; level=2)
+            return nothing
+        end
+        
+        # Create (3, N) subplot layout: rows=3 (full ts, zoomed ts, PSD), cols=N (one per signal)
+        plot_height = 300 * 3  # 3 rows
+        plot_width = 400 * n_sources  # N columns
+        p = plot(layout=(3, n_sources), size=(plot_width, plot_height), legend=:topright);
 
-        # Subplot 3: PSD (log scale)
-        # Prepare powers for plotting (handles log transformation intelligently)
-        plot_powers = prepare_psd_for_plotting(powers; use_log=use_log, data_settings=data_settings)
-        plot!(p[3], freqs, plot_powers;
-              label="PSD",
-              xlabel="Frequency (Hz)",
-              ylabel="Log Power",
-              title="Power Spectral Density",
-              legend=:topright,
-              linewidth=2);
+        # Plots.jl indexes subplots row-wise for a (rows, cols) layout.
+        # Map (row, col) -> linear subplot index so rows stay aligned across columns.
+        subplot_index(row_idx::Int, col_idx::Int) = (row_idx - 1) * n_sources + col_idx
+
+        # Plot each source signal in a column
+        for (col_idx, signal_name) in enumerate(source_cols)
+            signal = df_sources[!, Symbol(signal_name)]
+            freqs, powers = psd_dict === nothing ? (Float64[], Float64[]) : get(psd_dict, signal_name, (Float64[], Float64[]))
+            plot_powers = prepare_psd_for_plotting(powers; use_log=use_log, data_settings=data_settings)
+            
+            # Row 1: Full timeseries
+            row_idx = 1
+            plot_idx = subplot_index(row_idx, col_idx)
+            plot!(p[plot_idx], times, signal;
+                  label=signal_name,
+                  xlabel="",
+                  ylabel="Amplitude",
+                  title="$(signal_name)\nFull Timeseries",
+                  titlefontsize=16,
+                  linewidth=1.5);
+            
+            # Row 2: Zoomed timeseries
+            zoom_indices = findall(t -> zoom_window[1] <= t <= zoom_window[2], times)
+            if !isempty(zoom_indices)
+                zoom_signal = signal[zoom_indices]
+                zoom_min = minimum(zoom_signal)
+                zoom_max = maximum(zoom_signal)
+                margin = 0.1 * (zoom_max - zoom_min)
+                zoom_ylims = (zoom_min - margin, zoom_max + margin)
+            else
+                zoom_ylims = :auto
+            end
+            
+            row_idx = 2
+            plot_idx = subplot_index(row_idx, col_idx)
+            plot!(p[plot_idx], times, signal;
+                  label=signal_name,
+                  xlabel="Time (s)",
+                  ylabel="Amplitude",
+                  title=col_idx == 1 ? "Zoomed Window (2 sec)" : "",
+                  xlims=zoom_window,
+                  ylims=zoom_ylims,
+                  linewidth=1.5);
+            
+            # Row 3: PSD
+            row_idx = 3
+            plot_idx = subplot_index(row_idx, col_idx)
+            plot!(p[plot_idx], freqs, plot_powers;
+                  label="PSD",
+                  xlabel="Frequency (Hz)",
+                  ylabel="Log Power",
+                  title=col_idx == 1 ? "Power Spectral Density" : "",
+                  legend=:topright,
+                  linewidth=2);
+        end
 
         if fullfname_fig !== nothing
             savefig(p, fullfname_fig);

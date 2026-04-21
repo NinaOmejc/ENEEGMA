@@ -32,6 +32,8 @@ end
 # Default grammar file location
 const DEFAULT_GRAMMAR = joinpath(pkgdir(@__MODULE__), "grammars", "default_grammar.cfg")
 
+
+
 """    GeneralSettings
 
 General experiment and output configuration.
@@ -123,7 +125,7 @@ Neural network topology and dynamics configuration.
 - `sensory_input_func::String`: Function string for sensory input generation.
 - `sensory_seed::Union{Int, Nothing}`: Random seed for sensory input.
 - `init_seed::Union{Int, Nothing}`: Random seed for initial conditions.
-- `eeg_output::String`: EEG measurement function expression.
+- `eeg_output::Dict{String, String}`: Map of node names to EEG output expressions (e.g., Dict("N1" => "N1₊x11", "N2" => "N2₊x21")).
 """
 mutable struct NetworkSettings <: AbstractSettings
     name::String
@@ -138,7 +140,7 @@ mutable struct NetworkSettings <: AbstractSettings
     sensory_input_func::String
     sensory_seed::Union{Int, Nothing}
     init_seed::Union{Int, Nothing}
-    eeg_output::String
+    eeg_output::Dict{String, String}
 
     # Constructor with validation built-in
     function NetworkSettings(settings::Dict{String, Any})::NetworkSettings
@@ -308,14 +310,25 @@ mutable struct NetworkSettings <: AbstractSettings
             init_seed = Int(init_seed)
         end
 
-        # Get EEG output function
-        eeg_output_raw = get(netsett, "eeg_output", "")
-        eeg_output = try
-            String(eeg_output_raw)
-        catch e
-            throw(ArgumentError("NetworkSettings: 'eeg_output' must be a string, got $(typeof(eeg_output_raw)). " *
-                "Value: $eeg_output_raw. " *
-                "This should be a string expression for EEG output calculation."))
+        # Get EEG output - optional dict mapping node names to output expressions
+        # If empty, internal node.brain_source defaults will be used instead
+        # If not empty, overrides brain_source for specified nodes
+        eeg_output_raw = get(netsett, "eeg_output", Dict{String, String}())
+        eeg_output = if eeg_output_raw isa AbstractDict
+            try
+                Dict{String, String}(eeg_output_raw)
+            catch e
+                throw(ArgumentError("NetworkSettings: 'eeg_output' dict must have string keys and values, got $(typeof(eeg_output_raw)). " *
+                    "Value: $eeg_output_raw. " *
+                    "Example: {\"N1\": \"N1₊x11\", \"N2\": \"N2₊x21\"}"))
+            end
+        elseif eeg_output_raw isa AbstractString
+            # Backward compatibility: if a single string is provided, create a dict with first node
+            eeg_str = String(eeg_output_raw)
+            isempty(eeg_str) ? Dict{String, String}() : Dict(node_names[1] => eeg_str)
+        else
+            throw(ArgumentError("NetworkSettings: 'eeg_output' must be a dict or string, got $(typeof(eeg_output_raw)). " *
+                "Value: $eeg_output_raw. "))
         end
 
         return new(

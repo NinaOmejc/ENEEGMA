@@ -133,33 +133,61 @@ function haspropnn(obj, prop::Symbol)::Bool
 end
 
 
+
+
 """
-    get_eeg_signal(settings::Settings, df::DataFrame)::String
+    get_eeg_output_indices(net::Network, settings::Settings)::Dict{String, Int}
 
-Get the signal name to plot from settings.
+Map node names to the state variable indices for their EEG outputs.
 
-Returns the EEG output specification if defined in settings, otherwise returns
-the name of the first state variable (second column after :time).
+For each node in the network, returns the index of the state variable specified
+by eeg_output (if set) or the node's brain_source field (if not set).
 
 # Arguments
-- `settings::Settings`: Settings object containing eeg_output specification
-- `df::DataFrame`: DataFrame with time series data (columns: time + state variables)
+- `net::Network`: The network structure
+- `settings::Settings`: Settings containing optional eeg_output dictionary
 
 # Returns
-- `String`: Signal name to use for plotting
+- `Dict{String, Int}`: Mapping of node names to state variable indices
 
 # Example
 ```julia
-signal = get_eeg_signal(settings, df)
-plot(df.time, df[!, Symbol(signal)])
+indices = get_eeg_output_indices(net, settings)
+# Returns: Dict("N1" => 3, "N2" => 8)  (indices in the state vector)
 ```
 """
-function get_eeg_signal(settings::Settings, df::DataFrame)::String
-    if isempty(settings.network_settings.eeg_output)
-        return names(df)[2]  # Default: First state variable (second column after :time)
-    else
-        return settings.network_settings.eeg_output
+function get_eeg_output_indices(net::Network, settings::Settings)::Dict{String, Int}
+    indices = Dict{String, Int}()
+    state_syms = get_symbols(get_state_vars(net.vars); sort=true)
+    state_syms_sym = Symbol.(state_syms)
+    
+    for (idx, node) in enumerate(net.nodes)
+        node_name = String(node.name)
+        
+        # Determine expression: eeg_output (if set) or brain_source (fallback)
+        output_expr = get(settings.network_settings.eeg_output, node_name, "")
+        if isempty(output_expr)
+            output_expr = String(node.brain_source)
+        end
+        
+        if !isempty(output_expr)
+            # For simple expressions (single variable name), find its index
+            output_symbol = Symbol(strip(output_expr))
+            state_idx = findfirst(==(output_symbol), state_syms_sym)
+            
+            if state_idx !== nothing && state_idx >= 1
+                indices[node_name] = state_idx
+            else
+                # Fallback: use node index if we can't find the specific state
+                indices[node_name] = idx
+            end
+        else
+            # If no output specified, use first state of this node as fallback
+            indices[node_name] = idx
+        end
     end
+    
+    return indices
 end
 
 # ============================================================================
@@ -195,5 +223,7 @@ function get_indices_after_transient_removal(sol_t::Vector, transient_duration::
     
     return keep_start:length(sol_t)
 end
+
+
 
 
