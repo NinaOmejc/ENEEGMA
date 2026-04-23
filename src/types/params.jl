@@ -363,7 +363,8 @@ end
 
 function get_param_minmax_values(paramset::ParamSet; 
                                   p_subset::Vector{<:Union{Num, Symbol}}=Num[], 
-                                  return_type::String="vector")
+                                  return_type::String="vector",
+                                  sort::Bool=false)
     # Collect parameter names and bounds
     p_names = Symbol[]
     min_values = Float64[]
@@ -395,6 +396,14 @@ function get_param_minmax_values(paramset::ParamSet;
         end
     end
 
+    # Sort if requested (to get hierarchical ordering by node)
+    if sort
+        sorted_indices = sortperm(p_names)
+        p_names = p_names[sorted_indices]
+        min_values = min_values[sorted_indices]
+        max_values = max_values[sorted_indices]
+    end
+
     if return_type == "named_tuple"
         # NamedTuple of name => (min,max)
         return (; (p_names[i] => (min_values[i], max_values[i]) for i in eachindex(p_names))...)
@@ -410,6 +419,26 @@ function get_param_minmax_values(paramset::ParamSet;
 end
 
 
+"""
+    update_param_values!(paramset::ParamSet, new_values::AbstractDict)::ParamSet
+
+Core function for updating parameter values with maximum flexibility.
+
+This is the unified internal function that handles all parameter update operations.
+It supports scalar values (for defaults), 2-element vectors (for bounds), and 
+3-element vectors (for default + bounds). Convenience functions update_param_defaults!
+and update_param_bounds! wrap this function for specific use cases.
+
+# Arguments
+- `paramset::ParamSet`: Parameters to update
+- `new_values::AbstractDict`: Dictionary mapping parameter names to values:
+  - Scalar: Updates default only
+  - 2-element vector/tuple: [min, max] updates bounds only
+  - 3-element vector/tuple: [default, min, max] updates all
+
+# Returns
+Updated ParamSet
+"""
 function update_param_values!(paramset::ParamSet, new_values::AbstractDict{<:Any, <:Union{Real, AbstractVector{<:Real}, Tuple{Vararg{Real}}}})
     for (raw_name, values) in new_values
         param_name = raw_name isa AbstractString ? String(raw_name) : string(raw_name)
@@ -420,15 +449,19 @@ function update_param_values!(paramset::ParamSet, new_values::AbstractDict{<:Any
                 param.default = Float64(values)
             elseif values isa Tuple || values isa AbstractVector
                 if length(values) == 1
-                    # Only one value provided: update default
+                    # Single value: update default
                     param.default = Float64(values[1])
+                elseif length(values) == 2
+                    # Two values: [min, max]
+                    param.min = Float64(values[1])
+                    param.max = Float64(values[2])
                 elseif length(values) == 3
-                    # Three values provided: update default, min, and max
+                    # Three values: [default, min, max]
                     param.default = Float64(values[1])
                     param.min = Float64(values[2])
                     param.max = Float64(values[3])
                 else
-                    vwarn("Tuple for parameter '$(param_name)' has an unexpected number of values ($(length(values))). Skipping update.")
+                    vwarn("Values for parameter '$(param_name)' has unexpected length ($(length(values))). Expected 1, 2, or 3 elements. Skipping.")
                 end
             else
                 vwarn("Unsupported value type for parameter '$(param_name)': $(typeof(values)). Skipping update.")
@@ -471,9 +504,11 @@ end
 
 
 """
-    update_param_defaults!(paramset, dict::Dict{String, Real})
+    update_param_defaults!(paramset::ParamSet, dict::AbstractDict)::ParamSet
 
 Update default values for parameters using a Dict{String, Real} mapping.
+
+Convenience wrapper around update_param_values! that sets defaults only.
 
 # Arguments
 - `paramset::ParamSet`: Parameters to update
@@ -485,27 +520,76 @@ update_param_defaults!(net.params, Dict("J" => 1.5, "tau_e" => 2.0))
 ```
 """
 function update_param_defaults!(paramset::ParamSet, dict::AbstractDict)::ParamSet
-    for (name, value) in dict
-        try
-            param = get_param_by_name(paramset, name)
-            param.default = Float64(value)
-        catch
-            vwarn("Parameter '$name' not found in ParamSet. Skipping update.")
-        end
-    end
-    return paramset
+    # Convert to format expected by update_param_values!
+    defaults_dict = Dict{String, Float64}(String(k) => Float64(v) for (k, v) in dict)
+    return update_param_values!(paramset, defaults_dict)
 end
 
 
 """
-    update_param_bounds!(paramset, dict::Dict{String, Vector})
+    update_param_defaults!(paramset::ParamSet, optsol)::ParamSet
 
-Update min/max bounds for parameters using a Dict{String, Vector} mapping.
+Update parameter defaults from an optimization solution.
+
+Converts the first N elements of the solution vector (optsol.u) to parameter defaults,
+where N is the number of tunable parameters in the paramset. This handles cases where
+optsol.u contains additional elements (e.g., initial values) after the parameters.
+
+Each element of optsol.u[1:N] corresponds to one tunable parameter in sorted order.
 
 # Arguments
 - `paramset::ParamSet`: Parameters to update
-- `dict::Dict{String, Vector}`: Dictionary mapping parameter names to [min, max] bounds.
-    - Single element [val]: Uses val as reference, keeps type-based bounds
+- `optsol`: Solution from optimization with field .u containing parameter vector 
+  (e.g., SciMLBase.OptimizationSolution from CMAES)
+
+# Returns
+Updated ParamSet
+
+# Example
+```julia
+result = optimize_network(net, data, settings)
+update_param_defaults!(net.params, result)
+```
+"""
+function update_param_defaults!(paramset::ParamSet, optsol)::ParamSet
+    # Check if optsol has the expected structure
+    if !hasproperty(optsol, :u)
+        error("Optimization solution must have field 'u' containing parameter vector. Got type $(typeof(optsol))")
+    end
+    
+    # Get tunable parameters in order
+    tunable_params = get_tunable_params(paramset)
+    tunable_symbols = get_symbols(tunable_params, sort=true)
+    n_tunable = length(tunable_symbols)
+    
+    # Verify solution vector has at least n_tunable elements
+    if length(optsol.u) < n_tunable
+        error("Solution vector length ($(length(optsol.u))) is less than number of tunable parameters ($n_tunable)")
+    end
+    
+    # Build dict mapping param names to optimized values (use first N elements)
+    defaults_dict = Dict{String, Float64}()
+    for (i, param_symbol) in enumerate(tunable_symbols)
+        param = get_param_by_symbol(paramset, param_symbol)
+        defaults_dict[param.name] = Float64(optsol.u[i])
+    end
+    
+    # Use standard update path (calls Dict version)
+    return update_param_defaults!(paramset, defaults_dict)
+end
+
+
+"""
+    update_param_bounds!(paramset::ParamSet, dict::AbstractDict)::ParamSet
+
+Update min/max bounds for parameters using a Dict{String, Vector} mapping.
+
+Convenience wrapper around update_param_values! that sets bounds only.
+
+# Arguments
+- `paramset::ParamSet`: Parameters to update
+- `dict::Dict{String, Vector}`: Dictionary mapping parameter names to bounds.
+    - Single element [val]: Updates default and/or bounds (passed to update_param_values!)
     - Two elements [min, max]: Sets both bounds explicitly
 
 # Examples
@@ -517,24 +601,25 @@ update_param_bounds!(net.params, Dict(
 ```
 """
 function update_param_bounds!(paramset::ParamSet, dict::AbstractDict)::ParamSet
+    # Convert to format expected by update_param_values!
+    bounds_dict = Dict{String, Any}()
     for (name, bounds) in dict
-        try
-            param = get_param_by_name(paramset, name)
-            if length(bounds) == 1
-                # Single value: set as default, keep existing bounds
-                param.default = Float64(bounds[1])
-            elseif length(bounds) == 2
-                # Two values: set min and max
-                param.min = Float64(bounds[1])
-                param.max = Float64(bounds[2])
+        if bounds isa Number
+            # Single value: set as default
+            bounds_dict[String(name)] = Float64(bounds)
+        elseif bounds isa AbstractVector || bounds isa Tuple
+            if length(bounds) >= 2
+                # Multiple values: pass [min, max] as-is to update_param_values!
+                bounds_dict[String(name)] = collect(Float64.(bounds[1:2]))
             else
-                vwarn("Parameter '$name' bounds should be [val] or [min,max]. Got length $(length(bounds)). Skipping.")
+                # Single value: pass as scalar
+                bounds_dict[String(name)] = Float64(bounds[1])
             end
-        catch
-            vwarn("Parameter '$name' not found in ParamSet. Skipping update.")
+        else
+            vwarn("Bounds for parameter '$(name)' has unexpected type: $(typeof(bounds)). Skipping.")
         end
     end
-    return paramset
+    return update_param_values!(paramset, bounds_dict)
 end
 
 
@@ -665,7 +750,7 @@ end
 - If param_bound_scaling_level == "empirical" AND empirical table path exists, applies empirical medians
 - Otherwise keeps existing default values from model definitions
 """
-function update_param_defaults!(paramset::ParamSet, settings)
+function update_param_defaults!(paramset::ParamSet, settings::Settings)
     os = settings.optimization_settings
     
     # Only use empirical defaults when param_bound_scaling_level is "empirical"
@@ -1159,16 +1244,15 @@ end
 #  PRETTY PRINTING SUMMARY (COMPACT FORMAT)
 # ==================================================================================
 
-"""
-    print_params_summary(paramset::ParamSet; format_type::String="short")
-
-Pretty-print parameter values in compact format.
+"""`n    print_params_summary(paramset::ParamSet; format_type::String="short")`n`nPretty-print parameter values in compact format with numbers rounded to 3 significant figures.
 
 # Arguments
 - `paramset::ParamSet`: Parameter set to display
 - `format_type::String`: Output format (default "short")
   - "short": Compact `name: value [min, max]` format, one per line
   - "long": Extended format with type, bounds, and tunability info
+
+Numbers are rounded to 3 significant figures for cleaner display of defaults, bounds, and tunability.
 
 # Example
 ```julia
@@ -1183,19 +1267,64 @@ function print_params_summary(paramset::ParamSet; format_type::String="short")
         return
     end
     
-    println("[Parameters][Defaults and Ranges]")
+    println("[Parameters (Default, [Min, Max])]")
+    
+    # Get ordered parameter symbols (hierarchical by node: N1, N2, ...)
+    param_symbols = get_symbols(paramset; sort=true)
     
     if format_type == "short"
-        for p in paramset.params
-            println("  $(p.name): $(p.default) [$(p.min), $(p.max)]")
+        for symbol in param_symbols
+            param = get_param_by_symbol(paramset, symbol)
+            
+            default_rounded = round_for_display(param.default)
+            min_rounded = round_for_display(param.min)
+            max_rounded = round_for_display(param.max)
+            
+            # Format with appropriate decimal places, removing trailing zeros
+            default_str = _format_value_for_display(default_rounded)
+            min_str = _format_value_for_display(min_rounded)
+            max_str = _format_value_for_display(max_rounded)
+            
+            println("  $(param.name): $default_str [$min_str, $max_str]")
         end
     else  # long format
-        for p in paramset.params
-            println("  $(p.name): $(p.default) [$(p.min), $(p.max)]")
-            println("    type: $(p.type), tunable: $(p.tunable)")
+        for symbol in param_symbols
+            param = get_param_by_symbol(paramset, symbol)
+            
+            default_rounded = round_for_display(param.default)
+            min_rounded = round_for_display(param.min)
+            max_rounded = round_for_display(param.max)
+            
+            default_str = _format_value_for_display(default_rounded)
+            min_str = _format_value_for_display(min_rounded)
+            max_str = _format_value_for_display(max_rounded)
+            
+            println("  $(param.name): $default_str [$min_str, $max_str]")
+            println("    type: $(param.type), tunable: $(param.tunable)")
         end
     end
     println()  # Add extra newline for separation
 end
+
+"""Helper function to format rounded values for clean display."""
+function _format_value_for_display(value::Float64)::String
+    if value == 0.0
+        return "0.0"
+    end
+    
+    # Format with up to 15 significant figures, then strip trailing zeros
+    formatted = @sprintf("%.15g", value)
+    
+    # For values that are whole numbers or close to it, ensure we show .0
+    if !contains(formatted, ".") && !contains(formatted, "e")
+        formatted = formatted * ".0"
+    end
+    
+    return formatted
+end
+
+
+
+
 
 

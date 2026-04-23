@@ -626,9 +626,10 @@ end
 function compute_noisy_preprocessed_welch_psd(model_prediction::AbstractVector{<:Real},
                                 fs::Real,
                                 loss_settings::LossSettings,
-                                data_settings::DataSettings)
+                                data_settings::DataSettings;
+                                measurement_noise_std::Union{Float64, Nothing}=nothing)
     reps = max(data_settings.psd.noise_avg_reps, 1)
-    sigma_effective = max(data_settings.measurement_noise_std, 0.0)
+    sigma_effective = max(measurement_noise_std, 0.0)
 
     if sigma_effective <= 0
         return ENEEGMA.compute_preprocessed_welch_psd(model_prediction, fs; 
@@ -648,8 +649,8 @@ function compute_noisy_preprocessed_welch_psd(model_prediction::AbstractVector{<
         end
         
         noisy = Float64.(model_prediction)
-        apply_measurement_noise!(noisy, sigma_effective, rng)
-        freqs_rep, powers_rep = compute_preprocessed_welch_psd(noisy, fs; 
+        ENEEGMA.apply_measurement_noise!(noisy, sigma_effective, rng)
+        freqs_rep, powers_rep = ENEEGMA.compute_preprocessed_welch_psd(noisy, fs; 
                                                                loss_settings=loss_settings,
                                                                data_settings=data_settings)
         if isempty(freqs)
@@ -685,14 +686,17 @@ by source column name and stores `(freqs, powers)` tuples for direct use in
 function compute_psd_for_all_sources(df_sources::DataFrame,
                                      fs::Real;
                                      source_cols=nothing,
-                                     kwargs...)
+                                     data_settings::Union{Nothing, DataSettings}=nothing,
+                                     loss_settings::Union{Nothing, LossSettings}=nothing,)
     selected_cols = source_cols === nothing ?
         [String(col) for col in names(df_sources) if String(col) != "time"] :
         String.(source_cols)
 
     psd_dict = Dict{String, Tuple{Vector{Float64}, Vector{Float64}}}()
     for col in selected_cols
-        freqs, powers = compute_preprocessed_welch_psd(df_sources[!, Symbol(col)], fs; kwargs...)
+        freqs, powers = compute_preprocessed_welch_psd(df_sources[!, Symbol(col)], fs; 
+                                                       data_settings=data_settings,
+                                                       loss_settings=loss_settings)
         psd_dict[col] = (freqs, powers)
     end
 

@@ -60,23 +60,23 @@ function prepare_data!(settings::Settings)
         measurement_noise_std = if !ds.estimate_measurement_noise || signal === nothing
             -1.0
         else
-            sigma_init = estimate_sigma_init(signal)
-            sigma_floor = estimate_sigma_floor(signal, Float64(fs), ds, ls)
+            sigma_init = ENEEGMA.estimate_sigma_init(signal)
+            sigma_floor = ENEEGMA.estimate_sigma_floor(signal, Float64(fs), ds, ls)
             
             candidates = Float64[]
-            _is_valid_sigma(sigma_init) && push!(candidates, sigma_init)
-            _is_valid_sigma(sigma_floor) && push!(candidates, sigma_floor)
+            ENEEGMA._is_valid_sigma(sigma_init) && push!(candidates, sigma_init)
+            ENEEGMA._is_valid_sigma(sigma_floor) && push!(candidates, sigma_floor)
             
             if isempty(candidates)
                 -1.0
             else
                 sigma_guess = minimum(candidates)
-                _is_valid_sigma(sigma_floor) ? sigma_floor : sigma_guess
+                ENEEGMA._is_valid_sigma(sigma_floor) ? sigma_floor : sigma_guess
             end
         end
         
         # Compute frequency regions for this node
-        freq_peak_metadata = compute_frequency_regions(freqs, powers, ds, ls)
+        freq_peak_metadata = ENEEGMA.compute_frequency_regions(freqs, powers, ds, ls)
         
         # Determine PSD representation
         pipeline_has_log = ENEEGMA.psd_preproc_has_log(ds.psd.preproc_pipeline)
@@ -99,14 +99,14 @@ function prepare_data!(settings::Settings)
         error("No nodes with data loaded. Check target_channel and node_names.")
     end
     
-    # Use first loaded signal's times for the shared Data structure
-    first_times = node_data_dict[first(keys(node_data_dict))].signal  # Get signal to extract length
-    
+
     # Return Data with all node_data
     return Data(
         node_data=node_data_dict,
         sampling_rate=fs,
-        times=times[1:length(node_data_dict[first(keys(node_data_dict))].signal)]
+        times=times[1:length(node_data_dict[first(keys(node_data_dict))].signal)],
+        # add removed transient duration to total duration for metadata completeness
+        removed_transient_duration_sec=ds.psd.transient_period_duration
     )
 end
 
@@ -286,10 +286,10 @@ Compute ROI and background masks for weighted loss based on data settings.
 function compute_frequency_regions(freqs::Vector{Float64}, powers::Vector{Float64},
                                    data_settings::DataSettings, ls::LossSettings)
     if data_settings.spectral_roi_definition_mode == :manual
-        roi_mask = build_mask_from_regions(freqs, data_settings.spectral_roi_manual)
+        roi_mask = ENEEGMA.build_mask_from_regions(freqs, data_settings.spectral_roi_manual)
     else  # :auto
-        roi_mask = detect_peaks_automatic(freqs, powers, data_settings.spectral_roi_auto_peak_sensitivity;
-                                         fmin=ls.fmin, fmax=ls.fmax)
+        roi_mask = ENEEGMA.detect_peaks_automatic(freqs, powers, data_settings.spectral_roi_auto_peak_sensitivity;
+                                                 fmin=ls.fmin, fmax=ls.fmax)
     end
     
     bg_mask = .!roi_mask

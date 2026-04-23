@@ -24,11 +24,47 @@ function set_task_settings(settings::Any)
     end
 end
 
-"""
-    is_verbose(level)::Bool
+# ============================================================================
+# DISPLAY FORMATTING UTILITIES
+# ============================================================================
 
-Check verbosity status. Uses settings.general_settings.verbosity_level if available,
-otherwise falls back to the global verbosity_level flag.
+"""
+    round_for_display(value::Real; sig_figs::Int=3)::Float64
+
+Round a number to specified significant figures for cleaner display.
+
+Useful for printing parameter defaults, bounds, and initial condition ranges
+to avoid cluttered output from floating-point precision artifacts.
+
+# Arguments
+- `value::Real`: Number to round
+- `sig_figs::Int`: Number of significant figures (default: 3)
+
+# Returns
+Rounded value as Float64
+
+# Examples
+```julia
+round_for_display(0.123456)      # → 0.123
+round_for_display(1.23456)       # → 1.23
+round_for_display(0.001234)      # → 0.00123
+round_for_display(12345.6)       # → 12300.0
+round_for_display(0.0)           # → 0.0
+```
+"""
+function round_for_display(value::Real; sig_figs::Int=3)::Float64
+    value == 0 && return 0.0
+    # Calculate the exponent (power of 10)
+    exponent = floor(Int, log10(abs(value)))
+    # Round to sig_figs - 1 decimal places relative to the exponent
+    magnitude = 10.0 ^ (exponent - sig_figs + 1)
+    return round(Float64(value) / magnitude) * magnitude
+end
+
+"""
+    _task_verbosity_level()::Int
+
+Get the current task's verbosity level from task settings, or fall back to global verbosity.
 """
 function _task_verbosity_level()
     task = current_task()
@@ -134,7 +170,6 @@ end
 
 
 
-
 """
     get_eeg_output_indices(net::Network, settings::Settings)::Dict{String, Int}
 
@@ -223,6 +258,8 @@ function get_indices_after_transient_removal(sol_t::Vector, transient_duration::
     
     return keep_start:length(sol_t)
 end
+
+
 
 
 

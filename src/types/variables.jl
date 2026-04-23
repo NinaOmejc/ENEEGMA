@@ -632,13 +632,15 @@ end
 """
     print_vars_summary(varset::VarSet; format_type::String="short")
 
-Pretty-print variable initial values in compact format.
+Pretty-print variable initial values in compact format with numbers rounded to 3 significant figures.
 
 # Arguments
 - `varset::VarSet`: Variable set to display
 - `format_type::String`: Output format (default "short")
   - "short": Compact `name: [min, max]` format, one per line
   - "long": Extended format with equation index, input/output flags, and parent details
+
+Numbers are rounded to 3 significant figures for cleaner display of initialization ranges.
 
 # Example
 ```julia
@@ -661,13 +663,17 @@ function print_vars_summary(varset::VarSet; format_type::String="short")
     if format_type == "short"
         for v in state_vars.vars
             if v isa StateVar
-                println("  $(v.base.name): [$(v.init_min), $(v.init_max)]")
+                init_min_rounded = round_for_display(v.init_min)
+                init_max_rounded = round_for_display(v.init_max)
+                println("  $(v.base.name): [$init_min_rounded, $init_max_rounded]")
             end
         end
     else  # long format
         for v in state_vars.vars
             if v isa StateVar
-                println("  $(v.base.name): [$(v.init_min), $(v.init_max)]")
+                init_min_rounded = round_for_display(v.init_min)
+                init_max_rounded = round_for_display(v.init_max)
+                println("  $(v.base.name): [$init_min_rounded, $init_max_rounded]")
                 println("    eq_idx: $(v.base.eq_idx), gets_sensory: $(v.gets_sensory_input), sends_internode: $(v.sends_internode_output)")
             end
         end

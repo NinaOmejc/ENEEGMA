@@ -55,7 +55,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
 
     result = ENEEGMA.evaluate_model(
         net, opt_params, inits_native, data, settings;
-        evaluation_metrics=["loss", "r2", "iae"],
+        evaluation_metrics=["weighted_mae", "r2", "weighted_iae"],
         demean=true,
         transient_period_duration=settings.data_settings.psd.transient_period_duration
     );
@@ -64,18 +64,14 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
         vwarn("Failed to simulate model with best parameters: $(result.error_msg)"; level=2)
         vwarn("Attempting to save results with fallback values..."; level=2)
     end
-    
-    times = data.times
-    model_prediction = result.model_prediction
-    freqs = result.freqs
-    modeled_powers = result.model_psd
-    
-    # Extract data from first node (supports single-node workflows)
+
+    observed_signals = Dict(node_name => node_info.signal for (node_name, node_info) in data.node_data)
+
+    # Extract data from first node for single-panel outputs that still expect one PSD curve
     first_node_key = first(keys(data.node_data))
-    first_node_data = data.node_data[first_node_key]
-    observed_signal = first_node_data.signal
-    observed_freqs = first_node_data.freqs
-    observed_powers = first_node_data.powers
+
+    times = result.success ? result.df_sources.time : data.times
+    freqs, modeled_powers = get(result.psd_dict, first_node_key, (Float64[], Float64[]))
     
     ENEEGMA.save_modeled_psd(modeled_powers, freqs, settings; 
                             fullfname_csv=joinpath(optimization_path, "$(base_prefix)_modeled_psd.csv"))
@@ -83,8 +79,8 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     fname_obs_ts = "$(base_prefix)_observed_vs_modeled_timeseries.png"
     path_obs_ts = joinpath(figures_dir, fname_obs_ts)
     # Use unified visualization function from visualization.jl
-    ENEEGMA.plot_timeseries_windows(times, model_prediction;
-                                     observed_signal=observed_signal,
+    ENEEGMA.plot_timeseries_windows(times, result.model_predictions;
+                                     observed_signals=observed_signals,
                                      zoom_window=(2.0, 5.0),
                                      title_prefix="Observed vs Modeled Timeseries",
                                      fullfname_fig=path_obs_ts,
@@ -93,8 +89,9 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     fname_obs_freq = "$(base_prefix)_observed_vs_modeled_spectrum.png"
     path_obs_freq = joinpath(figures_dir, fname_obs_freq)
     # Use unified visualization function from visualization.jl
-    ENEEGMA.plot_psd_comparison(freqs, modeled_powers, observed_powers;
+    ENEEGMA.plot_psd_comparison(result.psd_dict, data;
                                 title="Power Spectral Density Comparison",
+                                data_settings=settings.data_settings,
                                 fullfname_fig=path_obs_freq,
                                 general_settings=general_settings)
 
@@ -103,6 +100,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     path_param = joinpath(figures_dir, fname_param)
     ENEEGMA.plot_param_exploration(optlogger, net; 
                                 true_parameters=true_parameters,
+                                node_names=result.node_names,
                                 loss_settings=loss_settings,
                                 fullfname_fig=path_param,
                                 general_settings=general_settings)
@@ -118,10 +116,14 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
                     fullfname_fig=freq_plot_path,
                     fullfname_anim=freq_anim_path)
 
-    # Use metrics from evaluate_model for consistency with local re-runs
-    recomputed_loss = result.success ? get(result.metrics, "loss", best_loss) : best_loss
-    r2_metric = result.success ? get(result.metrics, "r2", NaN) : NaN
-    iae_metric = result.success ? get(result.metrics, "iae", NaN) : NaN
+    # Average node-wise metrics from evaluate_model for summary outputs
+    loss_values = result.success ? get(result.metrics, "weighted_mae", Float64[]) : Float64[]
+    r2_values = result.success ? get(result.metrics, "r2", Float64[]) : Float64[]
+    iae_values = result.success ? get(result.metrics, "weighted_iae", Float64[]) : Float64[]
+
+    recomputed_loss = !isempty(loss_values) ? Statistics.mean(loss_values) : best_loss
+    r2_metric = !isempty(r2_values) ? Statistics.mean(r2_values) : NaN
+    iae_metric = !isempty(iae_values) ? Statistics.mean(iae_values) : NaN
     
     # Build best_params dict with normalized names
     best_opt_params_named = OrderedDict{String, Any}()
@@ -172,6 +174,13 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
         "retcode" => string(optsol.retcode),
         "iterations_completed" => length(optlogger)
     )
+
+    per_node_metrics_dict = OrderedDict(
+        "node_names" => result.node_names,
+        "weighted_mae" => loss_values,
+        "r2" => r2_values,
+        "weighted_iae" => iae_values
+    )
     
     # Build hyperparam_adaptation section (empty dict if no hyperparams)
     hyperparam_adaptation_dict = OrderedDict{String, Any}()
@@ -185,6 +194,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     # Build main results structure with optimization_results first, then metadata and other sections
     results = OrderedDict{String, Any}(
         "optimization_results" => optimization_results_dict,
+        "per_node_metrics" => per_node_metrics_dict,
         "metadata" => metadata,
         "best_parameters" => best_opt_params_named,
         "initial_states" => initial_states_dict,
@@ -453,11 +463,86 @@ function plot_observed_vs_modelled_psd(data_modeled::Union{Vector{Float64}, Matr
                                           general_settings=general_settings)
 end
 
+function _group_param_indices_by_node(tunable_syms::Vector{Symbol}, node_names::Vector{String})::Vector{Vector{Int}}
+    if isempty(node_names)
+        return [collect(eachindex(tunable_syms))]
+    end
 
+    shared_indices = Int[]
+    grouped_indices = [Int[] for _ in node_names]
+
+    for (idx, sym) in enumerate(tunable_syms)
+        sym_lower = lowercase(String(sym))
+        matched = false
+        for (node_idx, node_name) in enumerate(node_names)
+            if occursin(lowercase(node_name), sym_lower)
+                push!(grouped_indices[node_idx], idx)
+                matched = true
+            end
+        end
+        matched || push!(shared_indices, idx)
+    end
+
+    return [unique(vcat(shared_indices, grouped_indices[node_idx])) for node_idx in eachindex(node_names)]
+end
+
+function _plot_param_exploration_panel!(sp,
+                                        param_idx::Int,
+                                        sym::Symbol,
+                                        optlogger::Vector{OptLogEntry},
+                                        unique_restarts,
+                                        restart_colors,
+                                        tunables_lb::Vector{Float64},
+                                        tunables_ub::Vector{Float64},
+                                        tunables_default_vals::Vector{Float64};
+                                        show_legend::Bool=false,
+                                        panel_title::String=string(sym))
+    for r in unique_restarts
+        idx = findall(e -> e.irestart == r && e.params !== nothing, optlogger)
+        if !isempty(idx)
+            xr = [optlogger[i].params[param_idx] for i in idx]
+            iter_vals = [optlogger[i].iter for i in idx]
+
+            it_min = minimum(iter_vals)
+            it_max = maximum(iter_vals)
+            it_range = max(it_max - it_min, 1)
+            it_norm = [(it - it_min) / it_range for it in iter_vals]
+            alphas = 0.2 .+ 0.6 .* it_norm
+            yr = 0.0 .+ 0.02 .* (rand(length(xr)) .- 0.5)
+
+            scatter!(sp, xr, yr;
+                     markersize=5,
+                     markerstrokewidth=0,
+                     alpha=mean(alphas),
+                     color=restart_colors[r],
+                     label=show_legend ? "restart $r" : "")
+        end
+    end
+
+    vline!(sp, [tunables_lb[param_idx]]; color=:black, linestyle=:dash, linewidth=1.5, label=show_legend ? "min/max" : "")
+    vline!(sp, [tunables_ub[param_idx]]; color=:black, linestyle=:dash, linewidth=1.5, label="")
+    vline!(sp, [tunables_default_vals[param_idx]]; color=:red, linestyle=:solid, linewidth=2, label=show_legend ? "true" : "")
+
+    ylims!(sp, (-0.15, 0.15))
+    xlabel!(sp, "value")
+    ylabel!(sp, "")
+    title!(sp, panel_title)
+end
+
+function _blank_subplot!(sp)
+    plot!(sp;
+          framestyle=:none,
+          grid=false,
+          xticks=nothing,
+          yticks=nothing,
+          label="")
+    return nothing
+end
 
 function plot_param_exploration(optlogger::Vector{OptLogEntry},
                                 net::Network;
                                 true_parameters::Union{OrderedDict{Num, Float64}, Dict{String, Tuple{Vararg{Float64}}}, OrderedDict{String, Tuple{Vararg{Float64}}}, Nothing}=nothing,
+                                node_names::Union{Nothing, Vector{String}}=nothing,
                                 fullfname_fig::String="param_exploration.png",
                                 loss_settings::Union{Nothing, LossSettings}=nothing,
                                 general_settings::Union{Nothing, GeneralSettings}=nothing)::Nothing
@@ -506,10 +591,6 @@ function plot_param_exploration(optlogger::Vector{OptLogEntry},
         n_params = min(n_params, expected_n_params)
     end
 
-    # one subplot per parameter
-    p = plot(layout=(n_params, 1), size=(900, max(250, 200*n_params)),
-             legend=:topright, xminorgrid=true, yminorgrid=true)
-
     unique_restarts = sort(unique(e.irestart for e in optlogger))
 
     # choose distinct base hues for each restart (avoid black/white)
@@ -518,52 +599,43 @@ function plot_param_exploration(optlogger::Vector{OptLogEntry},
         r => HSV(h, 0.8, 0.9) for (r, h) in zip(unique_restarts, base_hues)
     )
 
+    if node_names === nothing || length(node_names) <= 1
+        p = plot(layout=(n_params, 1), size=(900, max(250, 200*n_params)),
+                 legend=:topright, xminorgrid=true, yminorgrid=true)
 
-    for (j, sym) in enumerate(tunable_syms)
-        sp = p[j]
+        for (j, sym) in enumerate(tunable_syms)
+            _plot_param_exploration_panel!(p[j], j, sym, optlogger, unique_restarts, restart_colors,
+                                           tunables_lb, tunables_ub, tunables_default_vals;
+                                           show_legend=j == 1,
+                                           panel_title=string(sym))
+        end
+    else
+        param_indices_by_node = _group_param_indices_by_node(tunable_syms[1:n_params], node_names)
+        n_cols = length(node_names)
+        n_rows = maximum(max(length(indices), 1) for indices in param_indices_by_node)
+        p = plot(layout=(n_rows, n_cols),
+                 size=(420 * n_cols, max(250, 180 * n_rows)),
+                 legend=:topright,
+                 xminorgrid=true,
+                 yminorgrid=true)
 
-        # scatter (rug-like) of sampled values, colored by restart and iteration
-        for r in unique_restarts
-            idx = findall(e -> e.irestart == r && e.params !== nothing, optlogger)
-            if !isempty(idx)
-                xr = [optlogger[i].params[j] for i in idx]
-                iter_vals = [optlogger[i].iter for i in idx]
-
-                # normalize iterations to [0, 1] within this restart
-                it_min = minimum(iter_vals)
-                it_max = maximum(iter_vals)
-                it_range = max(it_max - it_min, 1)
-                it_norm = [(it - it_min) / it_range for it in iter_vals]
-
-                # alpha: early = 0.2 (very light), late = 1.0 (fully opaque)
-                alphas = 0.2 .+ 0.6 .* it_norm
-                base_c = restart_colors[r]
-
-                # jitter y so points don't overlap
-                yr = 0.0 .+ 0.02 .* (rand(length(xr)) .- 0.5)
-
-                # Use mean alpha and color from restart
-                scatter!(sp, xr, yr;
-                         markersize=5,
-                         markerstrokewidth=0,
-                         alpha=mean(alphas),
-                         color=base_c,
-                         label = j == 1 ? "restart $r" : "")
+        for (col_idx, node_name) in enumerate(node_names)
+            param_indices = param_indices_by_node[col_idx]
+            for row_idx in 1:n_rows
+                sp = p[(row_idx - 1) * n_cols + col_idx]
+                if row_idx <= length(param_indices)
+                    param_idx = param_indices[row_idx]
+                    sym = tunable_syms[param_idx]
+                    panel_title = row_idx == 1 ? "$(node_name)\n$(sym)" : string(sym)
+                    _plot_param_exploration_panel!(sp, param_idx, sym, optlogger, unique_restarts, restart_colors,
+                                                   tunables_lb, tunables_ub, tunables_default_vals;
+                                                   show_legend=col_idx == 1 && row_idx == 1,
+                                                   panel_title=panel_title)
+                else
+                    _blank_subplot!(sp)
+                end
             end
         end
-
-        # draw min/max (allowed range)
-        vline!(sp, [tunables_lb[j]]; color=:black, linestyle=:dash, linewidth=1.5, label = j == 1 ? "min/max" : "")
-        vline!(sp, [tunables_ub[j]]; color=:black, linestyle=:dash, linewidth=1.5, label="")
-
-        # draw default value
-        vline!(sp, [tunables_default_vals[j]]; color=:red, linestyle=:solid, linewidth=2, label = j == 1 ? "true" : "")
-
-        # cosmetics
-        ylims!(sp, (-0.15, 0.15))
-        xlabel!(sp, "value")
-        ylabel!(sp, "")
-        title!(sp, string(sym))
     end
 
     plot!(p, plot_title = "Parameter exploration across optimization")
@@ -614,152 +686,160 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
     n_state_vars = length(net.problem.u0)
     n_params = length(entries[1].params) - n_state_vars
 
-    spectra = NamedTuple{(:iter, :loss, :restart, :freqs, :powers, :sigma)}[]
+    spectra_frames = NamedTuple{(:iter, :loss, :restart, :sigma, :psd_dict)}[]
+    node_names = data isa Data ? collect(keys(data.node_data)) : String[]
+
     for entry in Iterators.take(entries, min(max_entries, length(entries)))
         params_vec = entry.params
-        if length(params_vec) != n_params + n_state_vars
-            continue
-        end
+        length(params_vec) == n_params + n_state_vars || continue
 
         param_block = params_vec[1:n_params]
         init_block = params_vec[n_params + 1 : n_params + n_state_vars]
         sigma_val = ds.measurement_noise_std
         new_params = setter(net.problem.p, param_block)
+
         try
             sol = simulate_network(net.problem; new_params=new_params, new_inits=init_block,
                                    solver=solver, solver_kwargs=solver_kwargs)
-            df = DataFrame(sol)
-            if size(df, 2) < 2
-                continue
+            df = sol2df(sol, net)
+            nrow(df) == 0 && continue
+
+            df_sources, _ = extract_brain_sources(settings, net, df; return_source_expressions=true)
+            nrow(df_sources) == 0 && continue
+
+            fs = 1.0 / ss.saveat
+            transient_duration = ds.psd.transient_period_duration
+            keep_idx = get_indices_after_transient_removal(df_sources.time, transient_duration, df_sources.time[1], fs)
+            if !isempty(keep_idx)
+                df_sources = df_sources[keep_idx, :]
             end
-            model_prediction = Matrix(df)[:, 2]
-            sampling_rate = length(sol.t) > 1 ? 1.0 / (sol.t[2] - sol.t[1]) : 1.0 / ss.saveat
-            freqs, modeled_powers = compute_noisy_preprocessed_welch_psd(model_prediction, sampling_rate, ls, ds)
-            # Skip entries with empty or invalid power spectra
-            if !isempty(modeled_powers) && all(isfinite, modeled_powers)
-                vinfo("Restart $(entry.irestart), Iter $(entry.iter): signal_len=$(length(model_prediction)), freq_points=$(length(freqs))"; level=2)
-                push!(spectra, (iter=entry.iter, loss=entry.loss, restart=entry.irestart,
-                                freqs=freqs, powers=modeled_powers, sigma=sigma_val))
+
+            for col in names(df_sources)
+                col == :time && continue
+                df_sources[!, col] .-= mean(df_sources[!, col])
             end
+
+            psd_fs = ds.fs === nothing ? fs : ds.fs
+            frame_psd_dict = compute_psd_for_all_sources(df_sources, psd_fs;
+                                                         data_settings=ds,
+                                                         loss_settings=ls)
+            isempty(frame_psd_dict) && continue
+
+            if isempty(node_names)
+                node_names = collect(keys(frame_psd_dict))
+            end
+
+            valid_psd_dict = Dict{String, Tuple{Vector{Float64}, Vector{Float64}}}()
+            for node_name in node_names
+                haskey(frame_psd_dict, node_name) || continue
+                freqs, powers = frame_psd_dict[node_name]
+                if !isempty(powers) && all(isfinite, powers)
+                    valid_psd_dict[node_name] = (freqs, powers)
+                end
+            end
+
+            isempty(valid_psd_dict) && continue
+            push!(spectra_frames, (iter=entry.iter,
+                                   loss=entry.loss,
+                                   restart=entry.irestart,
+                                   sigma=sigma_val,
+                                   psd_dict=valid_psd_dict))
         catch err
             vwarn("Unable to compute spectrum for iter $(entry.iter): $(err)"; level=2)
         end
     end
 
-    if isempty(spectra)
-        vinfo("No spectra computed from optlogger; skipping spectrum sweep plot."; level=2)
-        return nothing
-    end
+    isempty(spectra_frames) && return nothing
 
-    # Filter out any spectra with empty powers (safety check)
-    spectra = filter(spec -> !isempty(spec.powers) && all(isfinite, spec.powers), spectra)
-    if isempty(spectra)
-        vinfo("All computed spectra had empty or invalid power values; skipping spectrum sweep plot."; level=2)
-        return nothing
-    end
+    node_names = [node_name for node_name in node_names if any(haskey(frame.psd_dict, node_name) for frame in spectra_frames)]
+    isempty(node_names) && return nothing
 
-    # Standardize frequency grid across all spectra to finest resolution
-    # Find spectrum with most frequency points (finer resolution)
-    finest_freq_idx = argmax(length(spec.freqs) for spec in spectra)
-    finest_freqs = spectra[finest_freq_idx].freqs
-    
-    # Interpolate all spectra to common frequency grid
-    spectra_standardized = []
-    for spec in spectra
-        if length(spec.freqs) == length(finest_freqs) && isapprox(spec.freqs, finest_freqs)
-            # Already on standard grid
-            push!(spectra_standardized, spec)
+    ylims_by_node = Dict{String, Tuple{Float64, Float64}}()
+    for node_name in node_names
+        all_powers = Float64[]
+        for frame in spectra_frames
+            haskey(frame.psd_dict, node_name) || continue
+            append!(all_powers, frame.psd_dict[node_name][2])
+        end
+        if data isa Data && haskey(data.node_data, node_name)
+            append!(all_powers, data.node_data[node_name].powers)
+        end
+
+        if isempty(all_powers)
+            ylims_by_node[node_name] = (0.0, 1.0)
         else
-            # Interpolate to standard grid
-            try
-                interp_func = linear_interpolation(spec.freqs, spec.powers; extrapolation_bc=Flat())
-                standardized_powers = interp_func.(finest_freqs)
-                push!(spectra_standardized, (iter=spec.iter, loss=spec.loss, restart=spec.restart,
-                                            freqs=finest_freqs, powers=standardized_powers, sigma=spec.sigma))
-            catch
-                # If interpolation fails, keep original
-                push!(spectra_standardized, spec)
-            end
+            power_min = minimum(all_powers)
+            power_max = maximum(all_powers)
+            span = max(power_max - power_min, eps(Float64))
+            ylims_by_node[node_name] = (power_min - 0.05 * span, power_max + 0.1 * span)
         end
     end
-    spectra = spectra_standardized
-
-    target_freqs, target_curve = if data isa Data
-        first_node_key = first(keys(data.node_data))
-        first_node_data = data.node_data[first_node_key]
-        (first_node_data.freqs, first_node_data.powers)
-    else
-        (nothing, nothing)
-    end
-    
-    # Interpolate target to model's frequency resolution (lower resolution) for plotting efficiency
-    plot_freqs = nothing
-    plot_target_curve = nothing
-    if target_freqs !== nothing && !isempty(target_curve) && length(target_freqs) != length(spectra[1].freqs)
-        # Downsample target to match model spectrum frequency grid via linear interpolation
-        if !isempty(spectra[1].freqs) && all(isfinite, target_curve)
-            interp_func = linear_interpolation(target_freqs, target_curve; extrapolation_bc=Flat())
-            plot_target_curve = interp_func.(spectra[1].freqs)
-            plot_freqs = spectra[1].freqs
-        else
-            plot_freqs = target_freqs
-            plot_target_curve = target_curve
-        end
-    else
-        plot_freqs = target_freqs
-        plot_target_curve = target_curve
-    end
-    
-    matches_target = plot_target_curve !== nothing && !isempty(plot_target_curve) && length(plot_target_curve) == length(spectra[1].freqs)
-    overlay_freqs = plot_freqs === nothing ? spectra[1].freqs : plot_freqs
-
-    power_min = minimum(minimum(spec.powers) for spec in spectra)
-    power_max = maximum(maximum(spec.powers) for spec in spectra)
-    if matches_target
-        power_min = min(power_min, minimum(target_curve))
-        power_max = max(power_max, maximum(target_curve))
-    end
-    span = max(power_max - power_min, eps(Float64))
-    lower_pad = 0.05 * span
-    upper_pad = 0.1 * span
-    ylims_tuple = (power_min - lower_pad, power_max + upper_pad)
 
     fig_path = isnothing(fullfname_fig) ? "$(gs.path_out)\\$(gs.exp_name)_$(net.name)_freq_sweep.png" : fullfname_fig
     anim_path = isnothing(fullfname_anim) ? "$(gs.path_out)\\$(gs.exp_name)_$(net.name)_freq_sweep.gif" : fullfname_anim
 
-    p = plot(title="Frequency spectra evolution", xlabel="Frequency (Hz)", ylabel="Norm Log10 Power")
-    for (idx, spec) in enumerate(spectra)
-        label = idx == length(spectra) ? "Iter $(spec.iter)" : ""
-        plot!(p, spec.freqs, spec.powers; alpha=idx == length(spectra) ? 0.9 : 0.25, label=label)
+    n_nodes = length(node_names)
+    p = plot(layout=(1, n_nodes), size=(450 * n_nodes, 400), legend=:topright)
+    for (col_idx, node_name) in enumerate(node_names)
+        sp = p[col_idx]
+        for (frame_idx, frame) in enumerate(spectra_frames)
+            haskey(frame.psd_dict, node_name) || continue
+            freqs, powers = frame.psd_dict[node_name]
+            label = frame_idx == length(spectra_frames) ? "Iter $(frame.iter)" : ""
+            plot!(sp, freqs, powers;
+                  alpha=frame_idx == length(spectra_frames) ? 0.9 : 0.25,
+                  label=label,
+                  linewidth=1.5)
+        end
+        if data isa Data && haskey(data.node_data, node_name)
+            node_info = data.node_data[node_name]
+            plot!(sp, node_info.freqs, node_info.powers;
+                  label="Target",
+                  color=:black,
+                  linewidth=4,
+                  linestyle=:solid)
+        end
+        xlabel!(sp, "Frequency (Hz)")
+        ylabel!(sp, col_idx == 1 ? "Norm Log10 Power" : "")
+        title!(sp, node_name)
+        ylims!(sp, ylims_by_node[node_name])
     end
-    # Plot target data last so it appears on top (black solid line, thicker)
-    if matches_target
-        plot!(p, overlay_freqs, plot_target_curve; label="Target", color=:black, linewidth=4, linestyle=:solid)
-    end
-    ylims!(p, ylims_tuple)
+    plot!(p, plot_title="Frequency spectra evolution")
     try
         savefig(p, fig_path)
     catch e
         vwarn("Failed to save spectrum evolution plot to $fig_path: $e"; level=2)
     end
 
-    if length(spectra) > 1
-        anim = @animate for spec in spectra
-            plt = plot(spec.freqs, spec.powers;
-                       label="Iter $(spec.iter)",
-                       color=:dodgerblue,
-                       linewidth=2,
-                       xlabel="Frequency (Hz)",
-                       ylabel="Norm Log10 Power",
-                       title="Restart $(spec.restart) • Iter $(spec.iter) • Loss $(round(spec.loss, digits=4)) • σ=$(round(spec.sigma, digits=4))",
-                       ylims=ylims_tuple)
-            # Plot target data last so it appears on top (black solid line, thicker)
-            if matches_target
-                plot!(plt, overlay_freqs, plot_target_curve; label="Target", color=:black, linewidth=4, linestyle=:solid)
+    if length(spectra_frames) > 1
+        anim = @animate for frame in spectra_frames
+            plt = plot(layout=(1, n_nodes), size=(450 * n_nodes, 400), legend=:topright)
+            for (col_idx, node_name) in enumerate(node_names)
+                sp = plt[col_idx]
+                if haskey(frame.psd_dict, node_name)
+                    freqs, powers = frame.psd_dict[node_name]
+                    plot!(sp, freqs, powers;
+                          label="Iter $(frame.iter)",
+                          color=:dodgerblue,
+                          linewidth=2)
+                end
+                if data isa Data && haskey(data.node_data, node_name)
+                    node_info = data.node_data[node_name]
+                    plot!(sp, node_info.freqs, node_info.powers;
+                          label="Target",
+                          color=:black,
+                          linewidth=4,
+                          linestyle=:solid)
+                end
+                xlabel!(sp, "Frequency (Hz)")
+                ylabel!(sp, col_idx == 1 ? "Norm Log10 Power" : "")
+                title!(sp, node_name)
+                ylims!(sp, ylims_by_node[node_name])
             end
+            plot!(plt, plot_title="Restart $(frame.restart) | Iter $(frame.iter) | Loss $(round(frame.loss, digits=4)) | sigma=$(round(frame.sigma, digits=4))")
         end
         try
-            gif(anim, anim_path, fps=min(12, max(2, length(spectra) ÷ 10)), verbose=false)
+            gif(anim, anim_path, fps=min(12, max(2, Int(floor(length(spectra_frames) / 10)))), verbose=false)
         catch err
             vwarn("Unable to save spectrum animation: $(err)"; level=2)
         end
@@ -767,7 +847,6 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
 
     return nothing
 end
-
 
 function compute_r2_for_params(net::Network,
                                data::Data,

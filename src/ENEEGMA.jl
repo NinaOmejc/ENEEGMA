@@ -79,8 +79,9 @@ export ParamTransform, ParamReparamTransform, Affine01, ExpPos, SoftplusPos, Sig
 export update_param_minmax!, update_param_values!, update_param_tunability!
 export update_param_defaults!, update_param_bounds!
 export get_param_minmax_values, get_param_default_values, get_param_tunability, get_param_type
+export get_tunable_params, get_param_by_name, get_param_by_symbol, get_symbols
 export sample_param_values, MIN_PARAM_VAL, MAX_PARAM_VAL
-export print_params_summary, set_all_params_tunable!
+export print_params_summary, print_vars_summary, set_all_params_tunable!, rebuild_network_problem!, round_for_display
 export configure_network_parameters!
 
 # Variable management

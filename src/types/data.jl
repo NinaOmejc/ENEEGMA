@@ -48,4 +48,5 @@ Base.@kwdef struct Data
     node_data::Dict{String, NodeData}
     sampling_rate::Float64
     times::Vector{Float64}
+    removed_transient_duration_sec::Float64 = 0.0
 end

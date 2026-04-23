@@ -30,12 +30,14 @@ function prepare_psd_for_plotting(powers::Vector{Float64};
                                   data_settings::Union{Nothing, DataSettings}=nothing)::Vector{Float64}
     # Check if powers are already log-transformed by the preprocessing pipeline
     has_log = data_settings !== nothing && hasproperty(data_settings, :psd) ? 
-              psd_preproc_has_log(data_settings.psd.preproc_pipeline) : false
+              ENEEGMA.psd_preproc_has_log(data_settings.psd.preproc_pipeline) : false
     
-    # Safety check: if any power values are negative, they must already be log-transformed
+    # Second safety check: if any power values are negative, they must already be log-transformed
     # (raw PSD powers are always positive)
     if !isempty(powers) && any(p -> p < 0, powers)
         has_log = true
+    else
+        has_log = false
     end
     
     # Apply log only if requested AND powers are not already logged
@@ -44,6 +46,22 @@ function prepare_psd_for_plotting(powers::Vector{Float64};
     else
         return powers
     end
+end
+
+function _subplot_index(ncols::Int, row_idx::Int, col_idx::Int)::Int
+    return (row_idx - 1) * ncols + col_idx
+end
+
+function _grid_node_names(primary::AbstractDict{String, <:Any},
+                          secondary::Union{Nothing, AbstractDict{String, <:Any}}=nothing)::Vector{String}
+    node_names = collect(keys(primary))
+    if secondary !== nothing
+        for node_name in keys(secondary)
+            node_name in node_names && continue
+            push!(node_names, node_name)
+        end
+    end
+    return node_names
 end
 
 """
@@ -184,6 +202,66 @@ function plot_psd_comparison(freqs::Vector{Float64},
     return nothing
 end
 
+function plot_psd_comparison(simulated_psd_dict::Dict{String, Tuple{Vector{Float64}, Vector{Float64}}},
+                             data::Data;
+                             title::String="Power Spectral Density Comparison",
+                             xlabel::String="Frequency (Hz)",
+                             ylabel::String="Log Power",
+                             fullfname_fig::Union{Nothing, String}=nothing,
+                             use_log::Bool=true,
+                             data_settings::Union{Nothing, DataSettings}=nothing,
+                             general_settings::Union{Nothing, GeneralSettings}=nothing)::Nothing
+    if general_settings !== nothing && !general_settings.make_plots
+        return nothing
+    end
+
+    node_names = collect(keys(data.node_data))
+    isempty(node_names) && return nothing
+
+    try
+        n_sources = length(node_names)
+        p = plot(layout=(1, n_sources),
+                 size=(400 * n_sources, 400),
+                 legend=:topright)
+
+        for (col_idx, node_name) in enumerate(node_names)
+            haskey(simulated_psd_dict, node_name) || continue
+            node_info = data.node_data[node_name]
+            sim_freqs, simulated_powers = simulated_psd_dict[node_name]
+            observed_freqs = node_info.freqs
+            observed_powers = node_info.powers
+
+            plot_sim_powers = prepare_psd_for_plotting(simulated_powers; use_log=use_log, data_settings=data_settings)
+            plot_obs_powers = prepare_psd_for_plotting(observed_powers; use_log=use_log, data_settings=data_settings)
+
+            sp = p[col_idx]
+            plot!(sp, sim_freqs, plot_sim_powers;
+                  label="Simulated",
+                  xlabel=xlabel,
+                  ylabel=col_idx == 1 ? ylabel : "",
+                  title=node_name,
+                  linewidth=2)
+            plot!(sp, observed_freqs, plot_obs_powers;
+                  label="Observed",
+                  color=:black,
+                  linewidth=2,
+                  alpha=0.8)
+        end
+
+        if title != ""
+            plot!(p, plot_title=title)
+        end
+
+        if fullfname_fig !== nothing
+            savefig(p, fullfname_fig)
+        end
+    catch e
+        vwarn("Failed to plot PSD comparison: $e"; level=2)
+    end
+
+    return nothing
+end
+
 
 """
     plot_timeseries_windows(times::Vector{Float64}, 
@@ -267,6 +345,72 @@ function plot_timeseries_windows(times::Vector{Float64},
     return nothing
 end
 
+function plot_timeseries_windows(times::Vector{Float64},
+                                 simulated_signals::Dict{String, Vector{Float64}};
+                                 observed_signals::Union{Nothing, Dict{String, Vector{Float64}}}=nothing,
+                                 zoom_window::Tuple{Float64, Float64}=(2.0, 5.0),
+                                 title_prefix::String="",
+                                 fullfname_fig::Union{Nothing, String}=nothing,
+                                 general_settings::Union{Nothing, GeneralSettings}=nothing)::Nothing
+    if general_settings !== nothing && !general_settings.make_plots
+        return nothing
+    end
+
+    node_names = _grid_node_names(simulated_signals, observed_signals)
+    isempty(node_names) && return nothing
+
+    try
+        n_sources = length(node_names)
+        p = plot(layout=(2, n_sources), size=(400 * n_sources, 500), legend=:topright)
+
+        time_min = minimum(times)
+        time_max = maximum(times)
+        safe_zoom = (max(zoom_window[1], time_min), min(zoom_window[2], time_max))
+
+        for (col_idx, node_name) in enumerate(node_names)
+            simulated_signal = get(simulated_signals, node_name, Float64[])
+            observed_signal = observed_signals === nothing ? nothing : get(observed_signals, node_name, nothing)
+
+            isempty(simulated_signal) && observed_signal === nothing && continue
+
+            full_idx = _subplot_index(n_sources, 1, col_idx)
+            zoom_idx = _subplot_index(n_sources, 2, col_idx)
+
+            if !isempty(simulated_signal)
+                plot!(p[full_idx], times, simulated_signal;
+                      label="Simulated",
+                      xlabel="",
+                      ylabel=col_idx == 1 ? "Amplitude" : "",
+                      title=node_name,
+                      linewidth=1.5)
+                plot!(p[zoom_idx], times, simulated_signal;
+                      label="Simulated",
+                      xlabel="Time (s)",
+                      ylabel=col_idx == 1 ? "Amplitude" : "",
+                      xlims=safe_zoom,
+                      linewidth=1.5)
+            end
+
+            if observed_signal !== nothing && !isempty(observed_signal)
+                plot!(p[full_idx], times, observed_signal; label="Observed", color=:black)
+                plot!(p[zoom_idx], times, observed_signal; label="Observed", color=:black, xlims=safe_zoom)
+            end
+        end
+
+        if title_prefix != ""
+            plot!(p, plot_title=title_prefix)
+        end
+
+        if fullfname_fig !== nothing
+            savefig(p, fullfname_fig)
+        end
+    catch e
+        vwarn("Failed to plot timeseries windows: $e"; level=2)
+    end
+
+    return nothing
+end
+
 
 """
     plot_simulation_results(times::Vector{Float64},
@@ -330,7 +474,7 @@ function plot_simulation_results(df_sources::DataFrame;
         # Create (3, N) subplot layout: rows=3 (full ts, zoomed ts, PSD), cols=N (one per signal)
         plot_height = 300 * 3  # 3 rows
         plot_width = 400 * n_sources  # N columns
-        p = plot(layout=(3, n_sources), size=(plot_width, plot_height), legend=:topright);
+        p = Plots.plot(layout=(3, n_sources), size=(plot_width, plot_height), legend=:topright);
 
         # Plots.jl indexes subplots row-wise for a (rows, cols) layout.
         # Map (row, col) -> linear subplot index so rows stay aligned across columns.

@@ -251,15 +251,18 @@ function sort_symbols(symbols::Union{Vector{Symbol}, Vector{Num},  Vector{Any}})
 end
 
 
+
+
 """
     rebuild_network_problem!(net::Network, new_params::Union{Dict, NamedTuple})::Nothing
 
 Rebuild the network problem with updated parameters.
 
-Updates net.problem with new parameter values. This is useful after modifying parameters
-to ensure the problem reflects the current parameter state. The function handles both 
-Dict and NamedTuple parameter specifications, automatically converting Dicts to NamedTuples
-and merging with existing parameters to preserve unchanged values.
+Helper function that updates net.problem with new parameter values. This is useful 
+after modifying parameters to ensure the problem reflects the current parameter state. 
+The function handles both Dict and NamedTuple parameter specifications, automatically 
+converting Dicts to NamedTuples and merging with existing parameters to preserve 
+unchanged values.
 
 # Arguments
 - `net::Network`: Network whose problem should be rebuilt
@@ -341,5 +344,62 @@ function update_param_defaults!(net::Network, dict::AbstractDict)::Network
     rebuild_network_problem!(net, dict)
     
     vinfo("Network $(net.name) parameters updated and problem rebuilt"; level=1)
+    return net
+end
+
+
+"""
+    update_param_defaults!(net::Network, optsol)::Network
+
+Update network parameter defaults from an optimization solution and rebuild problem.
+
+Convenience wrapper that combines OptimizationSolution conversion with network rebuilding.
+Extracts the first N elements of optsol.u (where N = number of tunable parameters) 
+and uses them to update network parameters, then automatically rebuilds the network problem.
+This handles cases where optsol.u contains additional elements such as initial values.
+
+# Arguments
+- `net::Network`: Network whose parameters should be updated
+- `optsol`: Solution from optimization with field .u containing parameter vector
+  (e.g., SciMLBase.OptimizationSolution from CMAES). Vector may contain additional 
+  elements beyond parameters (e.g., initial conditions).
+
+# Returns
+- `net::Network`: The updated network (for method chaining)
+
+# Example
+```julia
+result = optimize_network(net, data, settings)
+# Update network parameters with optimized values and rebuild problem
+update_param_defaults!(net, result)
+
+# Now simulate with optimized parameters
+df = simulate_network(net)
+```
+
+# See Also
+- [`update_param_defaults!(::ParamSet, optsol)`](@ref): Updates ParamSet only
+- [`update_param_defaults!(::Network, ::AbstractDict)`](@ref): Dict-based Network update
+"""
+function update_param_defaults!(net::Network, optsol)::Network
+    # Update parameter defaults in ParamSet from optimization solution
+    # (This validates that optsol.u has at least as many elements as tunable parameters)
+    update_param_defaults!(net.params, optsol)
+    
+    # Extract tunable params to get their names in order (for Dict construction)
+    tunable_params = get_tunable_params(net.params)
+    tunable_symbols = get_symbols(tunable_params, sort=true)
+    
+    # Build dict mapping param names to optimized values (use first N elements only)
+    optsol_dict = Dict{String, Float64}()
+    for (i, param_symbol) in enumerate(tunable_symbols)
+        param = get_param_by_symbol(net.params, param_symbol)
+        optsol_dict[param.name] = Float64(optsol.u[i])
+    end
+    
+    # Rebuild network problem with updated parameters
+    rebuild_network_problem!(net, optsol_dict)
+    
+    vinfo("Network $(net.name) parameters updated from optimization solution and problem rebuilt"; level=1)
     return net
 end

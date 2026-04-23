@@ -8,18 +8,40 @@ LOSSES - Module containing loss functions and
 
 # Main function that takes the loss function as an argument
 """
-    get_metric_function()::Function
+    get_metric_function(metric_name::Union{String, Symbol}="weighted_mae")::Function
 
-Returns the unified metric function (region-weighted MAE).
+Returns the specified metric function.
 
-Since all metrics now use the unified region-weighted MAE approach,
-this function returns the same function regardless of parameters.
+Supports:
+- "weighted_mae": Unified region-weighted mean absolute error loss
+- "weighted_iae": Integrated absolute error with region weighting
+
+# Arguments
+- `metric_name::Union{String, Symbol}`: Metric name
 
 # Returns
-- `metric_function`: weighted_mae function
+- `metric_function`: The requested metric function
 """
-function get_metric_function()::Function
-    return weighted_mae
+function _canonical_metric_name(metric_name::Union{String, Symbol})::String
+    metric_key = lowercase(String(metric_name))
+
+    if metric_key == "weighted_mae"
+        return "weighted_mae"
+    elseif metric_key == "weighted_iae"
+        return "weighted_iae"
+    end
+
+    error("Unknown metric: $metric_name. Supported: weighted_mae, weighted_iae")
+end
+
+function get_metric_function(metric_name::Union{String, Symbol}="weighted_mae")::Function
+    canonical_metric_name = _canonical_metric_name(metric_name)
+
+    if canonical_metric_name == "weighted_mae"
+        return weighted_mae
+    elseif canonical_metric_name == "weighted_iae"
+        return weighted_iae
+    end
 end
 
 
@@ -56,7 +78,7 @@ and error detection, then applies a specific metric function to calculate the fi
 
 function compute_loss(new_params, args, metric_fun::Function)
     prob          = args.prob
-    data        = args.data
+    data          = args.data
     setter        = args.setter
     all_params    = args.all_params
     tspan         = args.tspan
@@ -106,6 +128,16 @@ function compute_loss(new_params, args, metric_fun::Function)
         return 1e9
     end
     return loss
+end
+
+function _source_dataframe_to_dict(df_sources::DataFrame)::Dict{String, Vector{Float64}}
+    model_predictions = Dict{String, Vector{Float64}}()
+    for col in names(df_sources)
+        col_name = String(col)
+        col_name == "time" && continue
+        model_predictions[col_name] = Vector{Float64}(df_sources[!, col])
+    end
+    return model_predictions
 end
 
 
@@ -246,7 +278,7 @@ function validate_simulation_success(
     return true, "", model_predictions
 end
 
-
+#= 
 """
     validate_simulation_success(sol, brain_source_idx::Int, keep_idx, tspan_start, tspan_end, transient_duration)
 
@@ -278,11 +310,114 @@ function validate_simulation_success(
         return false, error_msg, Float64[]
     end
 end
-
+=#
 
 # ============================================================================
 # LOSS FUNCTION IMPLEMENTATIONS
 # ============================================================================
+
+function _compute_node_model_psd(model_prediction::AbstractVector{<:Real},
+                                 node_info::NodeData,
+                                 fs,
+                                 loss_settings::LossSettings,
+                                 data_settings::Union{Nothing, DataSettings}=nothing)
+    if data_settings === nothing
+        return ENEEGMA.compute_preprocessed_welch_psd(model_prediction, fs;
+                                                      loss_settings=loss_settings,
+                                                      data_settings=data_settings)
+    end
+
+    return ENEEGMA.compute_noisy_preprocessed_welch_psd(model_prediction,
+                                                        fs,
+                                                        loss_settings,
+                                                        data_settings;
+                                                        measurement_noise_std=node_info.measurement_noise_std)
+end
+
+function _compute_model_psd_dict(model_predictions::Dict{String, Vector{Float64}},
+                                 target::Data,
+                                 fs,
+                                 loss_settings::LossSettings,
+                                 data_settings::Union{Nothing, DataSettings}=nothing)
+    isempty(target.node_data) && error("Metric computation requires non-empty target.node_data")
+
+    psd_dict = Dict{String, Tuple{Vector{Float64}, Vector{Float64}}}()
+    aligned_psd_dict = Dict{String, Vector{Float64}}()
+
+    for (node_name, node_info) in target.node_data
+        if !haskey(model_predictions, node_name)
+            error("No model prediction for node $node_name. Available: $(collect(keys(model_predictions)))")
+        end
+
+        model_freqs, modeled_powers = _compute_node_model_psd(model_predictions[node_name],
+                                                              node_info,
+                                                              fs,
+                                                              loss_settings,
+                                                              data_settings)
+        psd_dict[node_name] = (model_freqs, modeled_powers)
+        aligned_psd_dict[node_name] = ENEEGMA._interpolate_psd(model_freqs, modeled_powers, node_info.freqs)
+    end
+
+    return psd_dict, aligned_psd_dict
+end
+
+function _combine_region_metrics(roi_metric::Real, bg_metric::Real, pm)
+    roi_weight = pm.roi_weight
+    bg_weight = pm.bg_weight
+    total_weight = roi_weight + bg_weight
+
+    if total_weight <= 0
+        return 0.5 * (Float64(roi_metric) + Float64(bg_metric))
+    end
+
+    return (roi_weight * Float64(roi_metric) + bg_weight * Float64(bg_metric)) / total_weight
+end
+
+function _weighted_node_mae(aligned_model::AbstractVector{<:Real}, node_info::NodeData)
+    abs_diff = abs.(node_info.powers .- aligned_model)
+    pm = node_info.freq_peak_metadata
+
+    if pm === nothing
+        return Statistics.mean(abs_diff)
+    end
+
+    roi_mask = Bool.(vec(pm.roi_mask))
+    bg_mask = Bool.(vec(pm.bg_mask))
+    length(roi_mask) == length(abs_diff) || error("ROI mask length must match PSD length for node $(node_info.channel)")
+    length(bg_mask) == length(abs_diff) || error("Background mask length must match PSD length for node $(node_info.channel)")
+
+    roi_mae = any(roi_mask) ? Statistics.mean(abs_diff[roi_mask]) : 0.0
+    bg_mae = any(bg_mask) ? Statistics.mean(abs_diff[bg_mask]) : 0.0
+
+    return _combine_region_metrics(roi_mae, bg_mae, pm)
+end
+
+function _weighted_node_iae(aligned_model::AbstractVector{<:Real}, node_info::NodeData)
+    freqs = node_info.freqs
+    if length(freqs) <= 1
+        return 0.0
+    end
+
+    abs_diff = abs.(node_info.powers .- aligned_model)
+    trap = 0.5 .* (abs_diff[1:end-1] .+ abs_diff[2:end]) .* diff(freqs)
+    pm = node_info.freq_peak_metadata
+
+    if pm === nothing
+        return sum(trap)
+    end
+
+    roi_mask = Bool.(vec(pm.roi_mask))
+    bg_mask = Bool.(vec(pm.bg_mask))
+    length(roi_mask) == length(freqs) || error("ROI mask length must match frequency length for node $(node_info.channel)")
+    length(bg_mask) == length(freqs) || error("Background mask length must match frequency length for node $(node_info.channel)")
+
+    roi_seg = roi_mask[1:end-1] .& roi_mask[2:end]
+    bg_seg = bg_mask[1:end-1] .& bg_mask[2:end]
+    roi_iae = any(roi_seg) ? sum(trap[roi_seg]) : 0.0
+    bg_iae = any(bg_seg) ? sum(trap[bg_seg]) : 0.0
+
+    return _combine_region_metrics(roi_iae, bg_iae, pm)
+end
 
 """
     weighted_mae(model_predictions::Dict{String, Vector{Float64}}, target::Data, fs, loss_settings::LossSettings)
@@ -310,60 +445,71 @@ If no metadata is available, defaults to uniform (unweighted) MAE.
 """
 function weighted_mae(model_predictions::Dict{String, Vector{Float64}}, target::Data, fs, loss_settings::LossSettings, 
                       data_settings::Union{Nothing, DataSettings}=nothing)
-    
-    if isempty(target.node_data)
-        error("weighted_mae: Data has no node data loaded")
-    end
-    
+    _, aligned_psd_dict = _compute_model_psd_dict(model_predictions, target, fs, loss_settings, data_settings)
+
     node_losses = Float64[]
-    
-    # Compute loss for each node using its own model prediction
     for (node_name, node_info) in target.node_data
-        if !haskey(model_predictions, node_name)
-            error("weighted_mae: No model prediction for node $node_name. Available: $(keys(model_predictions))")
-        end
-        
-        model_pred = model_predictions[node_name]
-        
-        # Compute model PSD for this node's prediction
-        model_freqs, modeled_powers = ENEEGMA.compute_noisy_preprocessed_welch_psd(model_pred, fs, loss_settings, data_settings)
-        aligned_model = ENEEGMA._interpolate_psd(model_freqs, modeled_powers, node_info.freqs)
-        
-        # Compute loss for this node
-        if node_info.freq_peak_metadata === nothing
-            # Uniform MAE
-            node_loss = Statistics.mean(abs.(node_info.powers .- aligned_model))
-        else
-            pm = node_info.freq_peak_metadata
-            roi_mask = pm.roi_mask
-            bg_mask = pm.bg_mask
-            
-            # Compute MAE in each region
-            roi_diff = abs.(node_info.powers[roi_mask] .- aligned_model[roi_mask])
-            bg_diff = abs.(node_info.powers[bg_mask] .- aligned_model[bg_mask])
-            
-            roi_mae = isempty(roi_diff) ? 0.0 : Statistics.mean(roi_diff)
-            bg_mae = isempty(bg_diff) ? 0.0 : Statistics.mean(bg_diff)
-            
-            # Weighted combination
-            roi_weight = pm.roi_weight
-            bg_weight = pm.bg_weight
-            total_weight = roi_weight + bg_weight
-            
-            if total_weight <= 0
-                node_loss = 0.5 * (roi_mae + bg_mae)
-            else
-                node_loss = (roi_weight * roi_mae + bg_weight * bg_mae) / total_weight
-            end
-        end
-        
-        push!(node_losses, node_loss)
+        push!(node_losses, _weighted_node_mae(aligned_psd_dict[node_name], node_info))
     end
-    
-    # Combine per-node losses: average (equal weighting for all nodes)
-    combined_loss = Statistics.mean(node_losses)
-    
-    return combined_loss
+
+    return Statistics.mean(node_losses)
+end
+
+function weighted_mae(df_sources::DataFrame, target::Data, fs, loss_settings::LossSettings,
+                      data_settings::Union{Nothing, DataSettings}=nothing)
+    return weighted_mae(_source_dataframe_to_dict(df_sources), target, fs, loss_settings, data_settings)
+end
+
+function weighted_iae(model_predictions::Dict{String, Vector{Float64}}, target::Data, fs, loss_settings::LossSettings,
+                      data_settings::Union{Nothing, DataSettings}=nothing)
+    _, aligned_psd_dict = _compute_model_psd_dict(model_predictions, target, fs, loss_settings, data_settings)
+
+    node_iaes = Float64[]
+    for (node_name, node_info) in target.node_data
+        push!(node_iaes, _weighted_node_iae(aligned_psd_dict[node_name], node_info))
+    end
+
+    return Statistics.mean(node_iaes)
+end
+
+function weighted_iae(df_sources::DataFrame, target::Data, fs, loss_settings::LossSettings,
+                      data_settings::Union{Nothing, DataSettings}=nothing)
+    return weighted_iae(_source_dataframe_to_dict(df_sources), target, fs, loss_settings, data_settings)
+end
+
+function weighted_iae(model_psd::Vector{Float64}, target_psd::Vector{Float64},
+                      freqs::Vector{Float64}, pm::Union{Nothing, NamedTuple}=nothing)
+    length(model_psd) == length(target_psd) || error("model_psd and target_psd must have the same length")
+    length(freqs) == length(target_psd) || error("freqs and target_psd must have the same length")
+    length(freqs) <= 1 && return 0.0
+
+    abs_diff = abs.(model_psd .- target_psd)
+    trap = 0.5 .* (abs_diff[1:end-1] .+ abs_diff[2:end]) .* diff(freqs)
+
+    if pm === nothing
+        return sum(trap)
+    end
+
+    roi_mask = Bool.(vec(pm.roi_mask))
+    bg_mask = Bool.(vec(pm.bg_mask))
+    length(roi_mask) == length(freqs) || error("ROI mask length must match freqs length")
+    length(bg_mask) == length(freqs) || error("Background mask length must match freqs length")
+
+    roi_seg = roi_mask[1:end-1] .& roi_mask[2:end]
+    bg_seg = bg_mask[1:end-1] .& bg_mask[2:end]
+    roi_iae = any(roi_seg) ? sum(trap[roi_seg]) : 0.0
+    bg_iae = any(bg_seg) ? sum(trap[bg_seg]) : 0.0
+
+    return _combine_region_metrics(roi_iae, bg_iae, pm)
+end
+
+function r2(psd_model::AbstractVector{<:Real}, psd_data::AbstractVector{<:Real})
+    ss_res = sum((psd_data .- psd_model).^2)
+    ss_tot = sum((psd_data .- Statistics.mean(psd_data)).^2)
+    if iszero(ss_tot)
+        return iszero(ss_res) ? 1.0 : -Inf
+    end
+    return 1 - ss_res / ss_tot
 end
 
 

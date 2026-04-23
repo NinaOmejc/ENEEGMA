@@ -51,7 +51,8 @@ function save_simulation_results(df::DataFrame,
 
     general_settings = settings.general_settings
     simulation_settings = settings.simulation_settings
-
+    data_settings = settings.data_settings
+    
     # Create numbered simulation_N/ folder if not provided
     if simulation_output_dir === nothing
         candidate_path = ENEEGMA.construct_output_dir(general_settings, settings.network_settings)
@@ -65,8 +66,18 @@ function save_simulation_results(df::DataFrame,
     # Calculate sampling frequency
     fs = 1.0 / simulation_settings.saveat
     
+    # Remove transient period
+    transient_duration = data_settings.psd.transient_period_duration
+    keep_idx = ENEEGMA.get_indices_after_transient_removal(df_sources.time, transient_duration, df_sources.time[1], fs)
+    
+    if !isempty(keep_idx)
+        df_sources = df_sources[keep_idx, :]
+    end
+
     # Compute PSD for all source signals
-    psd_dict = ENEEGMA.compute_psd_for_all_sources(df_sources, fs)
+    psd_dict = ENEEGMA.compute_psd_for_all_sources(df_sources, fs; 
+        data_settings=settings.data_settings, 
+        loss_settings=settings.optimization_settings.loss_settings)
 
     # Build output file names using standardized format: exp_name_net_name_simulated
     base_prefix = "$(general_settings.exp_name)_$(net.name)_simulated"
