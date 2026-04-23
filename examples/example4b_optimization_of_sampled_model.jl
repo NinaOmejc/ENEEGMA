@@ -5,7 +5,10 @@
 # 2. Load candidate models from grammar sampling results
 # 3. Select and build a network from one candidate
 # 4. Optimize network parameters to fit target data
-using Revise
+try
+    using Revise
+catch
+end
 using ENEEGMA
 using CSV
 using DataFrames
@@ -72,7 +75,6 @@ set_all_params_tunable!(net.params)
 # Step 6: Run Optimization (commented - uncomment when ready)
 # ============================================================================
 print_settings_summary(settings; section="optimization_settings")
-settings.optimization_settings.time_limit_minutes = 1
-settings.optimization_settings.n_restarts = 1
+settings.optimization_settings.time_limit_minutes = 1 # set low for testing; increase for better optimization
 optsol, optlogger, setter, blocks = optimize_network(net, data, settings);
 

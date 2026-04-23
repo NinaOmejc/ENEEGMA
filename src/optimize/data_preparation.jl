@@ -57,26 +57,10 @@ function prepare_data!(settings::Settings)
         freqs, powers = ENEEGMA.compute_preprocessed_welch_psd(signal, fs; loss_settings=ls, data_settings=ds)
         
         # Estimate measurement noise for this node
-        measurement_noise_std = if !ds.estimate_measurement_noise || signal === nothing
-            -1.0
-        else
-            sigma_init = ENEEGMA.estimate_sigma_init(signal)
-            sigma_floor = ENEEGMA.estimate_sigma_floor(signal, Float64(fs), ds, ls)
-            
-            candidates = Float64[]
-            ENEEGMA._is_valid_sigma(sigma_init) && push!(candidates, sigma_init)
-            ENEEGMA._is_valid_sigma(sigma_floor) && push!(candidates, sigma_floor)
-            
-            if isempty(candidates)
-                -1.0
-            else
-                sigma_guess = minimum(candidates)
-                ENEEGMA._is_valid_sigma(sigma_floor) ? sigma_floor : sigma_guess
-            end
-        end
+        measurement_noise_std = ENEEGMA.estimate_measurement_noise_std(signal, fs, ds, ls)
         
         # Compute frequency regions for this node
-        freq_peak_metadata = ENEEGMA.compute_frequency_regions(freqs, powers, ds, ls)
+        freq_peak_metadata = ENEEGMA.compute_frequency_regions(freqs, powers, node_name, ds, ls)
         
         # Determine PSD representation
         pipeline_has_log = ENEEGMA.psd_preproc_has_log(ds.psd.preproc_pipeline)
@@ -265,8 +249,18 @@ function build_mask_from_regions(freqs::Vector{Float64}, regions::Vector{Tuple{F
     return roi_mask
 end
 
+function manual_spectral_roi_for_node(data_settings::DataSettings, node_name::String)::Vector{Tuple{Float64, Float64}}
+    if haskey(data_settings.spectral_roi_manual, node_name)
+        return data_settings.spectral_roi_manual[node_name]
+    elseif haskey(data_settings.spectral_roi_manual, "__all__")
+        return data_settings.spectral_roi_manual["__all__"]
+    end
+
+    return Tuple{Float64, Float64}[]
+end
+
 """
-    compute_frequency_regions(freqs, powers, data_settings::DataSettings, ls::LossSettings)
+    compute_frequency_regions(freqs, powers, node_name, data_settings::DataSettings, ls::LossSettings)
 
 Compute ROI and background masks for weighted loss based on data settings.
 
@@ -284,9 +278,11 @@ Compute ROI and background masks for weighted loss based on data settings.
   - `bg_weight::Float64`: Weight for background loss
 """
 function compute_frequency_regions(freqs::Vector{Float64}, powers::Vector{Float64},
+                                   node_name::String,
                                    data_settings::DataSettings, ls::LossSettings)
     if data_settings.spectral_roi_definition_mode == :manual
-        roi_mask = ENEEGMA.build_mask_from_regions(freqs, data_settings.spectral_roi_manual)
+        roi_regions = ENEEGMA.manual_spectral_roi_for_node(data_settings, node_name)
+        roi_mask = ENEEGMA.build_mask_from_regions(freqs, roi_regions)
     else  # :auto
         roi_mask = ENEEGMA.detect_peaks_automatic(freqs, powers, data_settings.spectral_roi_auto_peak_sensitivity;
                                                  fmin=ls.fmin, fmax=ls.fmax)
@@ -393,37 +389,29 @@ function _is_valid_sigma(sigma::Union{Nothing, Real})
 end
 
 
-function maybe_initialize_std_measured_noise!(data_settings::DataSettings,
-                                              ls::LossSettings,
-                                              signal::AbstractVector{<:Real},
-                                              fs::Union{Nothing, Real})
+function estimate_measurement_noise_std(signal::AbstractVector{<:Real},
+                                        fs::Union{Nothing, Real},
+                                        data_settings::DataSettings,
+                                        ls::LossSettings)::Float64
     """
-    Estimate measurement noise sigma from data using time and frequency-domain methods.
-    
-    If disabled or data unavailable, sets measurement_noise_std to -1.0.
-    Otherwise, combines time-domain (MAD-based) and frequency-domain (PSD floor) estimates,
-    preferring the frequency-domain estimate if available.
+    Estimate per-node measurement noise sigma from data using time and frequency-domain methods.
+
+    Returns `-1.0` when estimation is disabled or no valid estimate can be formed.
+    Prefers the frequency-domain estimate when available, otherwise uses the minimum valid estimate.
     """
     if !data_settings.estimate_measurement_noise || signal === nothing
-        data_settings.measurement_noise_std = -1.0
-        return nothing
+        return -1.0
     end
 
-    # Estimate sigma from two independent methods
     sigma_init = estimate_sigma_init(signal)
-    sigma_floor = (fs === nothing) ? nothing : estimate_sigma_floor(signal, Float64(fs), data_settings, ls)
+    sigma_floor = fs === nothing ? nothing : estimate_sigma_floor(signal, Float64(fs), data_settings, ls)
 
-    # Collect valid estimates
     candidates = Float64[]
     _is_valid_sigma(sigma_init) && push!(candidates, sigma_init)
     _is_valid_sigma(sigma_floor) && push!(candidates, sigma_floor)
-    isempty(candidates) && return nothing
+    isempty(candidates) && return -1.0
 
-    # Use frequency-domain estimate if available (more robust), otherwise use minimum
     sigma_guess = minimum(candidates)
-    resolved_sigma = _is_valid_sigma(sigma_floor) ? sigma_floor : sigma_guess
-    
-    data_settings.measurement_noise_std = resolved_sigma
-    return nothing
+    return _is_valid_sigma(sigma_floor) ? sigma_floor : sigma_guess
 end
 

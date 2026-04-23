@@ -108,7 +108,7 @@ function build_additive_noise_dynamics!(pop::Population, ss::SimulationSettings)
                 noise_dynamics_expr_func_str = "t -> " * pop.noise_dynamics
                 noise_func = eval(Meta.parse(noise_dynamics_expr_func_str))
                 noise_dynamics_values = [Base.invokelatest(noise_func, it) for it in t_values]
-                pop.additive_noise_func = LinearInterpolation(t_values, noise_dynamics_values, extrapolation_bc=Line())
+                pop.additive_noise_func = linear_interpolation(t_values, noise_dynamics_values; extrapolation_bc=Line())
             catch e
                 throw(ArgumentError("Error processing additive noise expression '$(pop.noise_dynamics)' for pop $(pop.id) in node $(pop.parent_node.name): $e"))
             end

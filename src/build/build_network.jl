@@ -138,7 +138,7 @@ function construct_sensory_input_dynamics!(net::Network)::Network
         end
     end
 
-    net.sensory_input_func = Interpolations.LinearInterpolation(t_values, s_values, extrapolation_bc=Interpolations.Flat())
+    net.sensory_input_func = Interpolations.linear_interpolation(t_values, s_values; extrapolation_bc=Interpolations.Flat())
     vinfo("Sensory input dynamics configured: $(si)"; level=2)
     vinfo("  Time span: $(ss.tspan[1]) to $(ss.tspan[2]), $(n_points) sample points"; level=2)
     return net

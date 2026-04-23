@@ -48,16 +48,13 @@ df_sources = ENEEGMA.extract_brain_sources(settings, net, df)
 psd_dict = ENEEGMA.compute_psd_for_all_sources(df_sources, fs)
 
 # Build output file names using standardized format: exp_name_net_name_simulated
-base_prefix = "$(general_settings.exp_name)_$(net.name)_simulated"
-
 # Save composite plot (3xN panels) for all source signals
-fname_plot = "$(base_prefix).png"
-path_plot = joinpath(simulation_output_dir, fname_plot)
+path_plot = "$(settings.general_settings.exp_name)_$(net.name)_simulated.png"
 ENEEGMA.plot_simulation_results(df_sources; psd_dict=psd_dict,
-                                    zoom_window=(2.0, 5.0),
-                                    fullfname_fig=path_plot,
-                                    data_settings=settings.data_settings,
-                                    general_settings=general_settings)
+                                zoom_window=(2.0, 5.0),
+                                fullfname_fig=path_plot,
+                                data_settings=settings.data_settings,
+                                general_settings=settings.general_settings)
 
 # ============================================================================
 # Step 4: Resample Initial Conditions and Simulate Again

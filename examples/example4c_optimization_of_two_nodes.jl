@@ -29,11 +29,11 @@ settings = load_settings(settings_path)
 # ============================================================================
 println("\n[Step 2] Building network...")
 net = build_network(settings)
+print_params_summary(net.params)
 
-# Set seed for reproducibility and resample initial conditions
+# Resample initial conditions
 println("\n[Step 2b] Sampling initial conditions...")
 new_inits = sample_inits(net.vars)
-print_params_summary(net.params)
 
 println("\n[Step 2c] Simulating network with ground truth parameters...")
 df_true = simulate_network(net; new_inits=new_inits)
@@ -56,6 +56,7 @@ data = prepare_data!(settings)
 # Step 4: Optimization
 # ============================================================================
 set_all_params_tunable!(net.params)
+settings.optimization_settings.maxiters = 10 # set low for testing; increase for better optimization
 optsol, optlogger, setter, blocks = optimize_network(net, data, settings)
 
 # ============================================================================

@@ -185,8 +185,7 @@ export prepare_data!
 export get_metric_function, get_loss_function
 export apply_subject_specific_peak_range!
 export detect_peak_windows, build_broad_peak_metadata
-export estimate_sigma_init, estimate_sigma_floor
-export maybe_initialize_std_measured_noise!
+export estimate_sigma_init, estimate_sigma_floor, estimate_measurement_noise_std
 export save_optimization_results
 export run_hyperparameter_sweep, show_hyperparameter_combos, add_hyperparameter_axis!
 

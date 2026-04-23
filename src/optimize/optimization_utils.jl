@@ -165,39 +165,61 @@ function load_optimization_results(path::AbstractString; dicttype=Dict)
     isfile(path) || error("Optimization results JSON not found: $(path)")
     raw = JSON.parsefile(path; dicttype=dicttype)
 
-    net_name = String(get(raw, "net_name", ""))
-    exp_name = String(get(raw, "exp_name", ""))
-    settings_idx_val = get(raw, "settings_idx", nothing)
+    optimization_results = get(raw, "optimization_results", Dict{String, Any}())
+    metadata = get(raw, "metadata", Dict{String, Any}())
+    configuration = get(raw, "configuration", Dict{String, Any}())
+    config_general = get(configuration, "general_settings", Dict{String, Any}())
+    config_network = get(configuration, "network_settings", Dict{String, Any}())
+    config_data = get(configuration, "data_settings", Dict{String, Any}())
+
+    net_name_raw = get(raw, "net_name", get(config_network, "name", ""))
+    exp_name_raw = get(raw, "exp_name", get(config_general, "exp_name", ""))
+    net_name = net_name_raw === nothing ? "" : String(net_name_raw)
+    exp_name = exp_name_raw === nothing ? "" : String(exp_name_raw)
+    settings_idx_val = get(raw, "settings_idx", get(config_general, "settings_idx", nothing))
     settings_idx = settings_idx_val === nothing ? nothing : _coerce_int(settings_idx_val)
-    settings_path_val = get(raw, "settings_path", nothing)
+
+    settings_path_val = get(raw, "settings_path", get(metadata, "settings_file", nothing))
     settings_path_updated = settings_path_val === nothing ? nothing : _translate_settings_path(String(settings_path_val))
-    node_models = String(get(raw, "node_models", ""))
-    task_type = String(get(raw, "task_type", ""))
-    hyperparam_idx = _coerce_int(get(raw, "hyperparam_idx", nothing))
+
+    node_models_raw = get(raw, "node_models", get(config_network, "node_models", ""))
+    node_models = node_models_raw === nothing ? "" : (node_models_raw isa AbstractVector ? join(string.(node_models_raw), ",") : String(node_models_raw))
+    task_type_raw = get(raw, "task_type", get(config_data, "task_type", ""))
+    task_type = task_type_raw === nothing ? "" : String(task_type_raw)
+
+    hyperparam_idx_raw = get(raw, "hyperparam_idx", get(metadata, "hyperparam_idx", nothing))
+    hyperparam_idx = hyperparam_idx_raw === nothing ? nothing : _coerce_int(hyperparam_idx_raw)
+
     hyperparam_combo = get(raw, "hyperparam_combo", nothing)
     hyperparam_keys = get(raw, "hyperparam_keys", nothing)
-    restart_idx = _coerce_int(get(raw, "restart_idx", nothing))
+    if (hyperparam_combo === nothing || hyperparam_keys === nothing) && !isempty(get(raw, "hyperparam_adaptation", Dict{String, Any}()))
+        hyperparam_adaptation = get(raw, "hyperparam_adaptation", Dict{String, Any}())
+        hyperparam_keys = collect(keys(hyperparam_adaptation))
+        hyperparam_combo = tuple(values(hyperparam_adaptation)...)
+    end
+
+    restart_idx_raw = get(raw, "restart_idx", get(metadata, "restart_idx", nothing))
+    restart_idx = restart_idx_raw === nothing ? nothing : _coerce_int(restart_idx_raw)
     orig_idx = _coerce_int(get(raw, "orig_idx", 0))
-    loss = _coerce_float(get(raw, "loss", NaN))
-    r2 = _coerce_float(get(raw, "r2", NaN))
-    mae = _coerce_float(get(raw, "fsmae", NaN))
+
+    loss = _coerce_float(get(raw, "loss", get(optimization_results, "best_loss", NaN)))
+    mae = _coerce_float(get(raw, "fsmae", get(optimization_results, "best_mae", get(optimization_results, "loss_final_recomputed", NaN))))
+    r2 = _coerce_float(get(raw, "r2", get(optimization_results, "best_r2", get(optimization_results, "r2", NaN))))
+    iae = _coerce_float(get(raw, "iae", get(optimization_results, "best_iae", get(optimization_results, "iae", NaN))))
     maef = _coerce_float(get(raw, "maef", NaN))
-    iae = _coerce_float(get(raw, "iae", NaN))
     iaep = _coerce_float(get(raw, "iaep", NaN))
     iaeb = _coerce_float(get(raw, "iaeb", NaN))
     is_best_combo_iae = get(raw, "is_best_combo_iae", false)
     is_best_combo_iaep = get(raw, "is_best_combo_iaep", false)
-    duration_seconds = _coerce_float(get(raw, "duration_seconds", NaN))
-    retcode = String(get(raw, "retcode", ""))
-    model_name = String(get(raw, "model_name", node_models))
+    duration_seconds = _coerce_float(get(raw, "duration_seconds", get(metadata, "duration_seconds", NaN)))
+    retcode = String(get(raw, "retcode", get(optimization_results, "retcode", "")))
+    model_name = String(get(raw, "model_name", isempty(net_name) ? node_models : net_name))
     model_idx = _coerce_int(get(raw, "model_idx", 0))
 
-    best_params = get(raw, "best_params", Dict{String, Any}())
+    best_params = get(raw, "best_params", get(raw, "best_parameters", Dict{String, Any}()))
     best_params = _dict_string_float(best_params)
-    #best_params = (; (Symbol(k) => v for (k, v) in best_params)...)
 
-    if exp_name == "" && !isempty(settings_path_updated)
-        # Try to infer exp_name from settings_path_updated
+    if exp_name == "" && !isnothing(settings_path_updated) && !isempty(settings_path_updated)
         m = match(r"(?:^|[\\/])(exp\d)(?:[\\/]|$)", settings_path_updated)
         if m !== nothing
             exp_name = m.captures[1]
@@ -215,34 +237,37 @@ function load_optimization_results(path::AbstractString; dicttype=Dict)
     best_inits = get(raw, "initial_states", nothing)
     if best_inits isa AbstractVector
         best_inits = Vector{Float64}(best_inits)
+    elseif best_inits isa AbstractDict
+        best_inits = _dict_string_float(best_inits)
     end
 
-    data_path = get(raw, "data_path", nothing)
+    data_path = get(raw, "data_path", get(config_data, "data_path", nothing))
     if data_path isa AbstractString
         data_path = _translate_data_path(data_path)
     else
         data_path = get_local_data_path()
     end
 
-    data_file = get(raw, "data_file", get(raw, "data_fname", nothing))
+    data_file = get(raw, "data_file", get(raw, "data_fname", get(config_data, "data_file", nothing)))
     data_sub = get(raw, "data_sub", nothing)
-    data_ic = get(raw, "data_ic", nothing)
+    data_ic = get(raw, "data_ic", get(config_data, "target_channel", nothing))
 
     if data_file isa AbstractString
         data_file = String(data_file)
-        data_sub = String(data_sub)
-        data_ic = String(data_ic)
+        data_sub = data_sub === nothing ? (isempty(data_file) ? "" : split(data_file, "_")[1]) : String(data_sub)
+        data_ic = data_ic isa AbstractString ? String(data_ic) : ""
     else
-        # load settings file to infer data_file if not present in results
         if !isnothing(settings_path_updated) && isfile(settings_path_updated)
             settings_json = JSON.parsefile(settings_path_updated; dicttype=Dict)
-            # data file is inside settings_json.data_settings
             data_settings = get(settings_json, "data_settings", Dict{String, Any}())
             data_file = String(get(data_settings, "data_file", ""))
             data_sub = data_file == "" ? "" : split(data_file, "_")[1]
-            data_ic = String(get(data_settings, "target_channel", ""))
+            target_channel = get(data_settings, "target_channel", "")
+            data_ic = target_channel isa AbstractString ? String(target_channel) : ""
         else
             data_file = ""
+            data_sub = ""
+            data_ic = ""
         end
     end
 

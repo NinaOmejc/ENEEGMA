@@ -970,6 +970,57 @@ mutable struct PSDSettings <: AbstractSettings
     end
 end
 
+function _coerce_manual_roi_regions(raw_regions)
+    if raw_regions === nothing
+        return Tuple{Float64, Float64}[]
+    elseif raw_regions isa AbstractVector
+        try
+            regions = Tuple{Float64, Float64}[]
+            for r in raw_regions
+                if r isa Tuple && length(r) >= 2
+                    push!(regions, (Float64(r[1]), Float64(r[2])))
+                elseif r isa AbstractVector && length(r) >= 2
+                    push!(regions, (Float64(r[1]), Float64(r[2])))
+                else
+                    throw(ArgumentError("Invalid ROI format: $r"))
+                end
+            end
+            return regions
+        catch e
+            throw(ArgumentError("DataSettings: manual ROI entries must be 2-element ranges, e.g. [[4.0, 8.0], [12.0, 20.0]]. Got: $raw_regions. Error: $e"))
+        end
+    else
+        throw(ArgumentError("DataSettings: manual ROI definition must be a vector of ranges or a dict of node => ranges. Got $(typeof(raw_regions))"))
+    end
+end
+
+function _normalize_spectral_roi_manual(raw_value,
+                                        node_names::AbstractVector{<:AbstractString}=String[])::Dict{String, Vector{Tuple{Float64, Float64}}}
+    names = String.(node_names)
+
+    if raw_value isa AbstractDict
+        roi_dict = Dict{String, Vector{Tuple{Float64, Float64}}}()
+        for (k, v) in raw_value
+            roi_dict[String(k)] = _coerce_manual_roi_regions(v)
+        end
+
+        if !isempty(names)
+            for node_name in names
+                get!(roi_dict, node_name, Tuple{Float64, Float64}[])
+            end
+        end
+
+        return roi_dict
+    end
+
+    regions = _coerce_manual_roi_regions(raw_value)
+    if isempty(names)
+        return Dict("__all__" => regions)
+    end
+
+    return Dict(node_name => copy(regions) for node_name in names)
+end
+
 """
     DataSettings
 
@@ -998,11 +1049,10 @@ mutable struct DataSettings <: AbstractSettings
     estimate_measurement_noise::Bool
     spectral_roi_definition_mode::Symbol  # :auto or :manual
     spectral_roi_auto_peak_sensitivity::Float64  # 0.0-1.0, higher=looser peak detection
-    spectral_roi_manual::Vector{Tuple{Float64, Float64}}  # [(fmin, fmax), ...] for manual mode
-    measurement_noise_std::Float64  # Measurement noise standard deviation (0=no noise, -1.0=not estimated)
+    spectral_roi_manual::Dict{String, Vector{Tuple{Float64, Float64}}}  # node_name => [(fmin, fmax), ...]; vector input is expanded to all nodes
     psd::PSDSettings  # Nested PSD preprocessing settings (includes noise_seed)
 
-    function DataSettings(dict::Dict{String, Any})::DataSettings
+    function DataSettings(dict::Dict{String, Any}, node_names::Vector{String}=String[])::DataSettings
         # Handle data_file: can be absolute or relative path
         data_file = haskey(dict, "data_file") ? (dict["data_file"] === nothing ? nothing : String(dict["data_file"])) : nothing
         
@@ -1052,36 +1102,26 @@ mutable struct DataSettings <: AbstractSettings
         
         spectral_roi_auto_peak_sensitivity = clamp(Float64(get(dict, "spectral_roi_auto_peak_sensitivity", 0.3)), 0.0, 1.0)
         
-        spectral_roi_manual = get(dict, "spectral_roi_manual", [[7.5, 14.0]])
-        if spectral_roi_manual isa Vector
-            try
-                spectral_roi_manual = Vector{Tuple{Float64, Float64}}(
-                    [begin
-                        if r isa AbstractVector && length(r) >= 2
-                            (Float64(r[1]), Float64(r[2]))
-                        else
-                            throw(ArgumentError("Invalid ROI format: $r"))
-                        end
-                    end for r in spectral_roi_manual]
-                )
-            catch e
-                throw(ArgumentError("DataSettings: 'spectral_roi_manual' must be an array of 2-element arrays, " *
-                    "e.g., [[4.0, 8.0], [12.0, 20.0]]. Got: $spectral_roi_manual. " *
-                    "Note: JSON tuples (4.0, 8.0) are NOT valid—use [4.0, 8.0] instead. Error: $e"))
-            end
-        else
-            spectral_roi_manual = Tuple{Float64, Float64}[]
-        end
+        spectral_roi_manual = _normalize_spectral_roi_manual(
+            get(dict, "spectral_roi_manual", [[7.5, 14.0]]),
+            node_names
+        )
         
         # Initialize PSD settings
         psd = PSDSettings(dict)
-        
-        # Measurement noise standard deviation 
-        measurement_noise_std = Float64(get(dict, "measurement_noise_std", 0.0))
 
         return new(data_file, target_channel, task_type, fs, data_columns, estimate_measurement_noise,
-                   spectral_roi_definition_mode, spectral_roi_auto_peak_sensitivity, spectral_roi_manual, measurement_noise_std, psd)
+                   spectral_roi_definition_mode, spectral_roi_auto_peak_sensitivity, spectral_roi_manual, psd)
     end
+end
+
+function Base.setproperty!(ds::DataSettings, name::Symbol, value)
+    if name === :spectral_roi_manual
+        current = getfield(ds, :spectral_roi_manual)
+        node_names = String[k for k in keys(current) if k != "__all__"]
+        return setfield!(ds, :spectral_roi_manual, _normalize_spectral_roi_manual(value, node_names))
+    end
+    return setfield!(ds, name, value)
 end
 
 """
@@ -1116,7 +1156,7 @@ mutable struct Settings
         sim  = SimulationSettings(dict)
         opt  = OptimizationSettings(dict)
         datad = get(dict, "data_settings", Dict{String, Any}())
-        data  = DataSettings(datad)
+        data  = DataSettings(datad, net.node_names)
 
         return new(gen, net, samp, sim, data, opt)
     end

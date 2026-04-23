@@ -111,6 +111,25 @@ mutable struct NodeBuildSetts
     new_param_tunability::OrderedDict{String, Bool}
 end
 
+function _ordered_dict_copy(value::AbstractDict, ::Type{OrderedDict{K, V}}) where {K, V}
+    out = OrderedDict{K, V}()
+    for (k, v) in pairs(value)
+        out[K(k)] = convert(V, v)
+    end
+    return out
+end
+
+function Base.setproperty!(nbs::NodeBuildSetts, name::Symbol, value)
+    if name === :new_state_var_inits
+        return setfield!(nbs, name, _ordered_dict_copy(value, OrderedDict{String, Tuple{Float64, Float64}}))
+    elseif name === :new_param_values
+        return setfield!(nbs, name, _ordered_dict_copy(value, OrderedDict{String, Tuple{Vararg{Float64}}}))
+    elseif name === :new_param_tunability
+        return setfield!(nbs, name, _ordered_dict_copy(value, OrderedDict{String, Bool}))
+    end
+    return setfield!(nbs, name, value)
+end
+
 mutable struct Node <: AbstractNode
     id::Int
     name::String

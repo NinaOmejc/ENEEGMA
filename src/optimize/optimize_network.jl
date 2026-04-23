@@ -10,13 +10,14 @@ function optimize_network(
     hyperparam_keys::Union{Nothing, Vector{String}}=nothing
     )
     # Validate settings before proceeding
-    check_settings(settings)
+    check_settings(settings; require_optimization_sampling_match=true)
     
     gs = settings.general_settings
     ns = settings.network_settings
     ss = settings.simulation_settings
     os = settings.optimization_settings
     ls = os.loss_settings
+    original_output_dir = os.output_dir
     
     # Create numbered optimization folder ONCE if not already set
     if os.output_dir === nothing
@@ -32,7 +33,7 @@ function optimize_network(
     # get some optimization components
     solver = ENEEGMA.get_solver(net.problem, ss)
     solver_kwargs = ENEEGMA.get_solver_kwargs(net.problem, ss)
-    loss_fun = ENEEGMA.get_loss_function()  # Unified region-weighted MAE loss
+    loss_fun = ENEEGMA.get_loss_function() 
     optimizer = ENEEGMA.get_optimizer(os)
     
     blocks = ENEEGMA.prepare_optimization_blocks(net, os)
@@ -55,14 +56,13 @@ function optimize_network(
     tunables_ub = vcat(param_ub, init_ub)
 
     # create setter function for updating NamedTuple of **all params** (not just tunables) inside Problem. Nothing to do with inits here.
-    setter = ENEEGMA.make_namedtuple_setter(Tuple(tunable_params_symbols))
-    brain_source_indices = ENEEGMA.get_eeg_output_indices(net, settings)
-
+    setter = ENEEGMA.make_namedtuple_setter(all_params, Tuple(tunable_params_symbols))
     args = (
+        net=net,
+        settings=settings,
         prob=net.problem, data=data, setter=setter,
         all_params=all_params,
         tspan=ss.tspan, loss_settings=ls,
-        brain_source_indices=brain_source_indices,
         solver=solver, solver_kwargs=solver_kwargs,
         data_settings=settings.data_settings,
     )
@@ -86,8 +86,8 @@ function optimize_network(
             push!(failure_reasons, failure_reason)
         end
 
-        if optsol !== nothing && optsol.minimum < best_loss
-            best_loss = optsol.minimum
+        if optsol !== nothing && optsol.objective < best_loss
+            best_loss = optsol.objective
             best_optsol = optsol
         end
         
@@ -115,9 +115,11 @@ function optimize_network(
         detail = isempty(failure_reasons) ? "" : "\nLast failure:\n" * failure_reasons[end]
         max_len = 1200
         detail = length(detail) > max_len ? string(detail[1:max_len], " … [truncated]") : detail
+        os.output_dir = original_output_dir
         error("All optimization attempts failed. Check solver settings and model stability." * detail)
     end
 
+    os.output_dir = original_output_dir
     return best_optsol, optlogger, setter, blocks
 end
 
@@ -173,13 +175,13 @@ function singlerun_optimization(
         u_phys = materialize_logged_params(current_optsol.u, param_spec, init_spec)
         vinfo("Optimization completed with:"; level=1)
         vinfo("  Return code: $(current_optsol.retcode)"; level=1)
-        vinfo("  Final loss: $(current_optsol.minimum)"; level=1)
+        vinfo("  Final loss: $(current_optsol.objective)"; level=1)
         flush(stdout)
         
         # Check if final loss differs from best logged loss
         if !isempty(optlogger)
             best_logged_loss = minimum(entry.loss for entry in optlogger)
-            if abs(current_optsol.minimum - best_logged_loss) > 1e-6
+            if abs(current_optsol.objective - best_logged_loss) > 1e-6
                 vinfo("  ⚠ Best logged loss: $(round(best_logged_loss, digits=6)) (optimizer drifted from best)"; level=2)
             end
         end
@@ -290,14 +292,22 @@ end
 
 
 # Utility: create a setter for a NamedTuple and a list of parameter names
-function make_namedtuple_setter(tunable_params_symbols::Tuple)
+function make_namedtuple_setter(template_nt::NamedTuple, tunable_params_symbols::Tuple)
+    field_names = propertynames(template_nt)
+    field_index_map = Dict{Symbol, Int}(name => idx for (idx, name) in enumerate(field_names))
+    update_indices = Int[get(field_index_map, name, 0) for name in tunable_params_symbols]
+    any(iszero, update_indices) && error("Some tunable parameters are missing from the parameter NamedTuple template.")
+    namedtuple_type = NamedTuple{field_names}
+
     function setter(nt::NamedTuple, values::AbstractVector)
-        nt_new = (; nt...)  # start with all original fields
-        for (i, name) in enumerate(tunable_params_symbols)
-            nt_new = merge(nt_new, NamedTuple{(name,)}((values[i],)))
+        length(values) < length(update_indices) && error("Setter received fewer values than tunable parameters.")
+        fields = Any[Tuple(nt)...]
+        @inbounds for i in eachindex(update_indices)
+            fields[update_indices[i]] = values[i]
         end
-        return nt_new
+        return namedtuple_type(Tuple(fields))
     end
+
     return setter
 end
 

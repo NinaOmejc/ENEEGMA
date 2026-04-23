@@ -20,9 +20,9 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     loss_settings = optimization_settings.loss_settings
 
     blocks = blocks === nothing ? ENEEGMA.prepare_optimization_blocks(net, optimization_settings) : blocks
-    params_native, inits_native, min_optlogger_loss = ENEEGMA.best_params_inits(optsol, optlogger, blocks)
+    params_native, inits_native, _ = ENEEGMA.best_params_inits(optsol, optlogger, blocks)
     param_range_entries, init_range_entries = ENEEGMA.native_range_entries(net, blocks)
-    best_loss = min(optsol.minimum, min_optlogger_loss)
+    best_loss = Float64(optsol.objective)
 
     # Use provided optimization output directory, or construct from settings
     if settings.optimization_settings.output_dir === nothing
@@ -42,11 +42,6 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     # Include exp_name at the beginning for all output files
     base_prefix = "$(general_settings.exp_name)_$(net.name)$(hyperparam_str)$(restart_str)"
 
-    # Save loss evolution plot to figures folder
-    fname_loss = "$(base_prefix)_loss_evolution_over_iterations.png"
-    path_loss = joinpath(figures_dir, fname_loss)
-    ENEEGMA.plot_loss_over_iterations(optlogger, general_settings, path_loss)
-    
     # Save optlogger CSV to main optimization folder
     ENEEGMA.save_optlogger(optlogger, settings; fullfname_csv=joinpath(optimization_path, "$(base_prefix)_optlogger.csv"))
 
@@ -56,74 +51,70 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     result = ENEEGMA.evaluate_model(
         net, opt_params, inits_native, data, settings;
         evaluation_metrics=["weighted_mae", "r2", "weighted_iae"],
-        demean=true,
-        transient_period_duration=settings.data_settings.psd.transient_period_duration
+        demean=true
     );
     
     if !result.success
         vwarn("Failed to simulate model with best parameters: $(result.error_msg)"; level=2)
-        vwarn("Attempting to save results with fallback values..."; level=2)
+        vwarn("Skipping plot and modeled-PSD outputs, but saving optimization metadata and JSON."; level=2)
+    else
+        times = result.df_sources.time
+        observed_signals = Dict(node_name => node_info.signal for (node_name, node_info) in data.node_data)
+        modeled_psds = result.psd_dict
+
+        ENEEGMA.save_modeled_psd(modeled_psds, settings;
+                                 fullfname_csv=joinpath(optimization_path, "$(base_prefix)_modeled_psd.csv"))
+
+        fname_loss = "$(base_prefix)_loss_evolution_over_iterations.png"
+        path_loss = joinpath(figures_dir, fname_loss)
+        ENEEGMA.plot_loss_over_iterations(optlogger, general_settings, path_loss)
+
+        fname_obs_ts = "$(base_prefix)_observed_vs_modeled_timeseries.png"
+        path_obs_ts = joinpath(figures_dir, fname_obs_ts)
+        ENEEGMA.plot_timeseries_windows(times, result.model_predictions;
+                                         observed_signals=observed_signals,
+                                         observed_times=data.times,
+                                         zoom_window=(2.0, 5.0),
+                                         title_prefix="Observed vs Modeled Timeseries",
+                                         fullfname_fig=path_obs_ts,
+                                         general_settings=general_settings)
+
+        fname_obs_freq = "$(base_prefix)_observed_vs_modeled_spectrum.png"
+        path_obs_freq = joinpath(figures_dir, fname_obs_freq)
+        ENEEGMA.plot_psd_comparison(result.psd_dict, data;
+                                    title="Power Spectral Density Comparison",
+                                    data_settings=settings.data_settings,
+                                    fullfname_fig=path_obs_freq,
+                                    general_settings=general_settings)
+
+        fname_param = "$(base_prefix)_parameter_exploration.png"
+        path_param = joinpath(figures_dir, fname_param)
+        ENEEGMA.plot_param_exploration(optlogger, net;
+                                       true_parameters=true_parameters,
+                                       node_names=result.node_names,
+                                       loss_settings=loss_settings,
+                                       fullfname_fig=path_param,
+                                       general_settings=general_settings)
+
+        fname_freq_plot = "$(base_prefix)_spectrum_evolution.png"
+        fname_freq_anim = "$(base_prefix)_spectrum_evolution.gif"
+        freq_plot_path = joinpath(figures_dir, fname_freq_plot)
+        freq_anim_path = joinpath(figures_dir, fname_freq_anim)
+        ENEEGMA.plot_psd_spetra_evolution(optlogger, net, setter;
+                        data=data,
+                        settings=settings,
+                        fullfname_fig=freq_plot_path,
+                        fullfname_anim=freq_anim_path)
     end
 
-    observed_signals = Dict(node_name => node_info.signal for (node_name, node_info) in data.node_data)
-
-    # Extract data from first node for single-panel outputs that still expect one PSD curve
-    first_node_key = first(keys(data.node_data))
-
-    times = result.success ? result.df_sources.time : data.times
-    freqs, modeled_powers = get(result.psd_dict, first_node_key, (Float64[], Float64[]))
-    
-    ENEEGMA.save_modeled_psd(modeled_powers, freqs, settings; 
-                            fullfname_csv=joinpath(optimization_path, "$(base_prefix)_modeled_psd.csv"))
-
-    fname_obs_ts = "$(base_prefix)_observed_vs_modeled_timeseries.png"
-    path_obs_ts = joinpath(figures_dir, fname_obs_ts)
-    # Use unified visualization function from visualization.jl
-    ENEEGMA.plot_timeseries_windows(times, result.model_predictions;
-                                     observed_signals=observed_signals,
-                                     zoom_window=(2.0, 5.0),
-                                     title_prefix="Observed vs Modeled Timeseries",
-                                     fullfname_fig=path_obs_ts,
-                                     general_settings=general_settings);
-
-    fname_obs_freq = "$(base_prefix)_observed_vs_modeled_spectrum.png"
-    path_obs_freq = joinpath(figures_dir, fname_obs_freq)
-    # Use unified visualization function from visualization.jl
-    ENEEGMA.plot_psd_comparison(result.psd_dict, data;
-                                title="Power Spectral Density Comparison",
-                                data_settings=settings.data_settings,
-                                fullfname_fig=path_obs_freq,
-                                general_settings=general_settings)
-
-    # PLOT: Parameter exploration
-    fname_param = "$(base_prefix)_parameter_exploration.png"
-    path_param = joinpath(figures_dir, fname_param)
-    ENEEGMA.plot_param_exploration(optlogger, net; 
-                                true_parameters=true_parameters,
-                                node_names=result.node_names,
-                                loss_settings=loss_settings,
-                                fullfname_fig=path_param,
-                                general_settings=general_settings)
-
-    # PLOT: Frequency spectra evolution
-    fname_freq_plot = "$(base_prefix)_spectrum_evolution.png"
-    fname_freq_anim = "$(base_prefix)_spectrum_evolution.gif"
-    freq_plot_path = joinpath(figures_dir, fname_freq_plot)
-    freq_anim_path = joinpath(figures_dir, fname_freq_anim)
-    ENEEGMA.plot_psd_spetra_evolution(optlogger, net, setter;
-                    data=data,
-                    settings=settings,
-                    fullfname_fig=freq_plot_path,
-                    fullfname_anim=freq_anim_path)
-
     # Average node-wise metrics from evaluate_model for summary outputs
-    loss_values = result.success ? get(result.metrics, "weighted_mae", Float64[]) : Float64[]
-    r2_values = result.success ? get(result.metrics, "r2", Float64[]) : Float64[]
-    iae_values = result.success ? get(result.metrics, "weighted_iae", Float64[]) : Float64[]
+    loss_values = result.success ? ENEEGMA._evaluation_metric_vector(result.metrics, result.node_names, "weighted_mae") : Float64[]
+    r2_values = result.success ? ENEEGMA._evaluation_metric_vector(result.metrics, result.node_names, "r2") : Float64[]
+    iae_values = result.success ? ENEEGMA._evaluation_metric_vector(result.metrics, result.node_names, "weighted_iae") : Float64[]
 
-    recomputed_loss = !isempty(loss_values) ? Statistics.mean(loss_values) : best_loss
-    r2_metric = !isempty(r2_values) ? Statistics.mean(r2_values) : NaN
-    iae_metric = !isempty(iae_values) ? Statistics.mean(iae_values) : NaN
+    recomputed_loss = isempty(loss_values) ? nothing : Statistics.mean(loss_values)
+    r2_metric = isempty(r2_values) ? nothing : Statistics.mean(r2_values)
+    iae_metric = isempty(iae_values) ? nothing : Statistics.mean(iae_values)
     
     # Build best_params dict with normalized names
     best_opt_params_named = OrderedDict{String, Any}()
@@ -162,25 +153,38 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
         "timestamp" => timestamp_str,
         "duration_seconds" => duration_sec,
         "restart_idx" => restart_idx,
-        "hyperparam_idx" => hyperparam_idx
+        "hyperparam_idx" => hyperparam_idx,
+        "evaluation_success" => result.success,
+        "evaluation_error" => result.success ? nothing : result.error_msg
     )
     
     # Build optimization_results section with all loss metrics
     optimization_results_dict = OrderedDict(
         "best_loss" => best_loss,
         "loss_final_recomputed" => recomputed_loss,
+        "best_loss_bynode" => isempty(loss_values) ? nothing : loss_values,
+        "best_mae" => recomputed_loss,
+        "best_mae_bynode" => isempty(loss_values) ? nothing : loss_values,
+        "best_r2" => r2_metric,
+        "best_r2_bynode" => isempty(r2_values) ? nothing : r2_values,
+        "best_iae" => iae_metric,
+        "best_iae_bynode" => isempty(iae_values) ? nothing : iae_values,
         "r2" => r2_metric,
         "iae" => iae_metric,
         "retcode" => string(optsol.retcode),
         "iterations_completed" => length(optlogger)
     )
 
-    per_node_metrics_dict = OrderedDict(
-        "node_names" => result.node_names,
-        "weighted_mae" => loss_values,
-        "r2" => r2_values,
-        "weighted_iae" => iae_values
-    )
+    per_node_metrics_dict = OrderedDict{String, Any}()
+    if result.success
+        for node_name in result.node_names
+            if haskey(result.metrics, node_name)
+                per_node_metrics_dict[node_name] = OrderedDict(
+                    string(metric_name) => value for (metric_name, value) in pairs(result.metrics[node_name])
+                )
+            end
+        end
+    end
     
     # Build hyperparam_adaptation section (empty dict if no hyperparams)
     hyperparam_adaptation_dict = OrderedDict{String, Any}()
@@ -226,29 +230,29 @@ function best_params_inits(optsol::SciMLBase.OptimizationSolution,
                            optlogger::Vector{OptLogEntry},
                            blocks)
     n_state_vars = length(blocks.initial_values_native)
-    n_params = length(optsol.minimizer) - n_state_vars
+    n_params = length(optsol.u) - n_state_vars
     n_params < 0 && error("Optimization solution length is inconsistent with state/measurement-noise counts.")
     length(blocks.param_spec) == n_params || error("Mismatch between tunable parameter count and optimization solution length.")
     length(blocks.init_spec) == n_state_vars || error("Mismatch between initial-state count and optimization solution length.")
 
-    decoded_solution = materialize_logged_params(optsol.minimizer, blocks.param_spec, blocks.init_spec)
+    decoded_solution = materialize_logged_params(optsol.u, blocks.param_spec, blocks.init_spec)
     params_native = decoded_solution[1:n_params]
     inits_native = decoded_solution[n_params + 1 : n_params + n_state_vars]
     
-    return params_native, inits_native, optsol.minimum
+    return params_native, inits_native, optsol.objective
 end    
 #=     
     if isempty(optlogger)
-        return params_native, inits_native, optsol.minimum
+        return params_native, inits_native, optsol.objective
     end 
 
     best_optlog_iter = optlogger[argmin([optlogger[i].loss for i in 1:length(optlogger)])]
     if best_optlog_iter.params !== nothing &&
        length(best_optlog_iter.params) == n_params + n_state_vars &&
-       round(best_optlog_iter.loss, digits=6) < round(optsol.minimum, digits=6)
+       round(best_optlog_iter.loss, digits=6) < round(optsol.objective, digits=6)
         params_native = best_optlog_iter.params[1:n_params]
         inits_native = best_optlog_iter.params[n_params + 1 : n_params + n_state_vars]
-        vinfo("Using best logged parameters (loss=$(round(best_optlog_iter.loss, digits=6))) instead of optsol.minimizer (loss=$(round(optsol.minimum, digits=6)))"; level=2)
+        vinfo("Using best logged parameters (loss=$(round(best_optlog_iter.loss, digits=6))) instead of optsol.u (loss=$(round(optsol.objective, digits=6)))"; level=2)
     end
     return params_native, inits_native, round(best_optlog_iter.loss, digits=6)
 end
@@ -258,6 +262,26 @@ function save_optlogger(optlogger, settings; fullfname_csv::String="optimization
     if settings.optimization_settings.save_optimization_history
         CSV.write(fullfname_csv, DataFrame(optlogger))
     end
+end
+
+function _psd_dict_to_dataframe(psd_dict::Dict{String, Tuple{Vector{Float64}, Vector{Float64}}})::DataFrame
+    rows = NamedTuple{(:node, :freq, :psd), Tuple{String, Float64, Float64}}[]
+    for (node_name, (freqs, powers)) in pairs(psd_dict)
+        length(freqs) == length(powers) || error("PSD length mismatch for node $node_name")
+        for i in eachindex(freqs, powers)
+            push!(rows, (node=String(node_name), freq=Float64(freqs[i]), psd=Float64(powers[i])))
+        end
+    end
+    return DataFrame(rows)
+end
+
+function save_modeled_psd(modeled_powers::Dict{String, Tuple{Vector{Float64}, Vector{Float64}}},
+                          settings::Settings;
+                          fullfname_csv::String="modeled_psd.csv")::Nothing
+    if settings.optimization_settings.save_modeled_psd
+        CSV.write(fullfname_csv, ENEEGMA._psd_dict_to_dataframe(modeled_powers))
+    end
+    return nothing
 end
 
 function save_modeled_psd(modeled_powers::Vector{Float64},
@@ -688,6 +712,11 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
 
     spectra_frames = NamedTuple{(:iter, :loss, :restart, :sigma, :psd_dict)}[]
     node_names = data isa Data ? collect(keys(data.node_data)) : String[]
+    sigma_vals = [
+        node_info.measurement_noise_std for node_info in values(data.node_data)
+        if isfinite(node_info.measurement_noise_std) && node_info.measurement_noise_std > 0
+    ]
+    sigma_val = isempty(sigma_vals) ? 0.0 : Statistics.mean(sigma_vals)
 
     for entry in Iterators.take(entries, min(max_entries, length(entries)))
         params_vec = entry.params
@@ -695,34 +724,29 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
 
         param_block = params_vec[1:n_params]
         init_block = params_vec[n_params + 1 : n_params + n_state_vars]
-        sigma_val = ds.measurement_noise_std
         new_params = setter(net.problem.p, param_block)
 
         try
             sol = simulate_network(net.problem; new_params=new_params, new_inits=init_block,
                                    solver=solver, solver_kwargs=solver_kwargs)
-            df = sol2df(sol, net)
-            nrow(df) == 0 && continue
+            success, error_msg, times, model_predictions = extract_validated_model_predictions(
+                sol,
+                net,
+                settings;
+                demean=true
+            )
+            success || throw(ErrorException(error_msg))
 
-            df_sources, _ = extract_brain_sources(settings, net, df; return_source_expressions=true)
-            nrow(df_sources) == 0 && continue
+            source_names = [String(node.name) for node in net.nodes if haskey(model_predictions, String(node.name))]
+            df_sources = model_predictions_to_dataframe(times, model_predictions; node_names=source_names)
+            (nrow(df_sources) == 0 || ncol(df_sources) <= 1) && continue
 
-            fs = 1.0 / ss.saveat
-            transient_duration = ds.psd.transient_period_duration
-            keep_idx = get_indices_after_transient_removal(df_sources.time, transient_duration, df_sources.time[1], fs)
-            if !isempty(keep_idx)
-                df_sources = df_sources[keep_idx, :]
-            end
-
-            for col in names(df_sources)
-                col == :time && continue
-                df_sources[!, col] .-= mean(df_sources[!, col])
-            end
-
-            psd_fs = ds.fs === nothing ? fs : ds.fs
-            frame_psd_dict = compute_psd_for_all_sources(df_sources, psd_fs;
-                                                         data_settings=ds,
-                                                         loss_settings=ls)
+            frame_psd_dict, _ = ENEEGMA._compute_model_psd_dict(
+                model_predictions,
+                data,
+                ls,
+                ds
+            )
             isempty(frame_psd_dict) && continue
 
             if isempty(node_names)
@@ -859,7 +883,7 @@ function compute_r2_for_params(net::Network,
     solver = get_solver(net.problem, ss)
     solver_kwargs = get_solver_kwargs(net.problem, ss)
 
-    setter = make_namedtuple_setter(Tuple(param_symbols))
+    setter = make_namedtuple_setter(net.problem.p, Tuple(param_symbols))
     opt_params = setter(net.problem.p, params_native)
     sol = simulate_network(net.problem;
                                   new_params=opt_params,
@@ -874,9 +898,13 @@ function compute_r2_for_params(net::Network,
     end
     model_prediction = Matrix(df)[:, 2]
     fs = length(sol.t) > 1 ? 1.0 / (sol.t[2] - sol.t[1]) : 1.0 / ss.saveat
-    _, modeled_powers = compute_noisy_preprocessed_welch_psd(model_prediction, fs, ls, ds)
     first_node_key = first(keys(data.node_data))
     first_node_data = data.node_data[first_node_key]
+    _, modeled_powers = compute_noisy_preprocessed_welch_psd(model_prediction,
+                                                             fs,
+                                                             ls,
+                                                             ds,
+                                                             first_node_data)
     target_freqs, target_curve = first_node_data.freqs, first_node_data.powers
     if target_curve === nothing || length(target_curve) != length(modeled_powers)
         return NaN

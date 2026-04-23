@@ -15,7 +15,7 @@ This ensures consistency across optimization, evaluation, and analysis scripts.
 # ============================================================================
 
 """
-    simulate_and_extract(net::Network, params, inits, settings::Settings; demean=true, remove_transient_period=true)
+    simulate_and_extract(net::Network, params, inits, settings::Settings; demean=true)
 
 Simulate the network with given parameters and initial conditions, then extract and process
 the brain source signals.
@@ -26,7 +26,7 @@ the brain source signals.
 - `inits`: Initial condition values (can be NamedTuple or Vector)
 - `settings::Settings`: Settings object containing simulation configuration
 - `demean::Bool=true`: Whether to subtract the mean from the prediction
-- `remove_transient_period::Bool=true`: Whether to skip the configured transient period from the simulation
+- The transient period is taken from `settings.data_settings.psd.transient_period_duration`
 
 # Returns
 - `sol`: ODE solution object
@@ -35,26 +35,20 @@ the brain source signals.
 - `error_msg::String`: Error message if simulation failed, empty otherwise
 
 # Notes
-When `remove_transient_period=true`, the transient period is discarded to allow
-the system to settle into steady-state before analysis. Set to `false` to use the entire simulation
-window (useful when comparing directly with observed data that doesn't have this offset).
+The configured transient period is discarded to allow the system to settle into steady-state before analysis.
 """
 
-function simulate_and_extract(
+function simulate_and_extract_predictions(
     net::Network,
     params,
     inits,
     settings::Settings;
-    demean::Bool=true,
-    transient_period_duration::Float64=2.0
+    demean::Bool=true
 )
     simulation_settings = settings.simulation_settings
-    
-    # Get solver and kwargs
     solver = get_solver(net.problem, simulation_settings)
     solver_kwargs = get_solver_kwargs(net.problem, simulation_settings)
-    
-    # Simulate
+
     try
         sol = simulate_network(
             net.problem;
@@ -63,62 +57,44 @@ function simulate_and_extract(
             solver=solver,
             solver_kwargs=solver_kwargs
         )
-        df = sol2df(sol, net)
 
-        # Extract all source signals and compute PSD for each
-        df_sources, _ = ENEEGMA.extract_brain_sources(settings, net, df; return_source_expressions=true)
-        
-        # Calculate sampling frequency
-        fs = 1.0 / simulation_settings.saveat
-        
-        # Remove transient period
-        transient_duration = settings.data_settings.psd.transient_period_duration
-        keep_idx = ENEEGMA.get_indices_after_transient_removal(df_sources.time, transient_duration, df_sources.time[1], fs)
-        
-        if !isempty(keep_idx)
-            df_sources = df_sources[keep_idx, :]
-        end
-
-        if demean
-            for col in names(df_sources)
-                if col != :time
-                    df_sources[!, col] .-= mean(df_sources[!, col])
-                end
-            end
-        end
-#=      # Extract brain source indices for all nodes
-        brain_source_indices = ENEEGMA.get_eeg_output_indices(net, settings)
-        
-        # Extract transient duration from data_settings if available
-        tspan = solver_kwargs[:tspan]
-        transient_duration = settings.data_settings.psd.transient_period_duration
-        fs_actual = 1.0 / solver_kwargs[:saveat]  # Infer sampling frequency from time step
-        keep_idx = ENEEGMA.get_indices_after_transient_removal(sol.t, transient_duration, tspan[1], fs_actual)
-        
-        # Validate simulation success and extract per-node model predictions
-        success, error_msg, model_predictions = ENEEGMA.validate_simulation_success(
-            sol, brain_source_indices, keep_idx, tspan[1], tspan[2], transient_duration
+        success, error_msg, times, model_predictions = ENEEGMA.extract_validated_model_predictions(
+            sol,
+            net,
+            settings;
+            demean=demean
         )
-        
-        if !success
-            vwarn("$(error_msg)"; level=2)
-            return sol, Float64[], false, error_msg
-        end
-        
-        # Demean if requested (critical for PSD computation consistency)
-        if demean
-            for (node_name, model_pred) in model_predictions
-                model_predictions[node_name] .-= mean(model_pred)
-            end
-        end =#
-        
-        return sol, df_sources, true, ""
-        
+
+        return sol, times, model_predictions, success, error_msg
     catch e
         error_msg = "Simulation error: $(e)"
         vwarn("$(error_msg)"; level=2)
-        return nothing, DataFrame(), false, error_msg
+        return nothing, Float64[], Dict{String, Vector{Float64}}(), false, error_msg
     end
+end
+
+function simulate_and_extract(
+    net::Network,
+    params,
+    inits,
+    settings::Settings;
+    demean::Bool=true
+)
+    sol, times, model_predictions, success, error_msg = ENEEGMA.simulate_and_extract_predictions(
+        net,
+        params,
+        inits,
+        settings;
+        demean=demean
+    )
+
+    if !success
+        return sol, DataFrame(), false, error_msg
+    end
+
+    node_names = [String(node.name) for node in net.nodes if haskey(model_predictions, String(node.name))]
+    df_sources = ENEEGMA.model_predictions_to_dataframe(times, model_predictions; node_names=node_names)
+    return sol, df_sources, true, ""
 end
 
 function _normalize_evaluation_metric_name(metric_name)::String
@@ -161,6 +137,48 @@ function _node_metric_values_from_aligned_psds(metric_name::String,
     return metric_values
 end
 
+function _empty_node_metrics(node_names::Vector{String},
+                             metric_names::Vector{String},
+                             fill_value::Float64)
+    metric_syms = Tuple(Symbol.(metric_names))
+    metric_template = NamedTuple{metric_syms}(Tuple(fill(fill_value, length(metric_names))))
+    metrics = Dict{String, typeof(metric_template)}()
+    for node_name in node_names
+        metrics[node_name] = metric_template
+    end
+    return metrics
+end
+
+function _node_metrics_from_metric_vectors(node_names::Vector{String},
+                                           metric_names::Vector{String},
+                                           metric_vectors::Dict{String, Vector{Float64}})
+    metric_syms = Tuple(Symbol.(metric_names))
+    metric_template = NamedTuple{metric_syms}(Tuple(fill(NaN, length(metric_names))))
+    metrics = Dict{String, typeof(metric_template)}()
+
+    for (node_idx, node_name) in enumerate(node_names)
+        metric_tuple = NamedTuple{metric_syms}(Tuple(metric_vectors[metric_name][node_idx] for metric_name in metric_names))
+        metrics[node_name] = metric_tuple
+    end
+
+    return metrics
+end
+
+function _evaluation_metric_vector(metrics_by_node,
+                                   node_names::Vector{String},
+                                   metric_name::String)::Vector{Float64}
+    metric_sym = Symbol(metric_name)
+    values = Float64[]
+
+    for node_name in node_names
+        if haskey(metrics_by_node, node_name) && hasproperty(metrics_by_node[node_name], metric_sym)
+            push!(values, Float64(getproperty(metrics_by_node[node_name], metric_sym)))
+        end
+    end
+
+    return values
+end
+
 """
     evaluate_model(net::Network, params, inits, data::Data, settings::Settings; 
                    evaluation_metrics=["loss", "r2", "iae"], demean=true)
@@ -185,7 +203,7 @@ A NamedTuple with fields:
 - `psd_dict::Dict{String, Tuple{Vector{Float64}, Vector{Float64}}}`: Per-node model PSDs
 - `success::Bool`: Whether simulation succeeded
 - `error_msg::String`: Error message if failed
-- `metrics::Dict{String, Vector{Float64}}`: Per-node metric values keyed by normalized names (`"weighted_mae"`, `"weighted_iae"`, `"r2"`)
+- `metrics::Dict{String, NamedTuple}`: Per-node metric values keyed by node name
 
 """
 function evaluate_model(
@@ -195,8 +213,7 @@ function evaluate_model(
     data::Data,
     settings::Settings;
     evaluation_metrics::AbstractVector=["loss", "r2", "iae"],
-    demean::Bool=true,
-    transient_period_duration::Float64=2.0
+    demean::Bool=true
 )
     data_settings = settings.data_settings
     loss_settings = settings.optimization_settings.loss_settings
@@ -210,53 +227,22 @@ function evaluate_model(
         error("evaluate_model requires loss_settings to be configured in optimization_settings")
     end
     
-    # Simulate and extract prediction
-    sol, df_sources, success, error_msg = ENEEGMA.simulate_and_extract(
-        net, params, inits, settings; demean=demean, transient_period_duration=transient_period_duration)
-    
     metric_names = [ENEEGMA._normalize_evaluation_metric_name(metric_name) for metric_name in evaluation_metrics]
     node_names = ENEEGMA._evaluation_node_names(data)
 
-    metrics = Dict{String, Vector{Float64}}()
+    metrics = ENEEGMA._empty_node_metrics(node_names, metric_names, Inf)
     empty_psd_dict = Dict{String, Tuple{Vector{Float64}, Vector{Float64}}}()
-    
-    if !success || isempty(df_sources)
-        vinfo("Returning empty results due to simulation failure"; level=2)
-        for metric_name in metric_names
-            metrics[metric_name] = fill(Inf, length(node_names))
-        end
-        
-        return (
-            sol=sol,
-            node_names=node_names,
-            df_sources=DataFrame(),
-            model_predictions=Dict{String, Vector{Float64}}(),
-            psd_dict=empty_psd_dict,
-            success=false,
-            error_msg=error_msg,
-            metrics=metrics
-        )
-    end
 
-    brain_source_indices = ENEEGMA.get_eeg_output_indices(net, settings)
-
-    solver_kwargs = get_solver_kwargs(net.problem, settings.simulation_settings)
-    tspan = solver_kwargs[:tspan]
-    transient_duration = data_settings.psd.transient_period_duration
-    fs_actual = 1.0 / solver_kwargs[:saveat]  # Infer sampling frequency from time step
-    keep_idx = ENEEGMA.get_indices_after_transient_removal(sol.t, transient_duration, tspan[1], fs_actual)
-    
-    # Validate simulation success and extract per-node model predictions
-    success, error_msg, model_predictions = ENEEGMA.validate_simulation_success(
-        sol, brain_source_indices, keep_idx, tspan[1], tspan[2], transient_duration
+    sol, times, model_predictions, success, error_msg = ENEEGMA.simulate_and_extract_predictions(
+        net,
+        params,
+        inits,
+        settings;
+        demean=demean
     )
 
-    if !success
-        vinfo("Returning empty results due to validation failure"; level=2)
-        for metric_name in metric_names
-            metrics[metric_name] = fill(Inf, length(node_names))
-        end
-
+    if !success || isempty(model_predictions)
+        vinfo("Returning empty results due to simulation failure"; level=2)
         return (
             sol=sol,
             node_names=node_names,
@@ -268,15 +254,16 @@ function evaluate_model(
             metrics=metrics
         )
     end
-    
+
+    df_sources = ENEEGMA.model_predictions_to_dataframe(times, model_predictions)
     psd_dict, aligned_psd_dict = ENEEGMA._compute_model_psd_dict(
         model_predictions,
         data,
-        data_settings.fs,
         loss_settings,
         data_settings
     )
 
+    metric_vectors = Dict{String, Vector{Float64}}()
     for metric_name in metric_names
         metric_value = try
             ENEEGMA._node_metric_values_from_aligned_psds(metric_name, aligned_psd_dict, data)
@@ -285,8 +272,9 @@ function evaluate_model(
             fill(NaN, length(node_names))
         end
         
-        metrics[metric_name] = metric_value
+        metric_vectors[metric_name] = metric_value
     end
+    metrics = ENEEGMA._node_metrics_from_metric_vectors(node_names, metric_names, metric_vectors)
     
     return (
         sol=sol,

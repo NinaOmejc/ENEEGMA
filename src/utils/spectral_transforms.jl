@@ -627,9 +627,9 @@ function compute_noisy_preprocessed_welch_psd(model_prediction::AbstractVector{<
                                 fs::Real,
                                 loss_settings::LossSettings,
                                 data_settings::DataSettings;
-                                measurement_noise_std::Union{Float64, Nothing}=nothing)
+                                measurement_noise_std::Union{Real, Nothing}=nothing)
     reps = max(data_settings.psd.noise_avg_reps, 1)
-    sigma_effective = max(measurement_noise_std, 0.0)
+    sigma_effective = measurement_noise_std === nothing ? 0.0 : max(Float64(measurement_noise_std), 0.0)
 
     if sigma_effective <= 0
         return ENEEGMA.compute_preprocessed_welch_psd(model_prediction, fs; 
@@ -660,6 +660,18 @@ function compute_noisy_preprocessed_welch_psd(model_prediction::AbstractVector{<
         accum .+= powers_rep
     end
     return freqs, accum ./ reps
+end
+
+function compute_noisy_preprocessed_welch_psd(model_prediction::AbstractVector{<:Real},
+                                fs::Real,
+                                loss_settings::LossSettings,
+                                data_settings::DataSettings,
+                                node_info::NodeData)
+    return compute_noisy_preprocessed_welch_psd(model_prediction,
+                                                fs,
+                                                loss_settings,
+                                                data_settings;
+                                                measurement_noise_std=node_info.measurement_noise_std)
 end
 
 """

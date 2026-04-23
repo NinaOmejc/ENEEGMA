@@ -165,7 +165,7 @@ function create_default_settings()::Settings
 end
 
 """
-    check_settings(settings::Settings)::Bool
+    check_settings(settings::Settings; require_optimization_sampling_match::Bool=false)::Bool
 
 Validate all settings for consistency and correctness.
 
@@ -191,6 +191,7 @@ Validates:
 
 # Arguments
 - `settings::Settings`: Settings object to validate
+- `require_optimization_sampling_match::Bool=false`: When `true`, enforce `1 / simulation_settings.saveat == data_settings.fs`
 
 # Returns
 `true` if all validations pass
@@ -214,7 +215,7 @@ optimize_network(net, data, settings)  # Calls check_settings() automatically
 - SimulationSettings can be None for workflows that don't simulate
 - Validation is non-destructive; settings are never modified
 """
-function check_settings(settings::Settings)::Bool
+function check_settings(settings::Settings; require_optimization_sampling_match::Bool=false)::Bool
     ns = settings.network_settings
     n_nodes = ns.n_nodes
     
@@ -309,6 +310,17 @@ function check_settings(settings::Settings)::Bool
     
     # ========== DATA SETTINGS VALIDATION ==========
     ds = settings.data_settings
+    if require_optimization_sampling_match && !isnothing(ds)
+        sim_fs = 1.0 / ss.saveat
+        data_fs = Float64(ds.fs)
+        if !isapprox(sim_fs, data_fs; atol=1e-8, rtol=1e-8)
+            throw(ArgumentError(
+                "For optimization, simulation_settings.saveat and data_settings.fs must match. " *
+                "Got saveat=$(ss.saveat), so simulated fs=$(sim_fs) Hz, but data_settings.fs=$(data_fs) Hz."
+            ))
+        end
+    end
+
     if !isnothing(ds) && ds.target_channel isa Dict
         # Multi-node: validate that all dict keys exist in node_names
         dict_keys = Set(keys(ds.target_channel))
@@ -459,6 +471,13 @@ function settings_to_dict(settings::Settings)::OrderedDict{String, Any}
     data_s = settings.data_settings
     d["data_settings"] = if data_s !== nothing
         data_dict = struct_to_ordered_dict(data_s; exclude=Set([:workspace]))
+        if haskey(data_dict, "spectral_roi_manual")
+            spectral_roi_dict = OrderedDict{String, Any}()
+            for (node_name, regions) in pairs(data_s.spectral_roi_manual)
+                spectral_roi_dict[String(node_name)] = [[fmin, fmax] for (fmin, fmax) in regions]
+            end
+            data_dict["spectral_roi_manual"] = spectral_roi_dict
+        end
         # Nested PSD settings are already serialized via reflection
         data_dict
     else

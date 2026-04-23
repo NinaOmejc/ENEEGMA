@@ -123,85 +123,6 @@ function plot_psd_single(freqs::Vector{Float64}, powers::Vector{Float64};
 end
 
 
-"""
-    plot_psd_comparison(freqs::Vector{Float64}, 
-                        simulated_powers::Vector{Float64},
-                        observed_powers::Vector{Float64};
-                        title::String="Power Spectral Density Comparison",
-                        xlabel::String="Frequency (Hz)",
-                        ylabel::String="Log Power",
-                        fullfname_fig::Union{Nothing, String}=nothing,
-                        general_settings::Union{Nothing, GeneralSettings}=nothing)::Nothing
-
-Plot power spectral density comparison (simulated vs observed).
-
-# Arguments
-- `freqs::Vector{Float64}`: Frequency values
-- `simulated_powers::Vector{Float64}`: Simulated power values
-- `observed_powers::Vector{Float64}`: Observed power values
-- `title::String`: Plot title
-- `xlabel::String`: X-axis label
-- `ylabel::String`: Y-axis label
-- `fullfname_fig::Union{Nothing, String}`: Output filename
-- `general_settings::Union{Nothing, GeneralSettings}`: Settings for checking make_plots flag
-
-# Returns
-Nothing (saves to file if fullfname_fig provided)
-"""
-function plot_psd_comparison(freqs::Vector{Float64},
-                             simulated_powers::Vector{Float64},
-                             observed_powers::Vector{Float64};
-                             title::String="Power Spectral Density Comparison",
-                             xlabel::String="Frequency (Hz)",
-                             ylabel::String="Log Power",
-                             fullfname_fig::Union{Nothing, String}=nothing,
-                             use_log::Bool=true,
-                             data_settings::Union{Nothing, DataSettings}=nothing,
-                             general_settings::Union{Nothing, GeneralSettings}=nothing)::Nothing
-    if general_settings !== nothing && !general_settings.make_plots
-        return nothing
-    end
-
-    # Validate dimensions
-    n_freqs = length(freqs)
-    n_sim = length(simulated_powers)
-    n_obs = length(observed_powers)
-
-    if n_sim != n_obs || n_sim != n_freqs
-        vwarn("Cannot plot PSD comparison: dimension mismatch (simulated=$n_sim, observed=$n_obs, freqs=$n_freqs)"; level=2)
-        return nothing
-    end
-
-    try
-        # Prepare powers for plotting (handles log transformation intelligently)
-        plot_sim_powers = prepare_psd_for_plotting(simulated_powers; use_log=use_log, data_settings=data_settings)
-        plot_obs_powers = prepare_psd_for_plotting(observed_powers; use_log=use_log, data_settings=data_settings)
-        
-        p = plot(freqs, plot_sim_powers;
-                 label="Simulated",
-                 xlabel=xlabel,
-                 ylabel=ylabel,
-                 title=title,
-                 legend=:topright,
-                 linewidth=2,
-                 size=(800, 400));
-        
-        plot!(p, freqs, plot_obs_powers;
-              label="Observed",
-              linewidth=2,
-              color=:black,
-              alpha=0.8);
-        
-        if fullfname_fig !== nothing
-            savefig(p, fullfname_fig);
-        end
-    catch e
-        vwarn("Failed to plot PSD comparison: $e"; level=2)
-    end
-
-    return nothing
-end
-
 function plot_psd_comparison(simulated_psd_dict::Dict{String, Tuple{Vector{Float64}, Vector{Float64}}},
                              data::Data;
                              title::String="Power Spectral Density Comparison",
@@ -223,6 +144,7 @@ function plot_psd_comparison(simulated_psd_dict::Dict{String, Tuple{Vector{Float
         p = plot(layout=(1, n_sources),
                  size=(400 * n_sources, 400),
                  legend=:topright)
+        n_plotted = 0
 
         for (col_idx, node_name) in enumerate(node_names)
             haskey(simulated_psd_dict, node_name) || continue
@@ -230,22 +152,31 @@ function plot_psd_comparison(simulated_psd_dict::Dict{String, Tuple{Vector{Float
             sim_freqs, simulated_powers = simulated_psd_dict[node_name]
             observed_freqs = node_info.freqs
             observed_powers = node_info.powers
+            isempty(sim_freqs) && continue
+            isempty(simulated_powers) && continue
+            isempty(observed_freqs) && continue
+            isempty(observed_powers) && continue
 
             plot_sim_powers = prepare_psd_for_plotting(simulated_powers; use_log=use_log, data_settings=data_settings)
             plot_obs_powers = prepare_psd_for_plotting(observed_powers; use_log=use_log, data_settings=data_settings)
 
-            sp = p[col_idx]
-            plot!(sp, sim_freqs, plot_sim_powers;
+            plot!(p[col_idx], sim_freqs, plot_sim_powers;
                   label="Simulated",
                   xlabel=xlabel,
                   ylabel=col_idx == 1 ? ylabel : "",
                   title=node_name,
                   linewidth=2)
-            plot!(sp, observed_freqs, plot_obs_powers;
+            plot!(p[col_idx], observed_freqs, plot_obs_powers;
                   label="Observed",
                   color=:black,
                   linewidth=2,
                   alpha=0.8)
+            n_plotted += 1
+        end
+
+        if n_plotted == 0
+            vwarn("No PSD curves available to plot"; level=2)
+            return nothing
         end
 
         if title != ""
@@ -263,91 +194,27 @@ function plot_psd_comparison(simulated_psd_dict::Dict{String, Tuple{Vector{Float
 end
 
 
+
 """
-    plot_timeseries_windows(times::Vector{Float64}, 
-                            simulated_signal::Vector{Float64};
-                            times::Union{Nothing, Vector{Float64}}=nothing,
-                            observed_signal::Union{Nothing, Vector{Float64}}=nothing,
+    plot_timeseries_windows(times::Vector{Float64},
+                            simulated_signals::Dict{String, Vector{Float64}};
+                            observed_signals::Union{Nothing, Dict{String, Vector{Float64}}}=nothing,
                             zoom_window::Tuple{Float64, Float64}=(2.0, 5.0),
                             title_prefix::String="",
                             fullfname_fig::Union{Nothing, String}=nothing,
                             general_settings::Union{Nothing, GeneralSettings}=nothing)::Nothing
 
-Plot timeseries with full and zoomed windows. Supports both simulation-only and 
-simulated+observed comparison contexts.
+Plot multi-node timeseries with one column per node.
 
-For simulation-only: Shows simulated signal in both windows.
-For comparison: Shows both simulated (blue) and observed (black) in each window.
+- Row 1: full timeseries
+- Row 2: zoomed timeseries
 
-# Arguments
-- `times::Vector{Float64}`: Time points for simulated signal
-- `simulated_signal::Vector{Float64}`: Simulated signal values
-- `times::Union{Nothing, Vector{Float64}}`: Time points for observed signal (optional)
-- `observed_signal::Union{Nothing, Vector{Float64}}`: Observed signal values (optional)
-- `zoom_window::Tuple{Float64, Float64}`: Time range for zoomed view (in seconds)
-- `title_prefix::String`: Prefix for plot titles
-- `fullfname_fig::Union{Nothing, String}`: Output filename
-- `general_settings::Union{Nothing, GeneralSettings}`: Settings for checking make_plots flag
-
-# Returns
-Nothing (saves to file if fullfname_fig provided)
+Both `simulated_signals` and `observed_signals` are keyed by node name.
 """
-function plot_timeseries_windows(times::Vector{Float64},
-                                 simulated_signal::Vector{Float64};
-                                 observed_signal::Union{Nothing, Vector{Float64}}=nothing,
-                                 zoom_window::Tuple{Float64, Float64}=(2.0, 5.0),
-                                 title_prefix::String="",
-                                 fullfname_fig::Union{Nothing, String}=nothing,
-                                 general_settings::Union{Nothing, GeneralSettings}=nothing)::Nothing
-    if general_settings !== nothing && !general_settings.make_plots
-        return nothing
-    end
-
-    has_observed = observed_signal !== nothing
-
-    try
-        p = plot(layout=(2, 1), size=(900, 500), legend=:topright);
-
-        # Full timeseries window
-        plot!(p[1], times, simulated_signal; label="Simulated", xlabel="", ylabel="");
-        if has_observed
-            plot!(p[1], times, observed_signal; label="Observed", color=:black);
-        end
-
-        # Zoomed timeseries window - check if zoom_window is within signal range
-        time_min = minimum(times)
-        time_max = maximum(times)
-        safe_zoom_start = max(zoom_window[1], time_min)
-        safe_zoom_end = min(zoom_window[2], time_max)
-        safe_zoom = (safe_zoom_start, safe_zoom_end)
-        
-        plot!(p[2], times, simulated_signal; label="Simulated", xlabel="Time (s)", ylabel="", xlims=safe_zoom);
-        if has_observed
-            obs_time_min = minimum(times)
-            obs_time_max = maximum(times)
-            obs_safe_zoom_start = max(zoom_window[1], obs_time_min)
-            obs_safe_zoom_end = min(zoom_window[2], obs_time_max)
-            obs_safe_zoom = (obs_safe_zoom_start, obs_safe_zoom_end)
-            plot!(p[2], times, observed_signal; label="Observed", color=:black, xlims=obs_safe_zoom);
-        end
-
-        if title_prefix != ""
-            plot!(p, plot_title=title_prefix);
-        end
-
-        if fullfname_fig !== nothing
-            savefig(p, fullfname_fig);
-        end
-    catch e
-        vwarn("Failed to plot timeseries windows: $e"; level=2)
-    end
-
-    return nothing
-end
-
-function plot_timeseries_windows(times::Vector{Float64},
+function plot_timeseries_windows(simulated_times::Vector{Float64},
                                  simulated_signals::Dict{String, Vector{Float64}};
                                  observed_signals::Union{Nothing, Dict{String, Vector{Float64}}}=nothing,
+                                 observed_times::Union{Nothing, Vector{Float64}}=nothing,
                                  zoom_window::Tuple{Float64, Float64}=(2.0, 5.0),
                                  title_prefix::String="",
                                  fullfname_fig::Union{Nothing, String}=nothing,
@@ -363,37 +230,64 @@ function plot_timeseries_windows(times::Vector{Float64},
         n_sources = length(node_names)
         p = plot(layout=(2, n_sources), size=(400 * n_sources, 500), legend=:topright)
 
-        time_min = minimum(times)
-        time_max = maximum(times)
-        safe_zoom = (max(zoom_window[1], time_min), min(zoom_window[2], time_max))
+        sim_time_min = minimum(simulated_times)
+        sim_time_max = maximum(simulated_times)
+        safe_zoom_sim = (max(zoom_window[1], sim_time_min), min(zoom_window[2], sim_time_max))
+
+        if observed_times === nothing
+            observed_times = simulated_times
+        end
+        obs_time_min = minimum(observed_times)
+        obs_time_max = maximum(observed_times)
+        safe_zoom_obs = (max(zoom_window[1], obs_time_min), min(zoom_window[2], obs_time_max))
 
         for (col_idx, node_name) in enumerate(node_names)
             simulated_signal = get(simulated_signals, node_name, Float64[])
             observed_signal = observed_signals === nothing ? nothing : get(observed_signals, node_name, nothing)
 
             isempty(simulated_signal) && observed_signal === nothing && continue
+            if !isempty(simulated_signal) && length(simulated_signal) != length(simulated_times)
+                vwarn("Skipping simulated timeseries for node $node_name due to length mismatch (signal=$(length(simulated_signal)), times=$(length(simulated_times)))"; level=2)
+                simulated_signal = Float64[]
+            end
+            if observed_signal !== nothing && !isempty(observed_signal) && length(observed_signal) != length(observed_times)
+                vwarn("Skipping observed timeseries for node $node_name due to length mismatch (signal=$(length(observed_signal)), times=$(length(observed_times)))"; level=2)
+                observed_signal = nothing
+            end
+            isempty(simulated_signal) && observed_signal === nothing && continue
 
             full_idx = _subplot_index(n_sources, 1, col_idx)
             zoom_idx = _subplot_index(n_sources, 2, col_idx)
 
             if !isempty(simulated_signal)
-                plot!(p[full_idx], times, simulated_signal;
+                plot!(p[full_idx], simulated_times, simulated_signal;
                       label="Simulated",
                       xlabel="",
                       ylabel=col_idx == 1 ? "Amplitude" : "",
-                      title=node_name,
+                      title="$(node_name)\nFull",
                       linewidth=1.5)
-                plot!(p[zoom_idx], times, simulated_signal;
+                plot!(p[zoom_idx], simulated_times, simulated_signal;
                       label="Simulated",
                       xlabel="Time (s)",
                       ylabel=col_idx == 1 ? "Amplitude" : "",
-                      xlims=safe_zoom,
+                      title="Zoom",
+                      xlims=safe_zoom_sim,
                       linewidth=1.5)
+            elseif observed_signal !== nothing
+                plot!(p[full_idx];
+                      xlabel="",
+                      ylabel=col_idx == 1 ? "Amplitude" : "",
+                      title="$(node_name)\nFull")
+                plot!(p[zoom_idx];
+                      xlabel="Time (s)",
+                      ylabel=col_idx == 1 ? "Amplitude" : "",
+                      title="Zoom",
+                      xlims=safe_zoom_obs)
             end
 
             if observed_signal !== nothing && !isempty(observed_signal)
-                plot!(p[full_idx], times, observed_signal; label="Observed", color=:black)
-                plot!(p[zoom_idx], times, observed_signal; label="Observed", color=:black, xlims=safe_zoom)
+                plot!(p[full_idx], observed_times, observed_signal; label="Observed", color=:black)
+                plot!(p[zoom_idx], observed_times, observed_signal; label="Observed", color=:black, xlims=safe_zoom_obs)
             end
         end
 

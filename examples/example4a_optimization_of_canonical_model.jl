@@ -6,7 +6,10 @@
 # 3. Select and build a network from one candidate
 # 4. Optimize network parameters to fit target data
 
-using Revise
+try
+    using Revise
+catch
+end
 using ENEEGMA
 using CSV
 using DataFrames
@@ -59,8 +62,8 @@ set_all_params_tunable!(net.params);
 # Step 4: Run Optimization
 # ============================================================================
 print_settings_summary(settings; section="optimization_settings")
-settings.optimization_settings.n_restarts = 5
-settings.optimization_settings.maxiters = 100
+settings.optimization_settings.maxiters = 10 # set low for testing; increase for better optimization
 settings.optimization_settings.param_bound_scaling_level = "high"
+settings.optimization_settings.n_restarts = 3 # better chance for global optimum; increase for better optimization (but longer runtime)
 optsol, optlogger, setter, blocks = optimize_network(net, data, settings);
 

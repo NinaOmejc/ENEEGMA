@@ -1,6 +1,6 @@
 # ENEEGMA Settings Reference
 
-Complete documentation of all configuration settings for ENEEGMA network building, simulation, and optimization.
+Complete reference for the current settings model implemented in [`src/types/settings.jl`](src/types/settings.jl).
 
 ---
 
@@ -11,11 +11,13 @@ Complete documentation of all configuration settings for ENEEGMA network buildin
 3. [Simulation Settings](#simulation-settings)
 4. [Sampling Settings](#sampling-settings)
 5. [Data Settings](#data-settings)
-   - [PSD Settings](#psd-settings)
-6. [Optimization Settings](#optimization-settings)
-   - [Loss Settings](#loss-settings)
-   - [Optimizer Settings](#optimizer-settings)
-   - [Hyperparameter Sweep Settings](#hyperparameter-sweep-settings)
+6. [PSD Settings](#psd-settings)
+7. [Optimization Settings](#optimization-settings)
+8. [Loss Settings](#loss-settings)
+9. [Optimizer Settings](#optimizer-settings)
+10. [Hyperparameter Sweep Settings](#hyperparameter-sweep-settings)
+11. [Examples](#examples)
+12. [Notes](#notes)
 
 ---
 
@@ -23,161 +25,217 @@ Complete documentation of all configuration settings for ENEEGMA network buildin
 
 Top-level experiment and output configuration.
 
-| Setting | Type | Default | Options | Description |
-|---------|------|---------|---------|-------------|
-| `exp_name` | String | `"example-exp"` | Any string | Experiment/project name. Used for output file naming and directory structure. |
-| `path_out` | String | `"./results"` | Valid file path | Base directory where all outputs are saved. Created if it doesn't exist. |
-| `verbosity_level` | Int | `1` | `0`, `1`, `2` | Logging verbosity: 0=silent, 1=minimal, 2=detailed. |
-| `seed` | Int or null | `null` | Any integer or `null` | Master random seed for reproducibility. If `null`, behavior is non-deterministic. |
-| `make_plots` | Bool | `true` | `true`, `false` | Whether to generate visualization plots during simulation/optimization. |
-| `save_model_formats` | Array[String] | `["tex"]` | `"tex"`, `"pdf"`, `"png"` | Output formats for exporting network equations and diagrams. |
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `exp_name` | String | `"example-exp"` | Experiment/project name used in output names and folders. |
+| `path_out` | String | `"./results"` | Base directory for all outputs. Created automatically if missing. |
+| `save_model_formats` | Array[String] | `["tex"]` | Export formats for model/equation outputs. |
+| `make_plots` | Bool | `true` | Whether plots should be generated. |
+| `verbosity_level` | Int | `1` | Logging verbosity. Clamped to `0`, `1`, or `2`. |
+| `seed` | Int or `null` | `null` | Global seed for reproducibility. |
 
 ---
 
 ## Network Settings
 
-Neural network topology and dynamics configuration.
+Network topology and node-level configuration.
 
-| Setting | Type | Constraints | Default | Description |
-|---------|------|-------------|---------|-------------|
-| `name` | String | Any string | `"example-net"` | Network name. Used for output directory naming. |
-| `n_nodes` | Int | > 0, required | `1` | Number of nodes/populations in the network. |
-| `node_names` | Array[String] | Length must equal `n_nodes` | `["N1", "N2", ...]` | Names for each node. Auto-generated if omitted. |
-| `node_models` | Array[String/RuleTree] | Length must equal `n_nodes` | `["MPR", "MPR", ...]` | Model type for each node (e.g., "MPR"=multi-population ramp model, "WC"=Wilson-Cowan, "FHN"=FitzHugh-Nagumo). Can also be RuleTree grammar objects. |
-| `node_coords` | Array[Array[Float, Float, Float]] | Length must equal `n_nodes` | `[[0, 10i, 0] for i=1:n_nodes]` | 3D coordinates `[x, y, z]` for each node. Used for visualization. |
-| `network_conn` | Matrix[Float] | Shape `(n_nodes, n_nodes)` | `zeros(n_nodes, n_nodes)` | Connection strength matrix. Element `[i,j]` is the weight from node `i` to node `j`. |
-| `network_conn_funcs` | Matrix[String] | Shape `(n_nodes, n_nodes)` | Diagonal: `""`, Off-diagonal: `"linear"` | Connection function strings (e.g., "linear", "sigmoid"). Maps connection dynamics. Default: "linear" for inter-node connections, "" (no self-connection) on diagonal. |
-| `network_delay` | Matrix[Float] | Shape `(n_nodes, n_nodes)` | `zeros(n_nodes, n_nodes)` | Synaptic delay (ms) for each connection. Element `[i,j]` is delay from node `i` to `j`. |
-| `sensory_input_conn` | Array[Int] | Length must equal `n_nodes` | `ones(n_nodes)` | Binary vector indicating which nodes receive sensory input (1=receives, 0=no input). Default: all nodes receive input. |
-| `sensory_input_func` | String | Valid Julia expression | `"rand(Normal(0.0, 1.0))"` | Function string for sensory input (e.g., `"sin(t)"`, `"randn()"`). Can reference time `t`. |
-| `sensory_seed` | Int or null | Any integer or `null` | `null` | Random seed for sensory input generation. If `null`, uses global seed or non-deterministic. |
-| `init_seed` | Int or null | Any integer or `null` | `null` | Random seed for initial condition sampling. Allows independent control separate from sensory input randomness. If `null`, uses global seed or non-deterministic. |
-| `eeg_output` | Dict[String, String] | Mapping of node names to expressions | `{}` (empty dict) | Optional mapping of which state variables to use as EEG output for each node (e.g., `{"N1": "N1₊x11", "N2": "N2₊x21"}`). Settings extract from JSON as-is without auto-population. **Empty dict means use internal node.brain_source defaults** (set during network building based on canonical model type). Each node's default is its first state variable (e.g., "N1₊x11"). Non-empty entries override brain_source for specified nodes. Also supports combination expressions (e.g., "N2₊x21 - N2₊x31"). |
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `name` | String | `"example-net"` | Network name. |
+| `n_nodes` | Int | `1` | Number of nodes/populations. |
+| `node_names` | Array[String] | `["N1", ..., "Nn"]` | Node names. Auto-generated if omitted. |
+| `node_models` | Array[String or RuleTree] | `fill("MPR", n_nodes)` | Model assigned to each node. |
+| `node_coords` | Array[Array[Float64, Float64, Float64]] | `[[0.0, 10.0*i, 0.0] ...]` | 3D node coordinates. |
+| `network_conn` | Matrix[Float64] | `zeros(n_nodes, n_nodes)` | Connectivity weights. |
+| `network_conn_funcs` | Matrix[String] | off-diagonal `"linear"`, diagonal `""` | Connection function names. |
+| `network_delay` | Matrix[Float64] | `zeros(n_nodes, n_nodes)` | Connection delays in ms. |
+| `sensory_input_conn` | Array[Int] | `ones(Int, n_nodes)` | Per-node sensory input flags. |
+| `sensory_input_func` | String | `"rand(Normal(0.0, 1.0))"` | Sensory input expression. |
+| `sensory_seed` | Int or `null` | `null` | Seed for sensory input randomness. |
+| `init_seed` | Int or `null` | `null` | Seed for initial condition sampling. |
+| `eeg_output` | Dict[String, String] or String | `{}` | Optional node-to-expression mapping for EEG output extraction. Empty dict means use node defaults. A single string is accepted as a backward-compatible shortcut for the first node. |
 
 ---
 
 ## Simulation Settings
 
-ODE solver and time-stepping configuration.
+Solver and sampling configuration.
 
-| Setting | Type | Constraints | Default | Description |
-|---------|------|-------------|---------|-------------|
-| `tspan` | Array[Float, Float] | `[t_start, t_end]`, `t_start < t_end` | `[0.0, 60.0]` | Simulation time span in milliseconds. |
-| `dt` | Float or null | > 0 or `null` | `0.0001` | Fixed time step (ms). Required for stochastic solvers. `null` for adaptive solvers. |
-| `saveat` | Float | > 0 | `0.00390625` | Output sampling rate (ms). Default ~256 Hz for good PSD resolution. |
-| `solver` | String | See solver list below | `"Tsit5"` | ODE solver algorithm to use. |
-| `abstol` | Float or null | > 0 or `null` | `null` | Absolute tolerance for adaptive solvers. `null` uses solver default. |
-| `reltol` | Float or null | > 0 or `null` | `null` | Relative tolerance for adaptive solvers. |
-| `maxiters` | Int or null | > 0 or `null` | `null` | Maximum iterations per step. `null` uses solver default. |
-
-**Available Solvers:**
-- **Non-stiff ODE:** `Tsit5`, `RK4`, `BS3`, `DP5`, `Vern6`, `Vern7`, `Vern8`, `Vern9`
-- **Stiff ODE:** `Rosenbrock23`, `Rodas4`, `Rodas5`, `TRBDF2`, `KenCarp4`, `QNDF`, `Rodas4P`, `Rodas5P`
-- **Adaptive:** `AutoTsit5(Rosenbrock23)`, `AutoTsit5(Rodas5)`, `AutoVern7(Rodas5)`, `AutoVern9(Rodas5)`
-- **SDE:** `EM`, `SOSRI`, `EulerHeun`, `SRA1`, `SRA3`, `SRIW1`, `SRIW2`, `SRI`, `RKMil`, `ImplicitEM`, `ISSEM`, `ISSEulerHeun`, `ImplicitRKMil`
-- **DDE:** `MethodOfSteps(Tsit5)`, `MethodOfSteps(RK4)`, `MethodOfSteps(Vern7)`, `MethodOfSteps(Vern9)`, `MethodOfSteps(Rosenbrock23)`, `MethodOfSteps(TRBDF2)`, `MethodOfSteps(Rodas5)`
-- **SDDE:** `ImplicitEM`, `LambaEM`, `RKMil`, `SOSRI`, `EulerHeun`
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `tspan` | Array[Float64, Float64] | `[0.0, 60.0]` | Simulation time span in ms. |
+| `dt` | Float64 or `null` | `0.0001` | Fixed time step in ms. Useful for stochastic solvers. |
+| `saveat` | Float64 | `0.00390625` | Output sampling interval in ms. This corresponds to about 256 Hz. |
+| `abstol` | Float64 or `null` | `null` | Absolute solver tolerance. |
+| `reltol` | Float64 or `null` | `null` | Relative solver tolerance. |
+| `solver` | String or `null` | `"Tsit5"` | Solver algorithm name. |
+| `maxiters` | Int or `null` | `null` | Maximum solver iterations. |
 
 ---
 
 ## Sampling Settings
 
-Grammar-based network topology sampling configuration.
+Grammar-based network sampling.
 
-| Setting | Type | Constraints | Default | Description |
-|---------|------|-------------|---------|-------------|
-| `grammar_file` | String | Valid file path | `DEFAULT_GRAMMAR` | Path to grammar file (`.cfg` format). Defaults to `grammars/default_grammar.cfg` relative to package directory (automatically resolved via `pkgdir(@__MODULE__)`). Can specify custom absolute or relative paths. |
-| `n_samples` | Int | > 0 | `10` | Number of network topologies to sample from the grammar. |
-| `only_unique` | Bool | `true`, `false` | `true` | Filter out duplicate samples. |
-| `grammar_seed` | Int or null | Any integer or `null` | `null` | Random seed for grammar rule selection. If `null`, uses global seed or non-deterministic. |
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `grammar_file` | String | `grammars/default_grammar.cfg` | Grammar file path. |
+| `n_samples` | Int | `10` | Number of samples to generate. |
+| `only_unique` | Bool | `true` | Whether duplicate samples are removed. |
+| `grammar_seed` | Int or `null` | `null` | Seed for grammar sampling. |
 
 ---
 
 ## Data Settings
 
-Target data input and metadata configuration.
+Input data and spectral analysis metadata.
 
-| Setting | Type | Constraints | Default | Description |
-|---------|------|-------------|---------|-------------|
-| `data_file` | String or null | Valid file path or `null` | `examples/example_data_rest.csv` | Path to data CSV file. Relative paths resolved from examples folder. |
-| `target_channel` | String or null | Valid channel name or `null` | `"IC3"` | Which channel/column to use as optimization target. |
-| `task_type` | String or null | Valid task name or `null` | `"rest"` | Task associated with the data (e.g., "rest", "task", "ssvep"). |
-| `fs` | Float or null | > 0 or `null` | `256.0` | Sampling frequency of input data (Hz). |
-| `data_columns` | Array[String] or null | Valid column names or `null` | `null` | Which columns/channels to load from data file. `null` loads all. |
-| `estimate_measurement_noise` | Bool | `true`, `false` | `true` | Whether to estimate measurement noise directly from data. |
-| `spectral_roi_definition_mode` | String | `"auto"`, `"manual"` | `"auto"` | How to define region of interest (ROI): `:auto`=peak detection, `:manual`=manual bands. |
-| `spectral_roi_auto_peak_sensitivity` | Float | 0.0–1.0 | `0.3` | Sensitivity for automatic peak detection (0=loose, 1=strict). |
-| `spectral_roi_manual` | Array[Array[Float, Float]] | `[[fmin, fmax], ...]` | `[[7.5, 14.0]]` | Manual frequency bands for ROI definition (e.g., alpha: 8-12 Hz). |
-| `measurement_noise_std` | Float | ≥ 0 | `0.0` | Measurement noise standard deviation. 0=no noise. |
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `data_file` | String or `null` | `examples/example_data_rest.csv` when available | Path to the input CSV file. Relative paths are resolved from the package `examples` folder. |
+| `target_channel` | String, Dict[String, String], or `null` | `"IC3"` | Channel used as target data. For multi-node fits, use a dict like `{"N1": "IC3", "N2": "IC4"}`. |
+| `task_type` | String or `null` | `"rest"` | Data/task label. |
+| `fs` | Float64 or `null` | `256.0` | Sampling frequency of the input data in Hz. |
+| `data_columns` | Array[String] or `null` | `null` | Explicit columns to load from the CSV. |
+| `estimate_measurement_noise` | Bool | `true` | Whether per-node measurement noise should be estimated from the data. |
+| `spectral_roi_definition_mode` | String or Symbol | `"manual"` | ROI mode. Supported values are `auto` and `manual`. |
+| `spectral_roi_auto_peak_sensitivity` | Float64 | `0.3` | Sensitivity used by automatic peak detection. |
+| `spectral_roi_manual` | Array of bands or Dict[String, Array of bands] | `[[7.5, 14.0]]` | Manual ROI bands. A single array applies to all nodes; a dict enables per-node ROI bands. |
 
-### Nested PSD Settings
+### Accepted `spectral_roi_manual` Forms
 
-PSD preprocessing configuration (nested under `psd`):
+Shared ROI for all nodes:
 
-| Setting | Type | Constraints | Default | Description |
-|---------|------|-------------|---------|-------------|
-| `preproc_pipeline` | String | Processing pipeline spec | `"log10"` | PSD preprocessing: `"log"`, `"log10"`, `"log2"`, `"none"`. Can chain with `-`. |
-| `welch_window_sec` | Float | > 0 | `2.0` | Welch window duration (seconds). |
-| `welch_overlap` | Float | 0–0.99 | `0.1` | Welch window overlap fraction. |
-| `welch_nperseg` | Int | ≥ 0 | `0` | Welch samples per segment. 0=auto. |
-| `welch_nfft` | Int | ≥ 0 | `0` | FFT size. 0=auto. |
-| `noise_avg_reps` | Int | ≥ 1 | `1` | Number of noise averages for loss computation. |
-| `window_size` | Int | > 0 | `5` | Savitzky-Golay window size (samples). |
-| `smooth_poly_order` | Int | ≥ 0 | `2` | Savitzky-Golay polynomial order. |
-| `rel_eps` | Float | > 0 | `1e-12` | Relative epsilon for numerical stability. |
-| `smooth_sigma` | Float | > 0 | `1.0` | Gaussian smoothing sigma. |
-| `noise_seed` | Int or null | Any integer or `null` | `42` | Random seed for PSD noise generation. 42=deterministic, `null`=random. |
+```julia
+[(9.0, 14.0)]
+```
+
+Per-node ROI:
+
+```julia
+Dict(
+    "N1" => [(9.0, 14.0)],
+    "N2" => Tuple{Float64, Float64}[]
+)
+```
+
+Internally, `DataSettings.spectral_roi_manual` is normalized to:
+
+```julia
+Dict{String, Vector{Tuple{Float64, Float64}}}
+```
+
+---
+
+## PSD Settings
+
+Nested under `data_settings.psd`.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `preproc_pipeline` | String | `"log10"` | PSD preprocessing pipeline string, for example `"log10"` or `"relative-log10"`. |
+| `welch_window_sec` | Float64 | `2.0` | Welch window duration in seconds. |
+| `welch_overlap` | Float64 | `0.1` | Welch overlap fraction. Clamped to `[0.0, 0.99]`. |
+| `welch_nperseg` | Int | `0` | Welch segment length. `0` means auto. |
+| `welch_nfft` | Int | `0` | FFT size. `0` means auto. |
+| `noise_avg_reps` | Int | `1` | Number of noisy PSD repetitions to average. |
+| `window_size` | Int | `5` | Savitzky-Golay window size. |
+| `smooth_poly_order` | Int | `2` | Savitzky-Golay polynomial order. |
+| `rel_eps` | Float64 | `1e-12` | Relative epsilon for numerical stability. |
+| `smooth_sigma` | Float64 | `1.0` | Gaussian smoothing sigma. |
+| `transient_period_duration` | Float64 | `2.0` | Initial transient duration to discard before PSD and metric computation, in seconds. |
+| `noise_seed` | Int or `null` | `42` | Seed for synthetic measurement-noise injection during PSD averaging. |
+
+`workspace` also exists on the runtime struct but is an internal cache, not a user-facing JSON setting.
 
 ---
 
 ## Optimization Settings
 
-Parameter optimization configuration.
+Top-level optimization workflow configuration.
 
-| Setting | Type | Constraints | Default | Description |
-|---------|------|-------------|---------|-------------|
-| `method` | String | `"CMAES"` | `"CMAES"` | Optimization method. Only CMAES (Covariance Matrix Adaptation Evolution Strategy) currently supported. |
-| `param_bound_scaling_level` | String | `"low"`, `"medium"`, `"high"`, `"ultra"`, `"empirical"`, `"unbounded"` | `"medium"` | Parameter bounds scaling level. Scales literature-based parameter bounds by level-specific factors. |
-| `empirical_bounds_table_path` | String or null | Valid file path or `null` | `grammars/empirical_parameter_values.csv` | Path to CSV file containing empirical parameter bounds. If relative, resolved from package directory via `pkgdir(@__MODULE__)`. Absolute paths are used as-is. |
-| `empirical_lower_bound_column` | String | Column name | `5perc` | Column name in empirical bounds table for lower bound values (e.g., 5th percentile). |
-| `empirical_upper_bound_column` | String | Column name | `95perc` | Column name in empirical bounds table for upper bound values (e.g., 95th percentile). |
-| `reparametrize` | Bool | `true`, `false` | `true` | Whether to use reparameterization strategy for parameter scaling. |
-| `reparam_strategy` | String | `"typed"`, `"none"` | `"typed"` | Reparameterization strategy: `"typed"`=type-specific scaling, `"none"`=disabled. |
-| `n_restarts` | Int | ≥ 1 | `1` | Number of independent optimization restarts. |
-| `maxiters` | Int | > 0 | `100000` | Maximum iterations per optimization run. |
-| `time_limit_minutes` | Int | > 0 | `120` | Time limit per optimization run (minutes). |
-| `save_optimization_history` | Bool | `true`, `false` | `false` | Save iteration-by-iteration optimization history. |
-| `save_modeled_psd` | Bool | `true`, `false` | `false` | Save computed PSD from optimized model. |
-| `include_settings_in_results_output` | Bool | `true`, `false` | `true` | Include settings configuration in results output files. |
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `method` | String | `"CMAES"` | Optimization method. Only `"CMAES"` is currently supported. |
+| `param_bound_scaling_level` | String | `"medium"` | Bounds scaling mode. Supported values include `low`, `medium`, `high`, `ultra`, `empirical`, `unbounded`. |
+| `empirical_bounds_table_path` | String or `null` | `grammars/empirical_parameter_values.csv` | CSV path for empirical bounds. |
+| `empirical_lower_bound_column` | String | `"5perc"` | Lower-bound column name in the empirical bounds CSV. |
+| `empirical_upper_bound_column` | String | `"95perc"` | Upper-bound column name in the empirical bounds CSV. |
+| `save_optimization_history` | Bool | `false` | Whether optimization history is saved. |
+| `save_modeled_psd` | Bool | `false` | Whether modeled PSD output is saved. |
+| `include_settings_in_results_output` | Bool | `true` | Whether settings are included in result output files. |
+| `reparametrize` | Bool | `true` | Whether reparameterization is enabled. |
+| `reparam_strategy` | String or Symbol | `"typed"` | Reparameterization strategy. Supported values are `typed` and `none`. |
+| `reparam_type_scales` | Dict[String, Float64] | `{}` | Optional type-specific reparameterization scales. Keys are normalized internally to lowercase symbols. |
+| `n_restarts` | Int | `1` | Number of optimization restarts. More you have, the better chance for global optimum; increase for better optimization (but longer runtime). |
+| `maxiters` | Int | `100000` | Maximum optimization iterations. |
+| `time_limit_minutes` | Int | `120` | Time limit per optimization run in minutes. |
+| `output_dir` | String or `null` | `null` | Output directory for the optimization job. Usually set internally. |
 
-### Loss Settings
+The following nested settings live inside `optimization_settings`:
 
-Loss function configuration for optimization.
+- `loss_settings`
+- `optimizer_settings`
+- `hyperparameter_sweep`
 
-| Setting | Type | Constraints | Default | Description |
-|---------|------|-------------|---------|-------------|
-| `fmin` | Float | > 0 | `1.0` | Minimum frequency (Hz) for PSD analysis in loss computation. |
-| `fmax` | Float | > `fmin` | `45.0` | Maximum frequency (Hz) for PSD analysis in loss computation. |
-| `roi_weight` | Float | ≥ 0 | `1.0` | Weight for region of interest (ROI) in loss computation. |
-| `bg_weight` | Float | ≥ 0 | `1.0` | Weight for background activity in loss computation. |
-| `loss_abstol` | Float | > 0 | `1e-3` | Absolute tolerance for loss convergence criterion. |
-| `loss_reltol` | Float | > 0 | `1e-3` | Relative tolerance for loss convergence criterion. |
-| `abs_target_loss` | Float | ≥ 0 | `0.01` | Absolute loss target for early stopping. |
+---
 
-### Optimizer Settings
+## Loss Settings
 
-CMAES optimizer-specific configuration.
+Nested under `optimization_settings.loss_settings`.
 
-| Setting | Type | Constraints | Default | Description |
-|---------|------|-------------|---------|-------------|
-| `population_size` | Int | > 0 | `-1` | Population size for CMA-ES evolution strategy. `-1` uses auto-scaling based on problem dimension. |
-| `sigma0` | Float | > 0 or -1 | `-1.0` | Initial step-size sigma. `-1.0` uses auto-scaling. |
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `fmin` | Float64 | `1.0` | Minimum frequency used for loss computation. |
+| `fmax` | Float64 | `45.0` | Maximum frequency used for loss computation. |
+| `roi_weight` | Float64 | `1.0` | ROI loss weight. |
+| `bg_weight` | Float64 | `1.0` | Background loss weight. |
+| `loss_abstol` | Float64 | `1e-3` | Absolute tolerance for loss convergence. |
+| `loss_reltol` | Float64 | `1e-3` | Relative tolerance for loss convergence. |
+| `abs_target_loss` | Float64 | `0.01` | Absolute target loss for early stopping. |
 
-### Hyperparameter Sweep Settings
+---
 
-Grid search and hyperparameter sweep configuration (auto-populated with sensible defaults if not specified).
+## Optimizer Settings
 
-Default hyperparameters swept (if no config provided):
+Nested under `optimization_settings.optimizer_settings`.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `population_size` | Int | `-1` | CMA-ES population size. `-1` means auto. |
+| `sigma0` | Float64 | `-1.0` | Initial CMA-ES sigma. `-1.0` means auto. |
+
+---
+
+## Hyperparameter Sweep Settings
+
+Nested under `optimization_settings.hyperparameter_sweep` in the `Settings` object.
+
+In JSON, both of these forms are accepted:
+
+```json
+{
+  "optimization_settings": {
+    "hyperparameter_sweep": {
+      "optimization_settings.param_bound_scaling_level": ["medium", "high"]
+    }
+  }
+}
+```
+
+and the legacy top-level form:
+
+```json
+{
+  "hyperparameter_sweep": {
+    "optimization_settings.param_bound_scaling_level": ["medium", "high"]
+  }
+}
+```
+
+If omitted, the following defaults are used:
+
 - `optimization_settings.param_bound_scaling_level`: `["medium", "high"]`
 - `optimization_settings.optimizer_settings.sigma0`: `[2.0, 8.0]`
 - `optimization_settings.optimizer_settings.population_size`: `[100, 150]`
@@ -187,6 +245,7 @@ Default hyperparameters swept (if no config provided):
 ## Examples
 
 ### Minimal Configuration
+
 ```json
 {
   "general_settings": {
@@ -204,29 +263,27 @@ Default hyperparameters swept (if no config provided):
 }
 ```
 
-### With Grammar Sampling
-```json
-{
-  "sampling_settings": {
-    "grammar_file": "grammars/default_grammar.cfg",
-    "n_samples": 50,
-    "grammar_seed": 42
-  }
-}
-```
+### Data-Driven Optimization
 
-### With Data Optimization
 ```json
 {
   "data_settings": {
     "data_file": "example_data_rest.csv",
-    "target_channel": "IC3",
+    "target_channel": {
+      "N1": "IC3",
+      "N2": "IC4"
+    },
     "fs": 256.0,
-    "spectral_roi_definition_mode": "auto",
+    "spectral_roi_definition_mode": "manual",
+    "spectral_roi_manual": {
+      "N1": [[9.0, 14.0]],
+      "N2": []
+    },
     "psd": {
       "preproc_pipeline": "log10",
       "welch_window_sec": 2.0,
       "welch_overlap": 0.1,
+      "transient_period_duration": 2.0,
       "noise_seed": 42
     }
   },
@@ -249,12 +306,15 @@ Default hyperparameters swept (if no config provided):
 ```
 
 ### Hyperparameter Sweep
+
 ```json
 {
-  "hyperparameter_sweep": {
-    "optimization_settings.param_bound_scaling_level": ["medium", "high"],
-    "optimization_settings.optimizer_settings.sigma0": [2.0, 5.0, 8.0],
-    "optimization_settings.optimizer_settings.population_size": [80, 120]
+  "optimization_settings": {
+    "hyperparameter_sweep": {
+      "optimization_settings.param_bound_scaling_level": ["medium", "high"],
+      "optimization_settings.optimizer_settings.sigma0": [2.0, 5.0, 8.0],
+      "optimization_settings.optimizer_settings.population_size": [80, 120]
+    }
   }
 }
 ```
@@ -263,5 +323,7 @@ Default hyperparameters swept (if no config provided):
 
 ## Notes
 
-- **Seed Hierarchy:** `seed` (general) affects all randomness globally. Specific seeds (`sensory_seed`, `grammar_seed`, `loss_noise_seed`) override the global seed for their respective components.
-- **Missing Sections:** Omitted sections use their defaults from `settings.jl`.
+- `settings_info.md` documents the current runtime/settings model, not every historical alias.
+- Old noise-related settings like `measurement_noise_std` and `loss_noise_seed` are no longer active user settings.
+- Per-node measurement noise is estimated from data and stored in `NodeData`, not in `DataSettings`.
+- The global `seed` can be overridden by component-specific seeds such as `sensory_seed`, `grammar_seed`, and `data_settings.psd.noise_seed`.

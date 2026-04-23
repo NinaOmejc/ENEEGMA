@@ -128,7 +128,7 @@ function transform2latex(eqs::Vector{Equation};
                          show_plot::Bool=true,
                          path_tex::String="")
     # 1) Get only the raw math, no \begin{} from latexify
-    tex_raw = latexify.(eqs; env = :raw)   # guaranteed supported
+    tex_raw = Latexify.process_latexify.(eqs; env=:raw, mult_symbol="")   # bypasses Latexify global default kwargs merge
 
     # 2) Wrap each raw math in breqn’s dmath
     breqn_wrapped = ["\\begin{dmath}\n" * String(x) * "\n\\end{dmath}"

@@ -77,12 +77,13 @@ and error detection, then applies a specific metric function to calculate the fi
 """
 
 function compute_loss(new_params, args, metric_fun::Function)
+    net           = args.net
+    settings      = args.settings
     prob          = args.prob
     data          = args.data
     setter        = args.setter
     all_params    = args.all_params
     tspan         = args.tspan
-    brain_source_indices = args.brain_source_indices
     solver        = args.solver
     solver_kwargs = args.solver_kwargs
     loss_settings = args.loss_settings
@@ -94,35 +95,22 @@ function compute_loss(new_params, args, metric_fun::Function)
 
     θ = new_params[1:n_param_block]
     iv = new_params[n_param_block + 1 : n_param_block + n_inits]
-    sigma_effective = if data_settings !== nothing && hasproperty(data_settings, :measurement_noise_std)
-        max(data_settings.measurement_noise_std, 0.0)
-    else
-        0.0
-    end
     updated_all_params = setter(all_params, θ)
     new_prob = remake(prob; p=updated_all_params, u0=iv, tspan=tspan)
     sol = safe_solve(new_prob, solver; solver_kwargs=solver_kwargs)
     
-    # Extract transient duration from data_settings if available
-    transient_duration = data_settings.psd.transient_period_duration
-    fs_actual = 1.0 / solver_kwargs[:saveat]  # Infer sampling frequency from time step
-    keep_idx = ENEEGMA.get_indices_after_transient_removal(sol.t, transient_duration, tspan[1], fs_actual)
-    
-    # Validate simulation success and extract per-node model predictions
-    success, error_msg, model_predictions = ENEEGMA.validate_simulation_success(
-        sol, brain_source_indices, keep_idx, tspan[1], tspan[2], transient_duration
+    success, error_msg, _, model_predictions = ENEEGMA.extract_validated_model_predictions(
+        sol,
+        net,
+        settings;
+        demean=true
     )
     
     if !success
         return 1e9
     end
 
-    # Demean each node's model prediction
-    for node_name in keys(model_predictions)
-        model_predictions[node_name] .-= Statistics.mean(model_predictions[node_name])
-    end
-
-    loss = metric_fun(model_predictions, data, 1/solver_kwargs[:saveat], loss_settings, data_settings)
+    loss = metric_fun(model_predictions, data, loss_settings, data_settings)
     
     if !isfinite(loss)
         return 1e9
@@ -140,6 +128,135 @@ function _source_dataframe_to_dict(df_sources::DataFrame)::Dict{String, Vector{F
     return model_predictions
 end
 
+function _demean_model_predictions!(model_predictions::Dict{String, Vector{Float64}})
+    for predictions in values(model_predictions)
+        predictions .-= Statistics.mean(predictions)
+    end
+    return model_predictions
+end
+
+function model_predictions_to_dataframe(times::AbstractVector{<:Real},
+                                        model_predictions::Dict{String, Vector{Float64}};
+                                        node_names::Union{Nothing, AbstractVector}=nothing)::DataFrame
+    df_sources = DataFrame(time=Float64.(times))
+    ordered_node_names = node_names === nothing ? collect(keys(model_predictions)) : String.(node_names)
+
+    for node_name in ordered_node_names
+        haskey(model_predictions, node_name) || error("No model prediction for node $node_name")
+        df_sources[!, Symbol(node_name)] = model_predictions[node_name]
+    end
+
+    return df_sources
+end
+
+function prepare_source_dataframe_for_analysis(df_sources::DataFrame,
+                                               fs::Real,
+                                               transient_duration::Real;
+                                               demean::Bool=true,
+                                               keep_idx=nothing,
+                                               source_names::Union{Nothing, AbstractVector}=nothing)
+    isempty(df_sources) && return DataFrame(), Dict{String, Vector{Float64}}()
+
+    times = Vector{Float64}(df_sources.time)
+    keep_idx_use = keep_idx === nothing ?
+        ENEEGMA.get_indices_after_transient_removal(times, Float64(transient_duration), times[1], Float64(fs)) :
+        keep_idx
+    isempty(keep_idx_use) && return DataFrame(), Dict{String, Vector{Float64}}()
+
+    model_predictions = ENEEGMA._source_dataframe_to_dict(df_sources)
+    for (node_name, predictions) in model_predictions
+        model_predictions[node_name] = Vector{Float64}(predictions[keep_idx_use])
+    end
+
+    if demean
+        ENEEGMA._demean_model_predictions!(model_predictions)
+    end
+
+    processed_df = ENEEGMA.model_predictions_to_dataframe(times[keep_idx_use],
+                                                          model_predictions;
+                                                          node_names=source_names)
+    return processed_df, model_predictions
+end
+
+function extract_validated_model_predictions(sol,
+                                             brain_source_indices::Dict{String, Int},
+                                             tspan,
+                                             saveat::Real,
+                                             transient_duration::Real;
+                                             demean::Bool=true
+                                             )::Tuple{Bool, String, Vector{Float64}, Dict{String, Vector{Float64}}}
+    fs_actual = 1.0 / Float64(saveat)
+    keep_idx = ENEEGMA.get_indices_after_transient_removal(sol.t,
+                                                           Float64(transient_duration),
+                                                           Float64(tspan[1]),
+                                                           fs_actual)
+
+    success, error_msg, model_predictions = ENEEGMA.validate_simulation_success(
+        sol,
+        brain_source_indices,
+        keep_idx,
+        Float64(tspan[1]),
+        Float64(tspan[2]),
+        Float64(transient_duration)
+    )
+
+    if !success
+        return false, error_msg, Float64[], Dict{String, Vector{Float64}}()
+    end
+
+    if demean
+        ENEEGMA._demean_model_predictions!(model_predictions)
+    end
+
+    return true, "", Vector{Float64}(sol.t[keep_idx]), model_predictions
+end
+
+function extract_validated_model_predictions(sol,
+                                             net::Network,
+                                             settings::Settings;
+                                             demean::Bool=true
+                                             )::Tuple{Bool, String, Vector{Float64}, Dict{String, Vector{Float64}}}
+    simulation_settings = settings.simulation_settings
+    transient_duration = settings.data_settings.psd.transient_period_duration
+    fs_actual = 1.0 / simulation_settings.saveat
+    keep_idx = ENEEGMA.get_indices_after_transient_removal(sol.t,
+                                                           Float64(transient_duration),
+                                                           Float64(simulation_settings.tspan[1]),
+                                                           fs_actual)
+
+    success, error_msg = ENEEGMA._validate_solution_after_transient(sol,
+                                                                    keep_idx,
+                                                                    Float64(simulation_settings.tspan[1]),
+                                                                    Float64(simulation_settings.tspan[2]))
+    if !success
+        return false, error_msg, Float64[], Dict{String, Vector{Float64}}()
+    end
+
+    node_names = [String(node.name) for node in net.nodes]
+    model_predictions = ENEEGMA.extract_brain_sources(settings,
+                                                      net,
+                                                      sol;
+                                                      node_names=node_names,
+                                                      keep_idx=keep_idx,
+                                                      output_column_style=:node_name,
+                                                      return_type=:dict)
+    isempty(model_predictions) && return false, "Failed to extract any brain source signals", Float64[], Dict{String, Vector{Float64}}()
+
+    missing_node_names = [node_name for node_name in node_names if !haskey(model_predictions, node_name)]
+    isempty(missing_node_names) || return false, "Failed to extract brain sources for nodes: $(join(missing_node_names, ", "))", Float64[], Dict{String, Vector{Float64}}()
+
+    if demean
+        ENEEGMA._demean_model_predictions!(model_predictions)
+    end
+
+    success, error_msg = ENEEGMA._validate_model_predictions(model_predictions)
+    if !success
+        return false, error_msg, Float64[], Dict{String, Vector{Float64}}()
+    end
+
+    return true, "", Vector{Float64}(sol.t[keep_idx]), model_predictions
+end
+
 
 function loss_empty(new_params, args)
     return NaN  # Or some default high loss value like 1e9
@@ -149,6 +266,88 @@ end
 # ============================================================================
 # HELPER FUNCTIONS FOR VALIDATION
 # ============================================================================
+
+function _validate_solution_after_transient(sol,
+                                            keep_idx,
+                                            tspan_start::Float64,
+                                            tspan_end::Float64)::Tuple{Bool, String}
+    if !SciMLBase.successful_retcode(sol)
+        return false, "Simulation failed with retcode: $(sol.retcode)"
+    end
+
+    if isempty(keep_idx)
+        return false, "No simulation time points after transient period"
+    end
+
+    expected_duration_sec = (tspan_end - tspan_start) / 1000.0
+    actual_duration_sec = sol.t[end] - sol.t[1]
+    if actual_duration_sec < 0.9 * expected_duration_sec
+        return false, "Simulation terminated early (covered $(round(actual_duration_sec, digits=2))s of $(round(expected_duration_sec, digits=2))s)"
+    end
+
+    n_steps = length(sol.t)
+    if n_steps >= 100
+        n_sample = min(50, n_steps ÷ 5)
+
+        for var_idx in 1:length(sol.u[1])
+            early_sum_sq = 0.0
+            for i in 1:n_sample
+                early_sum_sq += abs(sol.u[i][var_idx])^2
+            end
+            early_rms = sqrt(early_sum_sq / n_sample)
+
+            late_sum_sq = 0.0
+            for i in (n_steps - n_sample + 1):n_steps
+                late_sum_sq += abs(sol.u[i][var_idx])^2
+            end
+            late_rms = sqrt(late_sum_sq / n_sample)
+
+            if early_rms > 0 && late_rms > 100.0 * early_rms
+                return false, "State variable $var_idx exploded (RMS grew from $(round(early_rms, digits=2)) to $(round(late_rms, digits=2)))"
+            end
+        end
+    end
+
+    return true, ""
+end
+
+function _validate_model_predictions(model_predictions::Dict{String, Vector{Float64}})::Tuple{Bool, String}
+    for (node_name, pred) in model_predictions
+        if any(!isfinite, pred)
+            return false, "Model prediction for node $node_name contains non-finite values (Inf or NaN)"
+        end
+    end
+
+    max_abs_signal_threshold = 100.0
+    for (node_name, pred) in model_predictions
+        max_abs = maximum(abs, pred)
+        if max_abs > max_abs_signal_threshold
+            return false, "Signal for node $node_name exceeded threshold: max(|signal|) = $(round(max_abs, digits=2)) > $max_abs_signal_threshold"
+        end
+    end
+
+    max_rms_growth_threshold = 100.0
+    for (node_name, pred) in model_predictions
+        n = length(pred)
+        w = min(200, max(50, n ÷ 5))
+        if n >= 2w
+            head_sum_sq = 0.0
+            tail_sum_sq = 0.0
+            @inbounds for i in 1:w
+                head_sum_sq += pred[i]^2
+                tail_sum_sq += pred[n - w + i]^2
+            end
+            head_rms = sqrt(head_sum_sq / w)
+            tail_rms = sqrt(tail_sum_sq / w)
+            if isfinite(head_rms) && head_rms > 0 && tail_rms > max_rms_growth_threshold * head_rms
+                growth_factor = round(tail_rms / head_rms, digits=1)
+                return false, "Prediction for node $node_name grew explosively (RMS growth $growth_factor x > threshold)"
+            end
+        end
+    end
+
+    return true, ""
+end
 
 """
     validate_simulation_success(
@@ -183,14 +382,9 @@ function validate_simulation_success(
     transient_duration::Float64
 )::Tuple{Bool, String, Dict{String, Vector{Float64}}}
     
-    # Check 1: Solver succeeded
-    if !SciMLBase.successful_retcode(sol)
-        return false, "Simulation failed with retcode: $(sol.retcode)", Dict{String, Vector{Float64}}()
-    end
-    
-    # Check 2: Keep indices valid
-    if isempty(keep_idx)
-        return false, "No simulation time points after transient period", Dict{String, Vector{Float64}}()
+    success, error_msg = ENEEGMA._validate_solution_after_transient(sol, keep_idx, tspan_start, tspan_end)
+    if !success
+        return false, error_msg, Dict{String, Vector{Float64}}()
     end
     
     # Extract predictions for all nodes
@@ -330,21 +524,34 @@ function _compute_node_model_psd(model_prediction::AbstractVector{<:Real},
     return ENEEGMA.compute_noisy_preprocessed_welch_psd(model_prediction,
                                                         fs,
                                                         loss_settings,
-                                                        data_settings;
-                                                        measurement_noise_std=node_info.measurement_noise_std)
+                                                        data_settings,
+                                                        node_info)
+end
+
+function _metric_sampling_rate(data::Data,
+                               data_settings::Union{Nothing, DataSettings}=nothing)::Float64
+    return Float64(data.sampling_rate)
 end
 
 function _compute_model_psd_dict(model_predictions::Dict{String, Vector{Float64}},
-                                 target::Data,
+                                 data::Data,
+                                 loss_settings::LossSettings,
+                                 data_settings::Union{Nothing, DataSettings}=nothing)
+    fs = ENEEGMA._metric_sampling_rate(data, data_settings)
+    return ENEEGMA._compute_model_psd_dict(model_predictions, data, fs, loss_settings, data_settings)
+end
+
+function _compute_model_psd_dict(model_predictions::Dict{String, Vector{Float64}},
+                                 data::Data,
                                  fs,
                                  loss_settings::LossSettings,
                                  data_settings::Union{Nothing, DataSettings}=nothing)
-    isempty(target.node_data) && error("Metric computation requires non-empty target.node_data")
+    isempty(data.node_data) && error("Metric computation requires non-empty data.node_data")
 
     psd_dict = Dict{String, Tuple{Vector{Float64}, Vector{Float64}}}()
     aligned_psd_dict = Dict{String, Vector{Float64}}()
 
-    for (node_name, node_info) in target.node_data
+    for (node_name, node_info) in data.node_data
         if !haskey(model_predictions, node_name)
             error("No model prediction for node $node_name. Available: $(collect(keys(model_predictions)))")
         end
@@ -420,7 +627,7 @@ function _weighted_node_iae(aligned_model::AbstractVector{<:Real}, node_info::No
 end
 
 """
-    weighted_mae(model_predictions::Dict{String, Vector{Float64}}, target::Data, fs, loss_settings::LossSettings)
+    weighted_mae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings)
 
 Unified frequency-domain MAE loss with per-node, region-based weighting.
 
@@ -436,45 +643,65 @@ If no metadata is available, defaults to uniform (unweighted) MAE.
 
 # Arguments
 - `model_predictions::Dict{String, Vector{Float64}}`: Per-node time-domain model predictions
-- `target::Data`: Target data with node_data dict containing per-node freq_peak_metadata
-- `fs::Float64`: Sampling frequency
+- `data::Data`: Target data with node_data dict containing per-node freq_peak_metadata
+- Sampling frequency is resolved from `data.sampling_rate`
 - `loss_settings::LossSettings`: Contains PSD settings and region weights
 
 # Returns
 - `Float64`: Averaged weighted MAE loss across all nodes
 """
-function weighted_mae(model_predictions::Dict{String, Vector{Float64}}, target::Data, fs, loss_settings::LossSettings, 
+function weighted_mae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings,
                       data_settings::Union{Nothing, DataSettings}=nothing)
-    _, aligned_psd_dict = _compute_model_psd_dict(model_predictions, target, fs, loss_settings, data_settings)
+    _, aligned_psd_dict = _compute_model_psd_dict(model_predictions, data, loss_settings, data_settings)
 
     node_losses = Float64[]
-    for (node_name, node_info) in target.node_data
+    for (node_name, node_info) in data.node_data
         push!(node_losses, _weighted_node_mae(aligned_psd_dict[node_name], node_info))
     end
 
     return Statistics.mean(node_losses)
 end
 
-function weighted_mae(df_sources::DataFrame, target::Data, fs, loss_settings::LossSettings,
+function weighted_mae(model_predictions::Dict{String, Vector{Float64}}, data::Data, fs, loss_settings::LossSettings, 
                       data_settings::Union{Nothing, DataSettings}=nothing)
-    return weighted_mae(_source_dataframe_to_dict(df_sources), target, fs, loss_settings, data_settings)
+    return weighted_mae(model_predictions, data, loss_settings, data_settings)
 end
 
-function weighted_iae(model_predictions::Dict{String, Vector{Float64}}, target::Data, fs, loss_settings::LossSettings,
+function weighted_mae(df_sources::DataFrame, data::Data, loss_settings::LossSettings,
                       data_settings::Union{Nothing, DataSettings}=nothing)
-    _, aligned_psd_dict = _compute_model_psd_dict(model_predictions, target, fs, loss_settings, data_settings)
+    return weighted_mae(_source_dataframe_to_dict(df_sources), data, loss_settings, data_settings)
+end
+
+function weighted_mae(df_sources::DataFrame, data::Data, fs, loss_settings::LossSettings,
+                      data_settings::Union{Nothing, DataSettings}=nothing)
+    return weighted_mae(df_sources, data, loss_settings, data_settings)
+end
+
+function weighted_iae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings,
+                      data_settings::Union{Nothing, DataSettings}=nothing)
+    _, aligned_psd_dict = _compute_model_psd_dict(model_predictions, data, loss_settings, data_settings)
 
     node_iaes = Float64[]
-    for (node_name, node_info) in target.node_data
+    for (node_name, node_info) in data.node_data
         push!(node_iaes, _weighted_node_iae(aligned_psd_dict[node_name], node_info))
     end
 
     return Statistics.mean(node_iaes)
 end
 
-function weighted_iae(df_sources::DataFrame, target::Data, fs, loss_settings::LossSettings,
+function weighted_iae(model_predictions::Dict{String, Vector{Float64}}, data::Data, fs, loss_settings::LossSettings,
                       data_settings::Union{Nothing, DataSettings}=nothing)
-    return weighted_iae(_source_dataframe_to_dict(df_sources), target, fs, loss_settings, data_settings)
+    return weighted_iae(model_predictions, data, loss_settings, data_settings)
+end
+
+function weighted_iae(df_sources::DataFrame, data::Data, loss_settings::LossSettings,
+                      data_settings::Union{Nothing, DataSettings}=nothing)
+    return weighted_iae(_source_dataframe_to_dict(df_sources), data, loss_settings, data_settings)
+end
+
+function weighted_iae(df_sources::DataFrame, data::Data, fs, loss_settings::LossSettings,
+                      data_settings::Union{Nothing, DataSettings}=nothing)
+    return weighted_iae(df_sources, data, loss_settings, data_settings)
 end
 
 function weighted_iae(model_psd::Vector{Float64}, target_psd::Vector{Float64},

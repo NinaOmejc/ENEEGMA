@@ -6,7 +6,10 @@
 # 3. Review all sweep combinations
 # 4. Run optimization across the parameter space
 
-using Revise 
+try
+    using Revise
+catch
+end
 using ENEEGMA
 using CSV
 using DataFrames
@@ -58,9 +61,9 @@ show_hyperparameter_combos(settings; combo_idx=combo_idx)
 # ============================================================================
 # Step 4: Run Hyperparameter Sweep
 # ============================================================================
+settings.optimization_settings.maxiters = 10 # set low for testing; increase for better optimization
 
 # OPTION A: Run full sweep (all combinations)
-settings.optimization_settings.n_restarts = 3
 # run_hyperparameter_sweep(settings, data)
 
 # OPTION B: Run specific combination (useful for debugging/testing)
