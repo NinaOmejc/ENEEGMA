@@ -147,7 +147,7 @@ export apply_connectivity_motif
 export list_canonical_node_models, list_canonical_node_models_codes, get_canonical_node_model_info!
 export update_network_parameters!, construct_network_problem!
 export set_network_signature!, export_network
-export transform2latex, string2num, string2symbolicfun, soft_wrap, sort_symbols
+export transform2latex, transform2latex_legacy, string2num, string2symbolicfun, soft_wrap, sort_symbols
 export get_pop_by_id, get_sensory_input, get_node_by_nodeid, has_random_additive_noise
 export get_conn_funcs, get_input_dynamics, get_output_dynamics
 export add_conn_motif, add_conn_motif_builder, add_random_conn_motif

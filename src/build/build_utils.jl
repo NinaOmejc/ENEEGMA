@@ -123,21 +123,16 @@ end =#
 
 
 # 1. no manual soft_wrap neededfunction transform2latex(eqs::Vector{Equation};
-function transform2latex(eqs::Vector{Equation};
-                         show_text::Bool=false,
-                         show_plot::Bool=true,
-                         path_tex::String="")
-    # 1) Get only the raw math, no \begin{} from latexify
-    tex_raw = Latexify.process_latexify.(eqs; env=:raw, mult_symbol="")   # bypasses Latexify global default kwargs merge
+function _equation_to_latex_expr(eq::Equation)
+    lhs_expr = Symbolics.latexify_derivatives(Symbolics.cleanup_exprs(Symbolics._toexpr(Num(eq.lhs))))
+    rhs_expr = Symbolics.latexify_derivatives(Symbolics.cleanup_exprs(Symbolics._toexpr(Num(eq.rhs))))
+    return Expr(:(=), lhs_expr, rhs_expr)
+end
 
-    # 2) Wrap each raw math in breqn’s dmath
-    breqn_wrapped = ["\\begin{dmath}\n" * String(x) * "\n\\end{dmath}"
-                     for x in tex_raw]
-
-    # 3) Join all equations into one block
-    tex_block = join(breqn_wrapped, "\n\n")
-
-    # Optional preview
+function _render_latex_block(tex_block::AbstractString;
+                             show_text::Bool=false,
+                             show_plot::Bool=true,
+                             path_tex::String="")
     if show_text
         println(tex_block)
     end
@@ -145,7 +140,6 @@ function transform2latex(eqs::Vector{Equation};
         render(LaTeXString(tex_block))
     end
 
-    # 4) Write a standalone .tex file if requested
     if !isempty(path_tex)
         latex_doc = """
         \\documentclass[fleqn]{article}
@@ -161,6 +155,40 @@ function transform2latex(eqs::Vector{Equation};
         end
     end
     return nothing
+end
+
+function transform2latex(eqs::Vector{Equation};
+                         show_text::Bool=false,
+                         show_plot::Bool=true,
+                         path_tex::String="")
+    # 1) Get only the raw math, no \begin{} from latexify
+    eq_exprs = _equation_to_latex_expr.(eqs)
+    tex_raw = Latexify.process_latexify.(eq_exprs; env=:raw, mult_symbol="")
+
+    # 2) Wrap each raw math in breqn’s dmath
+    breqn_wrapped = ["\\begin{dmath}\n" * String(x) * "\n\\end{dmath}"
+                     for x in tex_raw]
+
+    # 3) Join all equations into one block
+    tex_block = join(breqn_wrapped, "\n\n")
+    return _render_latex_block(tex_block;
+                               show_text=show_text,
+                               show_plot=show_plot,
+                               path_tex=path_tex)
+end
+
+function transform2latex_legacy(eqs::Vector{Equation};
+                                show_text::Bool=false,
+                                show_plot::Bool=true,
+                                path_tex::String="")
+    tex_raw = Latexify.process_latexify.(eqs; env=:raw, mult_symbol="")
+    breqn_wrapped = ["\\begin{dmath}\n" * String(x) * "\n\\end{dmath}"
+                     for x in tex_raw]
+    tex_block = join(breqn_wrapped, "\n\n")
+    return _render_latex_block(tex_block;
+                               show_text=show_text,
+                               show_plot=show_plot,
+                               path_tex=path_tex)
 end
 
 #= function sort_symbols(symbols::Union{Vector{Symbol}, Vector{Num}})::Vector

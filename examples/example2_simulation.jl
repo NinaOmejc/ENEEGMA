@@ -49,7 +49,10 @@ psd_dict = ENEEGMA.compute_psd_for_all_sources(df_sources, fs)
 
 # Build output file names using standardized format: exp_name_net_name_simulated
 # Save composite plot (3xN panels) for all source signals
-path_plot = "$(settings.general_settings.exp_name)_$(net.name)_simulated.png"
+path_plot = joinpath(settings.general_settings.path_out, 
+                     settings.general_settings.exp_name, 
+                     net.name, 
+                     "$(settings.general_settings.exp_name)_$(net.name)_simulated.png")
 ENEEGMA.plot_simulation_results(df_sources; psd_dict=psd_dict,
                                 zoom_window=(2.0, 5.0),
                                 fullfname_fig=path_plot,

@@ -419,18 +419,18 @@ function make_ode_problem_from_strings(rhs_strings, state_vars, param_vars, u0, 
     end
     
     function_expr = quote
-        function f(du, u, p, t)
+        (du, u, p, t) -> begin
             # Assign state variables
             $(state_assignments...)
             # Assign parameters
             $(param_assignments...)
             # Evaluate equations
             $(eq_assignments...)
-            
+
             return nothing
         end
     end
-    
+
     drift_f = eval(function_expr)
 
     # Simple wrapper - tscale is already baked into equations
