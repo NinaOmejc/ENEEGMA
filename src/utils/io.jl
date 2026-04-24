@@ -19,6 +19,27 @@ function load_data(ds::DataSettings)
     return data
 end
 
+function _effective_data_duration_for_optimization(ds::DataSettings)::Union{Nothing, Float64}
+    data_file = ds.data_file
+    (data_file === nothing || isempty(data_file) || !isfile(data_file)) && return nothing
+    ds.fs === nothing && return nothing
+
+    eeg_data = CSV.read(data_file, DataFrame)
+    signal_length_estimate = nrow(eeg_data)
+    signal_length_estimate < 2 && return nothing
+
+    times = ENEEGMA._extract_or_synthesize_time_axis(eeg_data, ds.fs, signal_length_estimate)
+    length(times) < 2 && return nothing
+
+    transient_duration = ds.psd.transient_period_duration
+    keep_idx = ENEEGMA.get_indices_after_transient_removal(times, transient_duration, times[1], ds.fs)
+    times_kept = isempty(keep_idx) ? times : times[keep_idx]
+    length(times_kept) < 2 && return nothing
+
+    duration = Float64(times_kept[end] - times_kept[1])
+    return duration > 0 ? duration : nothing
+end
+
 """
     normalize_parameter_name(name::String)::String
 
@@ -165,13 +186,14 @@ function create_default_settings()::Settings
 end
 
 """
-    check_settings(settings::Settings; require_optimization_sampling_match::Bool=false)::Bool
+    check_settings(settings::Settings; for_optimization::Bool=false)::Bool
 
 Validate all settings for consistency and correctness.
 
 This function is independent from settings construction, allowing you to validate
 settings at any point in the workflow - after loading, after programmatic modifications,
-or before building/optimizing. Does not modify settings, only checks them.
+or before building/optimizing. For optimization workflows it may normalize a few
+settings in place (currently `saveat` and `tspan`) to keep the numerical pipeline consistent.
 
 Validates:
 - Network settings:
@@ -191,7 +213,7 @@ Validates:
 
 # Arguments
 - `settings::Settings`: Settings object to validate
-- `require_optimization_sampling_match::Bool=false`: When `true`, enforce `1 / simulation_settings.saveat == data_settings.fs`
+- `for_optimization::Bool=false`: When `true`, enable optimization-specific validation checks
 
 # Returns
 `true` if all validations pass
@@ -215,7 +237,7 @@ optimize_network(net, data, settings)  # Calls check_settings() automatically
 - SimulationSettings can be None for workflows that don't simulate
 - Validation is non-destructive; settings are never modified
 """
-function check_settings(settings::Settings; require_optimization_sampling_match::Bool=false)::Bool
+function check_settings(settings::Settings; for_optimization::Bool=false)::Bool
     ns = settings.network_settings
     n_nodes = ns.n_nodes
     
@@ -310,36 +332,85 @@ function check_settings(settings::Settings; require_optimization_sampling_match:
     
     # ========== DATA SETTINGS VALIDATION ==========
     ds = settings.data_settings
-    if require_optimization_sampling_match && !isnothing(ds)
+    if for_optimization && !isnothing(ds)
         sim_fs = 1.0 / ss.saveat
         data_fs = Float64(ds.fs)
-        if !isapprox(sim_fs, data_fs; atol=1e-8, rtol=1e-8)
+        fs_diff = abs(sim_fs - data_fs)
+        if fs_diff < 1.0
+            normalized_saveat = 1.0 / data_fs
+            if !isapprox(ss.saveat, normalized_saveat; atol=1e-12, rtol=1e-12)
+                vwarn(
+                    "simulation_settings.saveat ($(ss.saveat)) and data_settings.fs ($(data_fs) Hz) differ slightly " *
+                    "(simulated fs=$(sim_fs) Hz, diff=$(round(fs_diff; digits=6)) Hz). " *
+                    "Snapping saveat to $(normalized_saveat) for optimization consistency.";
+                    level=2
+                )
+                ss.saveat = normalized_saveat
+                sim_fs = data_fs
+            end
+        elseif !isapprox(sim_fs, data_fs; atol=1e-8, rtol=1e-8)
             throw(ArgumentError(
                 "For optimization, simulation_settings.saveat and data_settings.fs must match. " *
                 "Got saveat=$(ss.saveat), so simulated fs=$(sim_fs) Hz, but data_settings.fs=$(data_fs) Hz."
             ))
         end
+
+        data_duration = ENEEGMA._effective_data_duration_for_optimization(ds)
+        if data_duration !== nothing
+            sim_duration = Float64(ss.tspan[2] - ss.tspan[1])
+            duration_tol = max(ss.saveat, 1.0 / data_fs, 1e-9)
+            if abs(sim_duration - data_duration) > duration_tol
+                new_tspan = (ss.tspan[1], ss.tspan[1] + data_duration)
+                vwarn(
+                    "For optimization, simulation duration should match the effective data duration after transient removal. " *
+                    "Got simulation tspan=$(ss.tspan) (duration=$(round(sim_duration; digits=6)) s), " *
+                    "but the data duration is $(round(data_duration; digits=6)) s. " *
+                    "Snapping simulation_settings.tspan to $(new_tspan).";
+                    level=1
+                )
+                ss.tspan = new_tspan
+            end
+        end
     end
 
-    if !isnothing(ds) && ds.target_channel isa Dict
-        # Multi-node: validate that all dict keys exist in node_names
-        dict_keys = Set(keys(ds.target_channel))
+    if !isnothing(ds)
         node_names_set = Set(ns.node_names)
-        
-        missing_nodes = setdiff(dict_keys, node_names_set)
-        !isempty(missing_nodes) && throw(ArgumentError(
-            "target_channel dict contains keys that don't match node_names. " *
-            "Extra keys: $(collect(missing_nodes)). Available node_names: $(ns.node_names)"
-        ))
-        
-        # Warn if some nodes don't have data channels specified
-        missing_data = setdiff(node_names_set, dict_keys)
-        !isempty(missing_data) && vwarn(
-            "Nodes without target_channel mapping: $(collect(missing_data)). " *
-            "These nodes will not load data during prepare_data!()."; level=2
-        )
-        
-        vinfo("Data settings validated: $(length(dict_keys)) node(s) mapped to data channel(s)"; level=2)
+
+        if for_optimization && ns.n_nodes > 1 && !(ds.target_channel isa Dict)
+            throw(ArgumentError(
+                "For multi-node networks, data_settings.target_channel must be a Dict{String, String} " *
+                "with one entry per node name. Got $(typeof(ds.target_channel)) with value $(repr(ds.target_channel)). " *
+                "Expected something like Dict(\"$(ns.node_names[1])\" => \"IC3\", \"$(ns.node_names[min(2, length(ns.node_names))])\" => \"IC4\")."
+            ))
+        end
+
+        if ds.target_channel isa Dict
+            # Multi-node: validate that all dict keys exist in node_names
+            dict_keys = Set(keys(ds.target_channel))
+            
+            extra_keys = setdiff(dict_keys, node_names_set)
+            !isempty(extra_keys) && throw(ArgumentError(
+                "target_channel dict contains keys that don't match node_names. " *
+                "Extra keys: $(collect(extra_keys)). Available node_names: $(ns.node_names)"
+            ))
+            
+            missing_data = setdiff(node_names_set, dict_keys)
+            if !isempty(missing_data)
+                if for_optimization
+                    throw(ArgumentError(
+                        "target_channel dict must contain one channel per node for this network. " *
+                        "Missing keys: $(collect(missing_data)). Available node_names: $(ns.node_names)"
+                    ))
+                else
+                    vwarn(
+                        "Nodes without target_channel mapping: $(collect(missing_data)). " *
+                        "These nodes will not load data during prepare_data!()."; level=2
+                    )
+                end
+            end
+            
+            vinfo("Data settings validated: $(length(dict_keys)) node(s) mapped to data channel(s)"; level=2)
+        end
     end
     
     # ========== EEG OUTPUT VALIDATION & DEFAULTS ==========

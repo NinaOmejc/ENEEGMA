@@ -6,10 +6,6 @@
 # 3. Review all sweep combinations
 # 4. Run optimization across the parameter space
 
-try
-    using Revise
-catch
-end
 using ENEEGMA
 using CSV
 using DataFrames

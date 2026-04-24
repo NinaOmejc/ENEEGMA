@@ -10,7 +10,7 @@ function optimize_network(
     hyperparam_keys::Union{Nothing, Vector{String}}=nothing
     )
     # Validate settings before proceeding
-    check_settings(settings; require_optimization_sampling_match=true)
+    check_settings(settings; for_optimization=true)
     
     gs = settings.general_settings
     ns = settings.network_settings

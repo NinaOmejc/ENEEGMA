@@ -5,10 +5,7 @@
 # 2. Load candidate models from grammar sampling results
 # 3. Select and build a network from one candidate
 # 4. Optimize network parameters to fit target data
-try
-    using Revise
-catch
-end
+
 using ENEEGMA
 using CSV
 using DataFrames
