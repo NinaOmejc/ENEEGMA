@@ -123,11 +123,7 @@ end =#
 
 
 # 1. no manual soft_wrap neededfunction transform2latex(eqs::Vector{Equation};
-function _equation_to_latex_expr(eq::Equation)
-    lhs_expr = Symbolics.latexify_derivatives(Symbolics.cleanup_exprs(Symbolics._toexpr(Num(eq.lhs))))
-    rhs_expr = Symbolics.latexify_derivatives(Symbolics.cleanup_exprs(Symbolics._toexpr(Num(eq.rhs))))
-    return Expr(:(=), lhs_expr, rhs_expr)
-end
+_equation_to_latex_expr(eq::Equation) = eq
 
 function _render_latex_block(tex_block::AbstractString;
                              show_text::Bool=false,

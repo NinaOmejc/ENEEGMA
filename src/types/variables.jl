@@ -115,7 +115,7 @@ function ExtraVar(; name::String, type::String, eq_idx::Int64,
         name_parts = split(name, "₊")
         string2num("$(parent_pop.parent_node.name)₊τ_$(name_parts[end])")
     else
-        Num("")
+        string2num("")
     end
 
     base = VarBase(; name, symbol=sym, eq_idx, unit, description, parent_pop)

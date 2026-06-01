@@ -165,7 +165,7 @@ function construct_network_dynamics!(net::Network)::Network
             for eq in node.dynamics
                 # Check if any variable in the equation belongs to this population
                 # eq.lhs is Differential(t)(variable), so arguments[1] is the variable
-                lhs_var = eq.lhs.arguments[1]
+                lhs_var = first(Symbolics.arguments(eq.lhs))
                 lhs_var_name = string(lhs_var)
                 if occursin("₊x$(pop.id)", lhs_var_name)
                     push!(pop_eqs, eq)
@@ -371,7 +371,7 @@ function diff_equations_to_strings(equations::Vector{Equation})
         end
         
         diff_var = lhs_expr.f.x  # The variable of differentiation (usually t)
-        state_var = lhs_expr.arguments  # The state variable being differentiated
+        state_var = first(Symbolics.arguments(lhs_expr))  # The state variable being differentiated
         
         rhs_str = string(eq.rhs)
         

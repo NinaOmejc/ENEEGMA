@@ -278,7 +278,7 @@ function create_callback(start_time::Dates.DateTime,
         
         # print occasionally
         if rem(true_iter, print_every) == 0
-            vinfo("Restart $irestart | Iteration $true_iter | Loss: $l | Elapsed time: $(elapsed_time)"; level=2)
+            vinfo("Restart $irestart | Iteration $true_iter | Loss: $l | Elapsed time: $(elapsed_time)"; level=1)
         end
         
         return false

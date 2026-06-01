@@ -46,3 +46,4 @@ venv/
 docs/_build/
 site/
 
+experiments/*

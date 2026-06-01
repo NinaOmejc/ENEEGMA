@@ -25,6 +25,8 @@ using Symbolics, SymbolicIndexingInterface
 using Latexify
 using DifferentialEquations
 using OrdinaryDiffEq
+using StochasticDiffEq 
+using DelayDiffEq 
 
 # --- Optimization Packages ---
 using Optimization, OptimizationEvolutionary

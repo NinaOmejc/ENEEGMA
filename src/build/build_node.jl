@@ -51,7 +51,7 @@ function build_node_dynamics!(node::Node)::Node
 
         # --- Build and substitute all grouped connection terms ---
         # target_input_idx, groups, conn_fun, conn_vars = 1, input_groups[1], "baseline_sigmoid",input_groups[1]["baseline_sigmoid"]   # avoid "unused variable" warnings
-        substitutions = Dict{Symbolics.Num, Symbolics.Num}()
+        substitutions = Dict{Any, Any}()
         for (target_input_idx, groups) in input_groups
             total_term_for_input = Symbolics.Num(0)
             for (conn_fun, conn_vars) in groups
@@ -85,8 +85,7 @@ function build_node_dynamics!(node::Node)::Node
             for i in eachindex(pop.dynamics)
                 eq = pop.dynamics[i]
                 # Extract the lhs state variable symbol from D(x)
-                lhs_arg = eq.lhs.arguments
-                lhs_sym = lhs_arg isa AbstractVector ? Num(lhs_arg[1]) : Num(lhs_arg)
+                lhs_sym = Num(first(Symbolics.arguments(eq.lhs)))
                 v = get_var_by_symbol(pop.vars, lhs_sym)
                 if v !== nothing && v.gets_additive_noise
                     pop.dynamics[i] = Equation(eq.lhs, eq.rhs + noise_fun(t))
@@ -201,7 +200,7 @@ function _group_internode_inputs!(input_groups, additional_node_vars, pop::Popul
     end
 end
 
-function build_pop_conn_dynamics(pop::Population, conn_vars::VarSet, conn_fun::String)::Tuple{Num, ParamSet}
+function build_pop_conn_dynamics(pop::Population, conn_vars::VarSet, conn_fun::String)
 
     supported_conn_funcs = get_conn_funcs()
 

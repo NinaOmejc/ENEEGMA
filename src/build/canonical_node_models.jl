@@ -873,6 +873,7 @@ function LarterBreakspear(node::Node)
     return pops, node
 end
 
+
 function HarmonicOscillator(node::Node)
     pops = [Population(1, "HO", node; 
                         input_dynamics_spec="second_order_kernel", 
