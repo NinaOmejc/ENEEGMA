@@ -113,6 +113,16 @@ function second_order_kernel(pop::Population, input_idx::Int=1)
 end
 
 
+function _legacy_poly_input_scaling_enabled()
+    settings = get(_task_settings, current_task(), nothing)
+    settings === nothing && return false
+    hasproperty(settings, :sampling_settings) || return false
+    samp = settings.sampling_settings
+    samp === nothing && return false
+    hasproperty(samp, :legacy_poly_input_scaling) || return false
+    return samp.legacy_poly_input_scaling
+end
+
 function poly_kernel(pop::Population, input_idx::Int=1)
     # poly_eq must be a comma-separated string like "x2, x1 * x2"
     poly_eq = pop.build_setts.input_dynamics_spec[input_idx]
@@ -180,20 +190,21 @@ function poly_kernel(pop::Population, input_idx::Int=1)
     rhs1 = c1.symbol + build_sum(eqs[1])
     rhs2 = c2.symbol + build_sum(eqs[2])
 
-    # For now, add input only to the second equation
-    c1_in = mkparam("poly input scaling")
-    c2_in = mkparam("poly input scaling")
-
-    if x1.gets_sensory_input || x1.gets_internode_input || x1.gets_interpop_input
+    if _legacy_poly_input_scaling_enabled()
+        c1_in = mkparam("poly input scaling")
+        c2_in = mkparam("poly input scaling")
         rhs1 = rhs1 + c1_in.symbol * ENEEGMA.symbol(input)
-    else
-        rhs1 = rhs1
-    end
-
-    if x2.gets_sensory_input || x2.gets_internode_input || x2.gets_interpop_input
         rhs2 = rhs2 + c2_in.symbol * ENEEGMA.symbol(input)
     else
-        rhs2 = rhs2
+        if x1.gets_sensory_input || x1.gets_internode_input || x1.gets_interpop_input
+            c1_in = mkparam("poly input scaling")
+            rhs1 = rhs1 + c1_in.symbol * ENEEGMA.symbol(input)
+        end
+
+        if x2.gets_sensory_input || x2.gets_internode_input || x2.gets_interpop_input
+            c2_in = mkparam("poly input scaling")
+            rhs2 = rhs2 + c2_in.symbol * ENEEGMA.symbol(input)
+        end
     end
 
     input_dynamics_params = ParamSet(params)

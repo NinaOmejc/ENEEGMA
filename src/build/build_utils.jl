@@ -34,7 +34,8 @@ function string2symbolicfun(name::String)
     sym = Symbol(name)
     
     # Create a callable symbolic variable using @syms
-    ex = :(Symbolics.@syms $(sym)(t::Real))
+    ex = :(Symbolics.@syms $(sym)(t::Real)::Real)
+    #ex = :(Symbolics.@syms $(sym)(t::Real))
     
     try
         # Evaluate in the current module
@@ -123,7 +124,11 @@ end =#
 
 
 # 1. no manual soft_wrap neededfunction transform2latex(eqs::Vector{Equation};
-_equation_to_latex_expr(eq::Equation) = eq
+function _equation_to_latex_expr(eq::Equation)
+    lhs_expr = Symbolics.latexify_derivatives(Symbolics.cleanup_exprs(Symbolics._toexpr(Num(eq.lhs))))
+    rhs_expr = Symbolics.latexify_derivatives(Symbolics.cleanup_exprs(Symbolics._toexpr(Num(eq.rhs))))
+    return Expr(:(=), lhs_expr, rhs_expr)
+end
 
 function _render_latex_block(tex_block::AbstractString;
                              show_text::Bool=false,

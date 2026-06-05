@@ -358,12 +358,14 @@ Grammar-based network topology sampling configuration.
 - `n_samples::Int`: Number of network topologies to sample.
 - `only_unique::Bool`: Whether to filter out duplicate samples.
 - `grammar_seed::Union{Int, Nothing}`: Random seed for grammar rule selection.
+- `legacy_poly_input_scaling::Bool`: Enable legacy ENMEEG polynomial input scaling terms.
 """
 mutable struct SamplingSettings <: AbstractSettings
     grammar_file::String
     n_samples::Int        
     only_unique::Bool
     grammar_seed::Union{Int, Nothing}
+    legacy_poly_input_scaling::Bool
 
     function SamplingSettings(dict::Dict{String, Any})::SamplingSettings
         sampdict = get(dict, "sampling_settings", Dict{String, Any}())
@@ -384,7 +386,8 @@ mutable struct SamplingSettings <: AbstractSettings
             grammar_file,
             Int(get(   sampdict, "n_samples", 10)),
             Bool(get(  sampdict, "only_unique", true)),
-            grammar_seed
+            grammar_seed,
+            Bool(get(sampdict, "legacy_poly_input_scaling", false))
         )
     end
 end

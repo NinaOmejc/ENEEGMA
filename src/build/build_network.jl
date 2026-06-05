@@ -735,6 +735,11 @@ end
 function export_network(net::Network)
     gs = net.settings.general_settings
     ns = net.settings.network_settings
+
+    if !("tex" in gs.save_model_formats || "txt" in gs.save_model_formats)
+        return
+    end
+
     # Generate filename with network name
     fname_out = "$(net.name)_equations"
     output_dir = construct_output_dir(gs, ns)

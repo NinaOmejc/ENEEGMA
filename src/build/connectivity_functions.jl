@@ -18,7 +18,7 @@ function get_conn_funcs(output_type::Symbol=:dict)
 end
 
 # Helper function to build input term with optional connectivity parameter
-function build_input_term!(pop, conn_vars, highest_constant_idx, n_params, pc_params; add_c::Bool=true)
+function build_input_term!(pop, conn_vars, highest_constant_idx, n_params, pc_params; add_c::Bool=true)::Tuple{Num, ParamSet}
     input_term = Num(0)
     iconst_idx = 1
     for v in conn_vars.vars
@@ -43,11 +43,11 @@ function build_input_term!(pop, conn_vars, highest_constant_idx, n_params, pc_pa
 end
 
 
-function skip_conn(pop::Population, conn_vars::VarSet)
+function skip_conn(pop::Population, conn_vars::VarSet)::Tuple{Num, ParamSet}
     return Num(0), ParamSet()
 end
 
-function linear(pop::Population, conn_vars::VarSet; add_c=true)
+function linear(pop::Population, conn_vars::VarSet; add_c=true)::Tuple{Num, ParamSet}
     highest_constant_idx = get_highest_postfix_index(pop.params; pop_id=pop.id)
     pc_params = ParamSet()
     n_params = 0
@@ -56,7 +56,7 @@ function linear(pop::Population, conn_vars::VarSet; add_c=true)
 end
 
 
-function saturating_sigmoid(pop::Population, conn_vars::VarSet)
+function saturating_sigmoid(pop::Population, conn_vars::VarSet)::Tuple{Num, ParamSet}
     highest_constant_idx = get_highest_postfix_index(pop.params; node_id=pop.parent_node.id, pop_id=pop.id)
     c1 = Param("$(pop.parent_node.name)₊c$(pop.id)$(highest_constant_idx + 1)", :gain, pop;
         tunable=true, description="e0, the maximum output value; or S_max in LileyWright (e0 = Smax/2)")
@@ -76,7 +76,7 @@ function saturating_sigmoid(pop::Population, conn_vars::VarSet)
 end
 
 
-function baseline_sigmoid(pop::Population, conn_vars::VarSet)
+function baseline_sigmoid(pop::Population, conn_vars::VarSet)::Tuple{Num, ParamSet}
     highest_constant_idx = get_highest_postfix_index(pop.params; node_id=pop.parent_node.id, pop_id=pop.id)
     c1 = Param("$(pop.parent_node.name)₊c$(pop.id)$(highest_constant_idx + 1)", :gain, pop;
         tunable=true, description="a, the maximum output value")
@@ -93,7 +93,7 @@ function baseline_sigmoid(pop::Population, conn_vars::VarSet)
     return pc_term, pc_params
 end
 
-function relaxed_rectifier(pop::Population, conn_vars::VarSet)
+function relaxed_rectifier(pop::Population, conn_vars::VarSet)::Tuple{Num, ParamSet}
     highest_constant_idx = get_highest_postfix_index(pop.params; node_id=pop.parent_node.id, pop_id=pop.id)
 
     # Parameters: a (gain), b (threshold), d (steepness)
@@ -118,7 +118,7 @@ function relaxed_rectifier(pop::Population, conn_vars::VarSet)
     return pc_term, pc_params
 end
 
-function piecewise_linear(pop::Population, conn_vars::VarSet)
+function piecewise_linear(pop::Population, conn_vars::VarSet)::Tuple{Num, ParamSet}
     highest_constant_idx = get_highest_postfix_index(pop.params; node_id=pop.parent_node.id, pop_id=pop.id)
 
     f1_conn(target_var, input_term) = ifelse(
@@ -138,7 +138,7 @@ function piecewise_linear(pop::Population, conn_vars::VarSet)
     return pc_term, pc_params
 end
 
-function fourier_basis(pop::Population, conn_vars::VarSet)
+function fourier_basis(pop::Population, conn_vars::VarSet)::Tuple{Num, ParamSet}
     # Truncated Fourier series for two phase variables φ1, φ2:
     # F = ω + Σ a_m sin(n1*φ1 + n2*φ2) + Σ b_m cos(n1*φ1 + n2*φ2)
     phase_syms = [symbol(v) for v in conn_vars.vars]
@@ -190,7 +190,7 @@ function fourier_basis(pop::Population, conn_vars::VarSet)
     return series, pc_params
 end
 
-function tanh_sigmoid(pop::Population, conn_vars::VarSet)
+function tanh_sigmoid(pop::Population, conn_vars::VarSet)::Tuple{Num, ParamSet}
     # sigmoid(x, T, δ)  = 0.5 * (1 + tanh((x - T)/δ))       # generic tanh sigmoids
     highest_constant_idx = get_highest_postfix_index(pop.params; node_id=pop.parent_node.id, pop_id=pop.id)
     c1 = Param("$(pop.parent_node.name)₊c$(pop.id)$(highest_constant_idx + 1)", :potential, pop;

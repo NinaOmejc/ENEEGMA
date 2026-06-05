@@ -16,7 +16,6 @@ function list_canonical_node_models()::Vector{String}
             "VanDerPol ('VDP')",
             "StuartLandau ('SL')",
             "DuffingOscillator ('DO')",
-            "PhaseDynamics ('PD')",
     ]
 end
 
@@ -82,8 +81,6 @@ function get_canonical_node_model_info!(node::Node)
         return StuartLandau(node)   
     elseif model == "DuffingOscillator" || model == "DO"
         return DuffingOscillator(node)
-    elseif model == "PhaseDynamics" || model == "PD"
-        return PhaseDynamics(node)
     else
         error("Unknown canonical node model: $(model). 
               Supported models are: $(list_canonical_node_models()).")
