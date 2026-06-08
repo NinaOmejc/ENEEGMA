@@ -20,9 +20,8 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     loss_settings = optimization_settings.loss_settings
 
     blocks = blocks === nothing ? ENEEGMA.prepare_optimization_blocks(net, optimization_settings) : blocks
-    params_native, inits_native, _ = ENEEGMA.best_params_inits(optsol, optlogger, blocks)
+    params_native, inits_native, best_loss = ENEEGMA.best_params_inits(optsol, optlogger, blocks)
     param_range_entries, init_range_entries = ENEEGMA.native_range_entries(net, blocks)
-    best_loss = Float64(optsol.objective)
 
     # Use provided optimization output directory, or construct from settings
     if settings.optimization_settings.output_dir === nothing
@@ -238,25 +237,21 @@ function best_params_inits(optsol::SciMLBase.OptimizationSolution,
     decoded_solution = materialize_logged_params(optsol.u, blocks.param_spec, blocks.init_spec)
     params_native = decoded_solution[1:n_params]
     inits_native = decoded_solution[n_params + 1 : n_params + n_state_vars]
-    
-    return params_native, inits_native, optsol.objective
-end    
-#=     
-    if isempty(optlogger)
-        return params_native, inits_native, optsol.objective
-    end 
+    best_loss = Float64(optsol.objective)
 
-    best_optlog_iter = optlogger[argmin([optlogger[i].loss for i in 1:length(optlogger)])]
-    if best_optlog_iter.params !== nothing &&
-       length(best_optlog_iter.params) == n_params + n_state_vars &&
-       round(best_optlog_iter.loss, digits=6) < round(optsol.objective, digits=6)
+    best_optlog_iter = ENEEGMA.best_optlogger_entry(
+        optlogger;
+        expected_params_len=n_params + n_state_vars,
+    )
+    if best_optlog_iter !== nothing &&
+       (!isfinite(optsol.objective) || best_optlog_iter.loss < optsol.objective - 1e-6)
         params_native = best_optlog_iter.params[1:n_params]
         inits_native = best_optlog_iter.params[n_params + 1 : n_params + n_state_vars]
+        best_loss = best_optlog_iter.loss
         vinfo("Using best logged parameters (loss=$(round(best_optlog_iter.loss, digits=6))) instead of optsol.u (loss=$(round(optsol.objective, digits=6)))"; level=2)
     end
-    return params_native, inits_native, round(best_optlog_iter.loss, digits=6)
+    return params_native, inits_native, best_loss
 end
-=#
 
 function save_optlogger(optlogger, settings; fullfname_csv::String="optimization_history.csv")
     if settings.optimization_settings.save_optimization_history

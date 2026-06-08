@@ -365,6 +365,38 @@ end
 
 # OptLogEntry struct is defined in src/types/optimization_types.jl
 
+function best_optlogger_entry(optlogger::Vector{OptLogEntry};
+                              expected_params_len::Union{Nothing, Int}=nothing)
+    best_entry = nothing
+    best_loss = Inf
+
+    for entry in optlogger
+        isfinite(entry.loss) || continue
+        if expected_params_len !== nothing
+            entry.params === nothing && continue
+            length(entry.params) == expected_params_len || continue
+        end
+        if entry.loss < best_loss
+            best_loss = entry.loss
+            best_entry = entry
+        end
+    end
+
+    return best_entry
+end
+
+function effective_optimization_loss(optsol::SciMLBase.OptimizationSolution,
+                                     optlogger::Vector{OptLogEntry};
+                                     expected_params_len::Union{Nothing, Int}=nothing,
+                                     atol::Float64=1e-6)::Float64
+    best_entry = best_optlogger_entry(optlogger; expected_params_len=expected_params_len)
+    if best_entry !== nothing &&
+       (!isfinite(optsol.objective) || best_entry.loss < optsol.objective - atol)
+        return best_entry.loss
+    end
+    return optsol.objective
+end
+
 """
     LossTimingTracker(limit=10)
 

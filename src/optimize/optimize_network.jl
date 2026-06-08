@@ -86,9 +86,16 @@ function optimize_network(
             push!(failure_reasons, failure_reason)
         end
 
-        if optsol !== nothing && optsol.objective < best_loss
-            best_loss = optsol.objective
-            best_optsol = optsol
+        if optsol !== nothing
+            run_best_loss = ENEEGMA.effective_optimization_loss(
+                optsol,
+                runlog;
+                expected_params_len=length(tunables_lb),
+            )
+            if run_best_loss < best_loss
+                best_loss = run_best_loss
+                best_optsol = optsol
+            end
         end
         
         # Optionally save results for this restart
@@ -179,9 +186,14 @@ function singlerun_optimization(
         flush(stdout)
         
         # Check if final loss differs from best logged loss
-        if !isempty(optlogger)
-            best_logged_loss = minimum(entry.loss for entry in optlogger)
-            if abs(current_optsol.objective - best_logged_loss) > 1e-6
+        best_logged_entry = ENEEGMA.best_optlogger_entry(
+            optlogger;
+            expected_params_len=length(tunables_guess),
+        )
+        if best_logged_entry !== nothing
+            best_logged_loss = best_logged_entry.loss
+            if !isfinite(current_optsol.objective) ||
+               abs(current_optsol.objective - best_logged_loss) > 1e-6
                 vinfo("  ⚠ Best logged loss: $(round(best_logged_loss, digits=6)) (optimizer drifted from best)"; level=2)
             end
         end
