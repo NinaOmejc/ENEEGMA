@@ -743,16 +743,16 @@ mutable struct OptimizationSettings <: AbstractSettings
         raw_bound_scaling_level = get(optdict, "param_bound_scaling_level", nothing)
         param_bound_scaling_level = raw_bound_scaling_level === nothing ? "medium" : String(raw_bound_scaling_level)
         
-        # Get empirical bounds table path (defaults to grammars/empirical_parameter_values.csv)
+        # Get empirical bounds table path (defaults to grammars/canonical_models_param_ranges_by_paramtype.csv)
         # Uses universal path separators via joinpath for cross-platform compatibility
-        empirical_bounds_table_path = get(optdict, "empirical_bounds_table_path", joinpath("grammars", "empirical_parameter_values.csv"))
+        empirical_bounds_table_path = get(optdict, "empirical_bounds_table_path", joinpath("grammars", "canonical_models_param_ranges_by_paramtype.csv"))
         if empirical_bounds_table_path !== nothing
             empirical_bounds_table_path = String(empirical_bounds_table_path)
         end
         
         # Get empirical bounds column names (defaults to 5th/95th percentiles)
-        empirical_lower_bound_column = String(get(optdict, "empirical_lower_bound_column", "5perc"))
-        empirical_upper_bound_column = String(get(optdict, "empirical_upper_bound_column", "95perc"))
+        empirical_lower_bound_column = String(get(optdict, "empirical_lower_bound_column", "LCL"))
+        empirical_upper_bound_column = String(get(optdict, "empirical_upper_bound_column", "UCL"))
         
         save_optimization_history = _losssettings_as_bool(get(optdict, "save_optimization_history", false), false)
         save_modeled_psd = _losssettings_as_bool(get(optdict, "save_modeled_psd", false), false)
@@ -949,7 +949,7 @@ mutable struct PSDSettings <: AbstractSettings
         
         preproc_pipeline = String(get(psd_dict, "preproc_pipeline", "log10"))
         welch_window_sec = max(Float64(get(psd_dict, "welch_window_sec", 2.0)), 0.0)
-        welch_overlap = clamp(Float64(get(psd_dict, "welch_overlap", 0.1)), 0.0, 0.99)
+        welch_overlap = clamp(Float64(get(psd_dict, "welch_overlap", 0.2)), 0.0, 0.99)
         welch_nperseg = max(Int(get(psd_dict, "welch_nperseg", 0)), 0)
         welch_nfft = Int(get(psd_dict, "welch_nfft", 0))
         noise_avg_reps = max(Int(get(psd_dict, "noise_avg_reps", 1)), 1)

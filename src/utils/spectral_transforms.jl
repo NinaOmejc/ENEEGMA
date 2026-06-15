@@ -29,7 +29,7 @@ preprocessing pipelines. Designed for EEG and neural signal analysis.
 
 1. Load time series data into a DataFrame
 2. Compute preprocessed PSD: `compute_preprocessed_welch_psd(signal, fs; loss_settings=loss_settings, data_settings=data_settings)`
-3. Specify preprocessing via PSDSettings.preproc_pipeline or LossSettings.psd_preproc
+3. Specify preprocessing via `DataSettings.psd.preproc_pipeline` or the `preproc_pipeline` keyword
 4. Results include normalized/log-transformed power values
 5. For time-frequency analysis, use `compute_stft()` or `compute_cwt()`
 """
@@ -528,8 +528,8 @@ Convenience helper that:
 2. Applies the requested preprocessing pipeline (normalization/logging/smoothing)
 
 Set `preproc_pipeline` (e.g. "relative-log10-savgol" or "offset-log10") to explicitly
-control the preprocessing order. If omitted, the raw PSD is returned unless
-`loss_settings` supplies a pipeline string.
+control the preprocessing order. If omitted, `data_settings.psd.preproc_pipeline`
+is used when available; otherwise the raw PSD is returned.
 
 Returns `(freqs, smoothed_log_power)`.
 """
@@ -538,12 +538,10 @@ function compute_preprocessed_welch_psd(
     fs::Real;
     window_type::Function=DSP.hanning,
     xlims::Union{Tuple{Float64,Float64},Nothing}=(1., 48.),
-    nfft::Union{Int,Nothing}=2048,
     window_size::Int=5,
     poly_order::Int=2,
     rel_eps::Float64=1e-12,
     smooth_sigma::Float64=1.0,
-    overlap::Float64=0.1,
     preproc_pipeline::Union{Nothing, AbstractString}=nothing,
     loss_settings::Union{Nothing, LossSettings}=nothing,
     data_settings::Union{Nothing, DataSettings}=nothing,
@@ -554,7 +552,6 @@ function compute_preprocessed_welch_psd(
     len == 0 && return Float64[], Float64[]
     fs_val = Float64(fs)
     nperseg_val, nfft_val, overlap_val = ENEEGMA._resolve_welch_params(len, fs_val, data_settings)
-
     fspan = xlims
     pipeline_spec = preproc_pipeline
 
@@ -592,26 +589,14 @@ function compute_preprocessed_welch_psd(
     freqs = copy(freq_view)
     psd = copy(psd_view)
 
-    effective_spec = pipeline_spec
-    if effective_spec === nothing
-        effective_spec = loss_settings === nothing ? "none" : loss_settings.psd_preproc
-    end
+    effective_spec = pipeline_spec === nothing ? "none" : pipeline_spec
     canonical_spec = ENEEGMA._canonicalize_psd_preproc_string(effective_spec)
     if canonical_spec == "none"
         return freqs, psd
     end
 
-    ops = if loss_settings !== nothing && pipeline_spec === nothing
-        ENEEGMA._get_losssettings_psd_ops!(loss_settings,
-                                           canonical_spec,
-                                           ctx_window_size,
-                                           ctx_poly_order,
-                                           ctx_rel_eps,
-                                           ctx_sigma)
-    else
-        ctx = ENEEGMA.PSDPipelineContext(ctx_window_size, ctx_poly_order, ctx_rel_eps, ctx_sigma)
-        ENEEGMA.parse_psd_preproc_pipeline(canonical_spec, ctx)
-    end
+    ctx = ENEEGMA.PSDPipelineContext(ctx_window_size, ctx_poly_order, ctx_rel_eps, ctx_sigma)
+    ops = ENEEGMA.parse_psd_preproc_pipeline(canonical_spec, ctx)
     psd = ENEEGMA._run_psd_preproc_pipeline!(ws, psd, freqs, ops)
 
     return freqs, psd

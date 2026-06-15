@@ -356,9 +356,10 @@ Returns a vector or named tuple of initial state values, respecting init_min/ini
 """
 function sample_inits(network_vars::VarSet; subset::Vector{Num}=Num[], 
                      return_type::String="vector", sort::Bool=true,
-                     seed::Union{Int, Nothing}=nothing)
-    # Use provided seed or global RNG
-    rng = seed === nothing ? Random.GLOBAL_RNG : MersenneTwister(seed)
+                     seed::Union{Int, Nothing}=nothing,
+                     rng::Union{Nothing, AbstractRNG}=nothing)
+    # Use provided RNG, seed, or global default for backward compatibility.
+    local_rng = rng !== nothing ? rng : (seed === nothing ? Random.default_rng() : MersenneTwister(seed))
     
     # target only state variables
     state_syms = get_symbols(get_state_vars(network_vars); sort=true)
@@ -379,16 +380,16 @@ function sample_inits(network_vars::VarSet; subset::Vector{Num}=Num[],
         # Sample respecting bounds strictly
         if isfinite(v.init_min) && isfinite(v.init_max)
             # Both bounds finite: uniform in [init_min, init_max]
-            init = v.init_min + (v.init_max - v.init_min) * rand(rng)
+            init = v.init_min + (v.init_max - v.init_min) * rand(local_rng)
         elseif isfinite(v.init_min) && !isfinite(v.init_max)
             # Lower bound only: sample in [init_min, init_min + 10]
-            init = v.init_min + 10.0 * rand(rng)
+            init = v.init_min + 10.0 * rand(local_rng)
         elseif !isfinite(v.init_min) && isfinite(v.init_max)
             # Upper bound only: sample in [init_max - 10, init_max]
-            init = v.init_max - 10.0 * rand(rng)
+            init = v.init_max - 10.0 * rand(local_rng)
         else
             # Unbounded: standard normal
-            init = randn(rng)
+            init = randn(local_rng)
         end
         
         push!(names, Symbol(name(v)))

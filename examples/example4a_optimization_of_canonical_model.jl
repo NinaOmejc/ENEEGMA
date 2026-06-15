@@ -22,6 +22,7 @@ settings = create_default_settings();
 # Note that the column "time" should be in units of seconds for optimization to work correctly
 # ============================================================================
 print_settings_summary(settings; section="data_settings")
+settings.data_settings.psd.welch_overlap = 0.1
 data = prepare_data!(settings);
 
 # ============================================================================
@@ -60,6 +61,6 @@ set_all_params_tunable!(net.params);
 print_settings_summary(settings; section="optimization_settings")
 settings.optimization_settings.maxiters = 10 # set low for testing; increase for better optimization
 settings.optimization_settings.param_bound_scaling_level = "high"
-settings.optimization_settings.n_restarts = 3 # better chance for global optimum; increase for better optimization (but longer runtime)
+settings.optimization_settings.n_restarts = 1 # better chance for global optimum; increase for better optimization (but longer runtime)
 optsol, optlogger, setter, blocks = optimize_network(net, data, settings);
 

@@ -1,6 +1,9 @@
 
 # using Evolutionary, Optimization, Statistics, Distributions, Interpolations, Dates
 
+restart_rng(seed::Union{Nothing, Int}, irestart::Int) =
+    seed === nothing ? Random.default_rng() : MersenneTwister(seed + irestart)
+
 function optimize_network(
     net::Network,
     data::Data,
@@ -75,10 +78,12 @@ function optimize_network(
     for irestart = 1:os.n_restarts
 
         start_time = Dates.now()
+        restart_rng = ENEEGMA.restart_rng(settings.general_settings.seed, irestart)
         
         optsol, runlog, failure_reason = ENEEGMA.singlerun_optimization(irestart, optfun, optimizer, args, 
             tunable_params_symbols, tunables_lb, tunables_ub,
-            os, start_time, net, param_spec, init_spec, initial_values_native, inits_lb, inits_ub
+            os, start_time, net, param_spec, init_spec, initial_values_native, inits_lb, inits_ub,
+            restart_rng
         );
 
         append!(optlogger, runlog)
@@ -86,16 +91,9 @@ function optimize_network(
             push!(failure_reasons, failure_reason)
         end
 
-        if optsol !== nothing
-            run_best_loss = ENEEGMA.effective_optimization_loss(
-                optsol,
-                runlog;
-                expected_params_len=length(tunables_lb),
-            )
-            if run_best_loss < best_loss
-                best_loss = run_best_loss
-                best_optsol = optsol
-            end
+        if optsol !== nothing && optsol.objective < best_loss
+            best_loss = optsol.objective
+            best_optsol = optsol
         end
         
         # Optionally save results for this restart
@@ -145,7 +143,8 @@ function singlerun_optimization(
     init_spec::ReparamSpec,
     initial_values_native::Vector{Float64},
     inits_lb::Vector{Float64},
-    inits_ub::Vector{Float64}
+    inits_ub::Vector{Float64},
+    restart_rng::AbstractRNG
 )
 
     vinfo("\n[Restart $irestart/$(os.n_restarts)]"; level=1)
@@ -157,9 +156,9 @@ function singlerun_optimization(
                                    init_spec=init_spec)
 
     # Sample fresh parameter and initial values for this restart
-    tunable_params_guess = ENEEGMA.sample_param_values(net.params; p_subset=tunable_params_symbols, return_type="vector")
+    tunable_params_guess = ENEEGMA.sample_param_values(net.params; p_subset=tunable_params_symbols, return_type="vector", rng=restart_rng)
     tunable_params_guess = ENEEGMA.map_to_shared_space(tunable_params_guess, param_spec)
-    initial_values_guess_native = ENEEGMA.sample_inits(net.vars; return_type="vector", sort=true)
+    initial_values_guess_native = ENEEGMA.sample_inits(net.vars; return_type="vector", sort=true, rng=restart_rng)
     initial_values_guess = ENEEGMA.map_to_shared_space(initial_values_guess_native, init_spec)
     tunables_guess = vcat(tunable_params_guess, initial_values_guess)
 
@@ -176,7 +175,8 @@ function singlerun_optimization(
         current_optsol = Optimization.solve(optprob,
                                             optimizer;
                                             callback=callback_fun,
-                                            maxiters=os.maxiters
+                                            maxiters=os.maxiters,
+                                            rng=restart_rng
         )
 
         u_phys = materialize_logged_params(current_optsol.u, param_spec, init_spec)

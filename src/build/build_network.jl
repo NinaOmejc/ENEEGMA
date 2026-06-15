@@ -747,8 +747,13 @@ function export_network(net::Network)
     if "tex" in gs.save_model_formats
         eqs = vcat(net.dynamics, net.diffusion_dynamics)
         path_tex = joinpath(output_dir, "$(fname_out).tex")
-        transform2latex(eqs, show_plot=false, path_tex=path_tex)
-        vinfo("LaTeX equations exported to: $path_tex"; level=2)
+        try
+            transform2latex(eqs, show_plot=false, path_tex=path_tex)
+            vinfo("LaTeX equations exported to: $path_tex"; level=2)
+        catch e
+            error_msg = sprint(showerror, e)
+            vwarn("Failed to export LaTeX equations to $path_tex: $error_msg"; level=1)
+        end
     end
     if "txt" in gs.save_model_formats
         recipe_raw = net.settings.network_settings.node_models[1]

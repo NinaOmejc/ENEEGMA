@@ -1,0 +1,140 @@
+{
+  "general_settings": {
+    "exp_name": "example-exp",
+    "path_out": ".\\results",
+    "save_model_formats": [
+      "tex"
+    ],
+    "make_plots": true,
+    "verbosity_level": 1,
+    "seed": null
+  },
+  "network_settings": {
+    "name": "example-net",
+    "n_nodes": 1,
+    "node_names": [
+      "N1"
+    ],
+    "node_models": [
+      "MPR"
+    ],
+    "node_coords": [
+      [
+        0.0,
+        10.0,
+        0.0
+      ]
+    ],
+    "network_conn": [
+      [
+        0.0
+      ]
+    ],
+    "network_conn_funcs": [
+      [
+        ""
+      ]
+    ],
+    "network_delay": [
+      [
+        0.0
+      ]
+    ],
+    "sensory_input_conn": [
+      1
+    ],
+    "sensory_input_func": "rand(Normal(0.0, 1.0))",
+    "sensory_seed": null,
+    "init_seed": null,
+    "eeg_output": {}
+  },
+  "sampling_settings": {
+    "grammar_file": "c:\\Users\\NinaO\\.julia\\dev\\ENEEGMA\\grammars\\default_grammar.cfg",
+    "n_samples": 10,
+    "only_unique": true,
+    "grammar_seed": null,
+    "legacy_poly_input_scaling": false
+  },
+  "simulation_settings": {
+    "tspan": [
+      0.0,
+      59.99609375
+    ],
+    "dt": 0.0001,
+    "saveat": 0.00390625,
+    "abstol": null,
+    "reltol": null,
+    "solver": "Tsit5",
+    "maxiters": null
+  },
+  "data_settings": {
+    "data_file": "c:\\Users\\NinaO\\.julia\\dev\\ENEEGMA\\examples\\example_data_rest.csv",
+    "target_channel": "IC3",
+    "task_type": "rest",
+    "fs": 256.0,
+    "data_columns": null,
+    "estimate_measurement_noise": true,
+    "spectral_roi_definition_mode": "manual",
+    "spectral_roi_auto_peak_sensitivity": 0.3,
+    "spectral_roi_manual": {
+      "N1": [
+        [
+          7.5,
+          14.0
+        ]
+      ]
+    },
+    "psd": {
+      "preproc_pipeline": "log10",
+      "welch_window_sec": 2.0,
+      "welch_overlap": 0.1,
+      "welch_nperseg": 0,
+      "welch_nfft": 0,
+      "noise_avg_reps": 1,
+      "window_size": 5,
+      "smooth_poly_order": 2,
+      "rel_eps": 1.0e-12,
+      "smooth_sigma": 1.0,
+      "transient_period_duration": 2.0,
+      "noise_seed": 42
+    }
+  },
+  "optimization_settings": {
+    "method": "CMAES",
+    "param_bound_scaling_level": "medium",
+    "save_optimization_history": false,
+    "save_modeled_psd": false,
+    "include_settings_in_results_output": true,
+    "reparametrize": true,
+    "n_restarts": 1,
+    "maxiters": 100000,
+    "time_limit_minutes": 120,
+    "loss_settings": {
+      "fmin": 1.0,
+      "fmax": 45.0,
+      "roi_weight": 1.0,
+      "bg_weight": 1.0,
+      "loss_abstol": 0.001,
+      "loss_reltol": 0.001,
+      "abs_target_loss": 0.01
+    },
+    "optimizer_settings": {
+      "population_size": -1,
+      "sigma0": -1.0
+    },
+    "hyperparameter_sweep": {
+      "optimization_settings.param_bound_scaling_level": [
+        "medium",
+        "high"
+      ],
+      "optimization_settings.optimizer_settings.sigma0": [
+        2.0,
+        8.0
+      ],
+      "optimization_settings.optimizer_settings.population_size": [
+        100,
+        150
+      ]
+    }
+  }
+}

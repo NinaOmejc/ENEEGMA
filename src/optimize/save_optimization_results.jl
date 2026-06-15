@@ -20,7 +20,9 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     loss_settings = optimization_settings.loss_settings
 
     blocks = blocks === nothing ? ENEEGMA.prepare_optimization_blocks(net, optimization_settings) : blocks
-    params_native, inits_native, best_loss = ENEEGMA.best_params_inits(optsol, optlogger, blocks)
+    params_native, inits_native, best_loss, result = ENEEGMA.verified_best_params_inits(
+        optsol, optlogger, blocks, setter, net, data, settings
+    )
     param_range_entries, init_range_entries = ENEEGMA.native_range_entries(net, blocks)
 
     # Use provided optimization output directory, or construct from settings
@@ -44,15 +46,6 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     # Save optlogger CSV to main optimization folder
     ENEEGMA.save_optlogger(optlogger, settings; fullfname_csv=joinpath(optimization_path, "$(base_prefix)_optlogger.csv"))
 
-    # Simulate and evaluate model with best parameters using centralized evaluate_model function
-    opt_params = setter(net.problem.p, params_native);
-
-    result = ENEEGMA.evaluate_model(
-        net, opt_params, inits_native, data, settings;
-        evaluation_metrics=["weighted_mae", "r2", "weighted_iae"],
-        demean=true
-    );
-    
     if !result.success
         vwarn("Failed to simulate model with best parameters: $(result.error_msg)"; level=2)
         vwarn("Skipping plot and modeled-PSD outputs, but saving optimization metadata and JSON."; level=2)
@@ -237,20 +230,80 @@ function best_params_inits(optsol::SciMLBase.OptimizationSolution,
     decoded_solution = materialize_logged_params(optsol.u, blocks.param_spec, blocks.init_spec)
     params_native = decoded_solution[1:n_params]
     inits_native = decoded_solution[n_params + 1 : n_params + n_state_vars]
-    best_loss = Float64(optsol.objective)
+    return params_native, inits_native, Float64(optsol.objective)
+end
 
-    best_optlog_iter = ENEEGMA.best_optlogger_entry(
-        optlogger;
-        expected_params_len=n_params + n_state_vars,
+function verified_best_params_inits(optsol::SciMLBase.OptimizationSolution,
+                                    optlogger::Vector{OptLogEntry},
+                                    blocks,
+                                    setter::Function,
+                                    net::Network,
+                                    data::Data,
+                                    settings::Settings)
+    params_native, inits_native, best_loss = ENEEGMA.best_params_inits(optsol, optlogger, blocks)
+    best_result = ENEEGMA.evaluate_optimization_candidate(
+        net, setter, params_native, inits_native, data, settings
     )
-    if best_optlog_iter !== nothing &&
-       (!isfinite(optsol.objective) || best_optlog_iter.loss < optsol.objective - 1e-6)
-        params_native = best_optlog_iter.params[1:n_params]
-        inits_native = best_optlog_iter.params[n_params + 1 : n_params + n_state_vars]
-        best_loss = best_optlog_iter.loss
-        vinfo("Using best logged parameters (loss=$(round(best_optlog_iter.loss, digits=6))) instead of optsol.u (loss=$(round(optsol.objective, digits=6)))"; level=2)
+    best_recomputed_loss = ENEEGMA.recomputed_candidate_loss(best_result)
+
+    n_params = length(blocks.param_spec)
+    n_state_vars = length(blocks.init_spec)
+    expected_params_len = n_params + n_state_vars
+    candidate_entries = OptLogEntry[]
+    best_logged_loss = Float64(optsol.objective)
+
+    for entry in optlogger
+        isfinite(entry.loss) || continue
+        entry.params === nothing && continue
+        length(entry.params) == expected_params_len || continue
+        if !isfinite(best_logged_loss) || entry.loss < best_logged_loss - 1e-6
+            push!(candidate_entries, entry)
+            best_logged_loss = entry.loss
+        end
     end
-    return params_native, inits_native, best_loss
+    sort!(candidate_entries, by=entry -> entry.loss)
+
+    for entry in candidate_entries
+        candidate_params = entry.params[1:n_params]
+        candidate_inits = entry.params[n_params + 1 : n_params + n_state_vars]
+        candidate_result = ENEEGMA.evaluate_optimization_candidate(
+            net, setter, candidate_params, candidate_inits, data, settings
+        )
+        candidate_recomputed_loss = ENEEGMA.recomputed_candidate_loss(candidate_result)
+
+        if candidate_recomputed_loss < best_recomputed_loss - 1e-6
+            params_native = candidate_params
+            inits_native = candidate_inits
+            best_loss = entry.loss
+            best_result = candidate_result
+            best_recomputed_loss = candidate_recomputed_loss
+            vinfo("Using verified logged parameters (logged loss=$(round(entry.loss, digits=6)), recomputed loss=$(round(candidate_recomputed_loss, digits=6))) instead of optsol.u (loss=$(round(optsol.objective, digits=6)))"; level=2)
+        else
+            vinfo("Rejected logged parameters with loss=$(round(entry.loss, digits=6)); recomputed loss=$(round(candidate_recomputed_loss, digits=6)) is not better than saved loss=$(round(best_recomputed_loss, digits=6))"; level=2)
+        end
+    end
+
+    return params_native, inits_native, best_loss, best_result
+end
+
+function evaluate_optimization_candidate(net::Network,
+                                         setter::Function,
+                                         params_native::AbstractVector,
+                                         inits_native::AbstractVector,
+                                         data::Data,
+                                         settings::Settings)
+    opt_params = setter(net.problem.p, params_native)
+    return ENEEGMA.evaluate_model(
+        net, opt_params, inits_native, data, settings;
+        evaluation_metrics=["weighted_mae", "r2", "weighted_iae"],
+        demean=true
+    )
+end
+
+function recomputed_candidate_loss(result)::Float64
+    result.success || return Inf
+    loss_values = ENEEGMA._evaluation_metric_vector(result.metrics, result.node_names, "weighted_mae")
+    return isempty(loss_values) ? Inf : Statistics.mean(loss_values)
 end
 
 function save_optlogger(optlogger, settings; fullfname_csv::String="optimization_history.csv")

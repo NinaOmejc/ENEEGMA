@@ -912,7 +912,8 @@ end
 
 function sample_param_values(paramset::ParamSet; 
                              p_subset::Vector{<:Union{Num, Symbol}}=Num[], 
-                             return_type::String="named_tuple")
+                             return_type::String="named_tuple",
+                             rng::AbstractRNG=Random.default_rng())
  
     param_symbols = get_symbols(paramset, sort=true)
 
@@ -949,7 +950,7 @@ function sample_param_values(paramset::ParamSet;
         p_min = isinf(p.min) ? -5.0 : p.min
         p_max = isinf(p.max) ? 5.0 : p.max
         
-        push!(p_values, rand() * (p_max - p_min) + p_min)
+        push!(p_values, rand(rng) * (p_max - p_min) + p_min)
     end
 
     if return_type == "named_tuple"
