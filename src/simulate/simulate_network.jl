@@ -165,14 +165,32 @@ end
 
 function safe_solve(prob::SciMLBase.AbstractDEProblem, solver::SciMLBase.AbstractDEAlgorithm; solver_kwargs::NamedTuple=NamedTuple())::SciMLBase.AbstractODESolution
     
-    # Create callbacks for unstable detection
+    #=     # Create callbacks for unstable detection
     unstable_condition(u, t, integ) =
         any(isnan, u) || any(isinf, u) || any(abs.(u) .> 1e6)
     cb_unstable = DiscreteCallback(unstable_condition, terminate!)
 
     badstep_condition(u, t, integ) = integ.dt < 1e-10
     cb_badstep = DiscreteCallback(badstep_condition, terminate!)
-  
+    =#
+    unstable_condition(u, t, integ) =
+        any(isnan, u) || any(isinf, u) || any(abs.(u) .> 1e6)
+
+    function unstable_affect!(integ)
+        @warn "safe_solve terminating: unstable state" t=integ.t dt=integ.dt maxabs=maximum(abs, integ.u) any_nan=any(isnan, integ.u) any_inf=any(isinf, integ.u)
+        terminate!(integ)
+    end
+
+    cb_unstable = DiscreteCallback(unstable_condition, unstable_affect!)
+
+    badstep_condition(u, t, integ) = integ.dt < 1e-10
+
+    function badstep_affect!(integ)
+        @warn "safe_solve terminating: bad step size" t=integ.t dt=integ.dt maxabs=maximum(abs, integ.u)
+        terminate!(integ)
+    end
+
+    cb_badstep = DiscreteCallback(badstep_condition, badstep_affect!)
     return Logging.with_logger(QUIET_SOLVER_LOGGER) do
         solve(prob, solver; callback=CallbackSet(cb_unstable, cb_badstep), solver_kwargs..., maxiters=1_000_000)
     end

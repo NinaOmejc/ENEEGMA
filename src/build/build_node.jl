@@ -289,19 +289,17 @@ function _set_pop_from_grammar(parsed_rules::Vector{ParsedRule}, ip::Int, node::
 
     # Resolve connection functions (CF/SCF) with custom fallback
     resolveCF(x::AbstractString, custom) = (x == "custom" || isempty(x)) ? custom : x
-    customCF = ENEEGMA._get_parsed_rule_by_lhs(parsed_rules, "CF"; order=1).rhs
+    custom_cf_rule = ENEEGMA._get_parsed_rule_by_lhs(parsed_rules, "CF"; order=1)
+    customCF = custom_cf_rule.rhs
+    pop_rules = ENEEGMA._get_parsed_rule_by_lhs(parsed_rules, "Pop")
     scf_rules = ENEEGMA._get_parsed_rule_by_lhs(parsed_rules, "SCF")  # ::Vector{ParsedRule}
     get_scf_rhs(i) = i <= length(scf_rules) ? scf_rules[i].rhs : "custom"
 
     # Pop block: locate the ip-th PopN rule in the parsed derivation
     pop_name = "P$(ip)"
-    pop_rule = ENEEGMA._get_parsed_rule_by_lhs(parsed_rules, "Pop"; order=ip)
+    pop_rule = pop_rules[ip]
     pop_rule_pos_start = pop_rule.pos
-    pop_rule_pos_end = try
-        ENEEGMA._get_parsed_rule_by_lhs(parsed_rules, "Pop"; order=ip+1).pos
-    catch
-        ENEEGMA._get_parsed_rule_by_lhs(parsed_rules, "CF"; order=1).pos
-    end
+    pop_rule_pos_end = ip < length(pop_rules) ? pop_rules[ip + 1].pos : custom_cf_rule.pos
     pop_parsed_rules = parsed_rules[pop_rule_pos_start:pop_rule_pos_end-1]
 
 
