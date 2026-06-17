@@ -8,61 +8,131 @@ LOSSES - Module containing loss functions and
 
 # Main function that takes the loss function as an argument
 """
-    get_metric_function(metric_name::Union{String, Symbol}="weighted_mae")::Function
+    get_metric_function(loss_settings::LossSettings)::Function
 
-Returns the specified metric function.
+Returns the metric function based on loss_settings.loss_function.
 
-Supports:
-- "weighted_mae": Unified region-weighted mean absolute error loss
-- "weighted_iae": Integrated absolute error with region weighting
+Supports canonical names:
+- "spectrum_mae": Uniform MAE over all frequency bins
+- "region_weighted_spectrum_mae": ROI/background weighted MAE
+- "spectrum_iae": Uniform IAE over all frequency bins
+- "region_weighted_spectrum_iae": ROI/background weighted IAE
+
+Also supports backward-compatible aliases:
+- "mae", "fsmae" → "spectrum_mae"
+- "weighted_mae", "weighted_fsmae" → "region_weighted_spectrum_mae"
+- "iae" → "spectrum_iae"
+- "weighted_iae" → "region_weighted_spectrum_iae"
 
 # Arguments
-- `metric_name::Union{String, Symbol}`: Metric name
+- `loss_settings::LossSettings`: Loss configuration
 
 # Returns
 - `metric_function`: The requested metric function
 """
+function get_metric_function(loss_settings::LossSettings)::Function
+    canonical_name = _canonical_metric_name(loss_settings.loss_function)
+
+    if canonical_name == "spectrum_mae"
+        return spectrum_mae
+    elseif canonical_name == "region_weighted_spectrum_mae"
+        return region_weighted_spectrum_mae
+    elseif canonical_name == "spectrum_iae"
+        return spectrum_iae
+    elseif canonical_name == "region_weighted_spectrum_iae"
+        return region_weighted_spectrum_iae
+    else
+        error("Unknown metric: $canonical_name")
+    end
+end
+
+
+"""
+    _canonical_metric_name(metric_name::Union{String, Symbol})::String
+
+Map loss function names (canonical and aliases) to canonical names.
+
+Canonical names:
+- "spectrum_mae": Uniform MAE over all frequency bins
+- "region_weighted_spectrum_mae": ROI/background weighted MAE
+- "spectrum_iae": Uniform IAE over all frequency bins
+- "region_weighted_spectrum_iae": ROI/background weighted IAE
+
+Backward-compatible aliases:
+- "mae", "fsmae" → "spectrum_mae"
+- "weighted_mae", "weighted_fsmae" → "region_weighted_spectrum_mae"
+- "iae" → "spectrum_iae"
+- "weighted_iae" → "region_weighted_spectrum_iae"
+
+# Arguments
+- `metric_name::Union{String, Symbol}`: Metric name (canonical or alias)
+
+# Returns
+- `String`: Canonical metric name
+"""
 function _canonical_metric_name(metric_name::Union{String, Symbol})::String
     metric_key = lowercase(String(metric_name))
 
-    if metric_key == "weighted_mae"
-        return "weighted_mae"
-    elseif metric_key == "weighted_iae"
-        return "weighted_iae"
+    # Canonical names
+    if metric_key in ("spectrum_mae", "spectrum_iae", "region_weighted_spectrum_mae", "region_weighted_spectrum_iae")
+        return metric_key
+    end
+    
+    # Backward-compatible aliases for spectrum_mae
+    if metric_key in ("mae", "fsmae")
+        return "spectrum_mae"
+    end
+    
+    # Backward-compatible aliases for region_weighted_spectrum_mae
+    if metric_key in ("weighted_mae", "weighted_fsmae")
+        return "region_weighted_spectrum_mae"
+    end
+    
+    # Backward-compatible aliases for spectrum_iae
+    if metric_key == "iae"
+        return "spectrum_iae"
+    end
+    
+    # Backward-compatible aliases for region_weighted_spectrum_iae
+    if metric_key == "weighted_iae"
+        return "region_weighted_spectrum_iae"
     end
 
-    error("Unknown metric: $metric_name. Supported: weighted_mae, weighted_iae")
-end
-
-function get_metric_function(metric_name::Union{String, Symbol}="weighted_mae")::Function
-    canonical_metric_name = _canonical_metric_name(metric_name)
-
-    if canonical_metric_name == "weighted_mae"
-        return weighted_mae
-    elseif canonical_metric_name == "weighted_iae"
-        return weighted_iae
-    end
+    error("Unknown metric: $metric_name. Supported: spectrum_mae, spectrum_iae, region_weighted_spectrum_mae, region_weighted_spectrum_iae (and aliases)")
 end
 
 
 """
-    get_loss_function()::Function
+    get_loss_function(loss_settings::LossSettings)::Function
 
-Returns the unified loss function wrapped with compute_loss for optimization.
+Returns the loss function wrapper based on loss_settings.
 
-Since all loss computations now use the unified region-weighted MAE approach,
-this function returns a single loss wrapper regardless of input.
+The returned function computes loss by:
+1. Solving the ODE with current parameters
+2. Extracting model predictions
+3. Computing PSDs (power spectral densities)
+4. Applying the specified loss function (from loss_settings.loss_function)
+
+Supported loss functions:
+- "spectrum_mae": Uniform MAE over all frequency bins (ignores ROI/background masks)
+- "region_weighted_spectrum_mae": ROI/background weighted MAE (uses roi_weight/bg_weight)
+- "spectrum_iae": Uniform IAE over all frequency bins (ignores ROI/background masks)
+- "region_weighted_spectrum_iae": ROI/background weighted IAE (uses roi_weight/bg_weight)
+
+# Arguments
+- `loss_settings::LossSettings`: Loss configuration
 
 # Returns
-- `loss_function`: Function that computes weighted MAE loss with optimization checks
+- `loss_function`: Function that computes loss
 """
-function get_loss_function()::Function
-    return (x, p) -> compute_loss(x, p, ENEEGMA.weighted_mae)
+function get_loss_function(loss_settings::LossSettings)::Function
+    metric_fun = ENEEGMA.get_metric_function(loss_settings)
+    return (x, p) -> compute_loss(x, p, metric_fun, loss_settings)
 end
 
 
 """
-    compute_loss(x, p, loss_fun::Function)
+    compute_loss(x, p, loss_fun::Function, loss_settings::LossSettings)
 
 Generic loss computation framework that handles parameter updating, ODE solving, 
 and error detection, then applies a specific metric function to calculate the final loss.
@@ -71,11 +141,12 @@ and error detection, then applies a specific metric function to calculate the fi
 - `x`: Parameter vector
 - `p`: Tuple containing (prob, simulation_settings, data, setter, diffcache, solver, freq_range_idx)
 - `loss_fun`: Function that calculates the specific metric between true and predicted data
+- `loss_settings`: LossSettings object (may be used by loss_fun for region weighting, etc.)
 
 # Returns
 - `loss`: Computed loss value
 """
-function compute_loss(new_params, args, metric_fun::Function)
+function compute_loss(new_params, args, metric_fun::Function, loss_settings::LossSettings)
 
     net           = args.net
     settings      = args.settings
@@ -580,6 +651,28 @@ function _combine_region_metrics(roi_metric::Real, bg_metric::Real, pm)
     return (roi_weight * Float64(roi_metric) + bg_weight * Float64(bg_metric)) / total_weight
 end
 
+function _uniform_node_mae(aligned_model::AbstractVector{<:Real}, node_info::NodeData)
+    """
+    Compute uniform MAE over all frequency bins (ignores ROI/background masks).
+    """
+    abs_diff = abs.(node_info.powers .- aligned_model)
+    return Statistics.mean(abs_diff)
+end
+
+function _uniform_node_iae(aligned_model::AbstractVector{<:Real}, node_info::NodeData)
+    """
+    Compute uniform IAE over all frequency bins (ignores ROI/background masks).
+    """
+    freqs = node_info.freqs
+    if length(freqs) <= 1
+        return 0.0
+    end
+    
+    abs_diff = abs.(node_info.powers .- aligned_model)
+    trap = 0.5 .* (abs_diff[1:end-1] .+ abs_diff[2:end]) .* diff(freqs)
+    return sum(trap)
+end
+
 function _weighted_node_mae(aligned_model::AbstractVector{<:Real}, node_info::NodeData)
     abs_diff = abs.(node_info.powers .- aligned_model)
     pm = node_info.freq_peak_metadata
@@ -626,8 +719,162 @@ function _weighted_node_iae(aligned_model::AbstractVector{<:Real}, node_info::No
     return _combine_region_metrics(roi_iae, bg_iae, pm)
 end
 
+# ============================================================================
+# CANONICAL LOSS FUNCTION IMPLEMENTATIONS
+# ============================================================================
+
+"""
+    spectrum_mae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings, data_settings::Union{Nothing, DataSettings}=nothing)
+
+Uniform mean absolute error over all frequency bins.
+
+Computes MAE between model and target PSDs with **equal weight for all frequency bins**.
+Ignores ROI/background masks and roi_weight/bg_weight settings.
+
+For each node:
+1. Extracts the node's model prediction from the dict
+2. Computes model PSD from that prediction
+3. Computes MAE between model and target PSDs (all bins equally weighted)
+4. Averages losses across all nodes
+
+# Arguments
+- `model_predictions::Dict{String, Vector{Float64}}`: Per-node time-domain model predictions
+- `data::Data`: Target data with node_data dict
+- `loss_settings::LossSettings`: Contains PSD settings (roi_weight and bg_weight are IGNORED)
+- `data_settings::Union{Nothing, DataSettings}`: Optional data settings
+
+# Returns
+- `Float64`: Averaged uniform MAE loss across all nodes
+
+# Note
+This is the correct loss function to use when you want equal weighting across all frequency bins.
+If you want to emphasize spectral regions (e.g., alpha band), use region_weighted_spectrum_mae.
+"""
+function spectrum_mae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings,
+                     data_settings::Union{Nothing, DataSettings}=nothing)
+    _, aligned_psd_dict = _compute_model_psd_dict(model_predictions, data, loss_settings, data_settings)
+
+    node_losses = Float64[]
+    for (node_name, node_info) in data.node_data
+        push!(node_losses, _uniform_node_mae(aligned_psd_dict[node_name], node_info))
+    end
+
+    return Statistics.mean(node_losses)
+end
+
+"""
+    spectrum_iae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings, data_settings::Union{Nothing, DataSettings}=nothing)
+
+Uniform integrated absolute error over all frequency bins.
+
+Computes IAE between model and target PSDs with **equal weight for all frequency bins**.
+Ignores ROI/background masks and roi_weight/bg_weight settings.
+
+# Arguments
+- `model_predictions::Dict{String, Vector{Float64}}`: Per-node time-domain model predictions
+- `data::Data`: Target data with node_data dict
+- `loss_settings::LossSettings`: Contains PSD settings (roi_weight and bg_weight are IGNORED)
+- `data_settings::Union{Nothing, DataSettings}`: Optional data settings
+
+# Returns
+- `Float64`: Averaged uniform IAE loss across all nodes
+
+# Note
+This is the correct loss function to use when you want equal weighting across all frequency bins.
+If you want to emphasize spectral regions (e.g., alpha band), use region_weighted_spectrum_iae.
+"""
+function spectrum_iae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings,
+                     data_settings::Union{Nothing, DataSettings}=nothing)
+    _, aligned_psd_dict = _compute_model_psd_dict(model_predictions, data, loss_settings, data_settings)
+
+    node_iaes = Float64[]
+    for (node_name, node_info) in data.node_data
+        push!(node_iaes, _uniform_node_iae(aligned_psd_dict[node_name], node_info))
+    end
+
+    return Statistics.mean(node_iaes)
+end
+
+"""
+    region_weighted_spectrum_mae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings, data_settings::Union{Nothing, DataSettings}=nothing)
+
+ROI/background weighted mean absolute error over frequency bins.
+
+Computes MAE between model and target PSDs with region-based weighting.
+Uses roi_weight and bg_weight from loss_settings to balance emphasis between spectral regions.
+
+For each node:
+1. Extracts the node's model prediction from the dict
+2. Computes model PSD from that prediction
+3. Computes MAE between model and target PSDs
+4. Applies region-based weighting (ROI vs background) using roi_weight and bg_weight
+5. Averages losses across all nodes
+
+# Arguments
+- `model_predictions::Dict{String, Vector{Float64}}`: Per-node time-domain model predictions
+- `data::Data`: Target data with node_data dict containing per-node freq_peak_metadata
+- `loss_settings::LossSettings`: Contains PSD settings, roi_weight, and bg_weight
+- `data_settings::Union{Nothing, DataSettings}`: Optional data settings
+
+# Returns
+- `Float64`: Averaged region-weighted MAE loss across all nodes
+
+# Note
+The region weights do NOT make all frequency bins equally weighted. Instead, they weight
+entire spectral regions. For example, roi_weight==bg_weight gives equal total weight to the
+ROI region and background region, but ROI frequencies still get more weight per bin if the 
+ROI region is narrower than the background. Use spectrum_mae for true equal bin weighting.
+"""
+function region_weighted_spectrum_mae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings,
+                                     data_settings::Union{Nothing, DataSettings}=nothing)
+    _, aligned_psd_dict = _compute_model_psd_dict(model_predictions, data, loss_settings, data_settings)
+
+    node_losses = Float64[]
+    for (node_name, node_info) in data.node_data
+        push!(node_losses, _weighted_node_mae(aligned_psd_dict[node_name], node_info))
+    end
+
+    return Statistics.mean(node_losses)
+end
+
+"""
+    region_weighted_spectrum_iae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings, data_settings::Union{Nothing, DataSettings}=nothing)
+
+ROI/background weighted integrated absolute error over frequency bins.
+
+Computes IAE between model and target PSDs with region-based weighting.
+Uses roi_weight and bg_weight from loss_settings to balance emphasis between spectral regions.
+
+# Arguments
+- `model_predictions::Dict{String, Vector{Float64}}`: Per-node time-domain model predictions
+- `data::Data`: Target data with node_data dict containing per-node freq_peak_metadata
+- `loss_settings::LossSettings`: Contains PSD settings, roi_weight, and bg_weight
+- `data_settings::Union{Nothing, DataSettings}`: Optional data settings
+
+# Returns
+- `Float64`: Averaged region-weighted IAE loss across all nodes
+
+# Note
+See region_weighted_spectrum_mae for discussion of region weighting behavior.
+"""
+function region_weighted_spectrum_iae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings,
+                                     data_settings::Union{Nothing, DataSettings}=nothing)
+    _, aligned_psd_dict = _compute_model_psd_dict(model_predictions, data, loss_settings, data_settings)
+
+    node_iaes = Float64[]
+    for (node_name, node_info) in data.node_data
+        push!(node_iaes, _weighted_node_iae(aligned_psd_dict[node_name], node_info))
+    end
+
+    return Statistics.mean(node_iaes)
+end
+
 """
     weighted_mae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings)
+
+BACKWARD COMPATIBILITY ALIAS: region_weighted_spectrum_mae
+
+This function is deprecated in favor of the more explicit region_weighted_spectrum_mae.
 
 Unified frequency-domain MAE loss with per-node, region-based weighting.
 
@@ -652,14 +899,8 @@ If no metadata is available, defaults to uniform (unweighted) MAE.
 """
 function weighted_mae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings,
                       data_settings::Union{Nothing, DataSettings}=nothing)
-    _, aligned_psd_dict = _compute_model_psd_dict(model_predictions, data, loss_settings, data_settings)
-
-    node_losses = Float64[]
-    for (node_name, node_info) in data.node_data
-        push!(node_losses, _weighted_node_mae(aligned_psd_dict[node_name], node_info))
-    end
-
-    return Statistics.mean(node_losses)
+    # Backward-compatibility alias for region_weighted_spectrum_mae
+    return region_weighted_spectrum_mae(model_predictions, data, loss_settings, data_settings)
 end
 
 function weighted_mae(model_predictions::Dict{String, Vector{Float64}}, data::Data, fs, loss_settings::LossSettings, 
@@ -677,16 +918,17 @@ function weighted_mae(df_sources::DataFrame, data::Data, fs, loss_settings::Loss
     return weighted_mae(df_sources, data, loss_settings, data_settings)
 end
 
+"""
+    weighted_iae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings)
+
+BACKWARD COMPATIBILITY ALIAS: region_weighted_spectrum_iae
+
+This function is deprecated in favor of the more explicit region_weighted_spectrum_iae.
+"""
 function weighted_iae(model_predictions::Dict{String, Vector{Float64}}, data::Data, loss_settings::LossSettings,
                       data_settings::Union{Nothing, DataSettings}=nothing)
-    _, aligned_psd_dict = _compute_model_psd_dict(model_predictions, data, loss_settings, data_settings)
-
-    node_iaes = Float64[]
-    for (node_name, node_info) in data.node_data
-        push!(node_iaes, _weighted_node_iae(aligned_psd_dict[node_name], node_info))
-    end
-
-    return Statistics.mean(node_iaes)
+    # Backward-compatibility alias for region_weighted_spectrum_iae
+    return region_weighted_spectrum_iae(model_predictions, data, loss_settings, data_settings)
 end
 
 function weighted_iae(model_predictions::Dict{String, Vector{Float64}}, data::Data, fs, loss_settings::LossSettings,
@@ -702,6 +944,70 @@ end
 function weighted_iae(df_sources::DataFrame, data::Data, fs, loss_settings::LossSettings,
                       data_settings::Union{Nothing, DataSettings}=nothing)
     return weighted_iae(df_sources, data, loss_settings, data_settings)
+end
+
+# Overload variants for spectrum_mae
+function spectrum_mae(model_predictions::Dict{String, Vector{Float64}}, data::Data, fs, loss_settings::LossSettings,
+                     data_settings::Union{Nothing, DataSettings}=nothing)
+    return spectrum_mae(model_predictions, data, loss_settings, data_settings)
+end
+
+function spectrum_mae(df_sources::DataFrame, data::Data, loss_settings::LossSettings,
+                     data_settings::Union{Nothing, DataSettings}=nothing)
+    return spectrum_mae(_source_dataframe_to_dict(df_sources), data, loss_settings, data_settings)
+end
+
+function spectrum_mae(df_sources::DataFrame, data::Data, fs, loss_settings::LossSettings,
+                     data_settings::Union{Nothing, DataSettings}=nothing)
+    return spectrum_mae(df_sources, data, loss_settings, data_settings)
+end
+
+# Overload variants for spectrum_iae
+function spectrum_iae(model_predictions::Dict{String, Vector{Float64}}, data::Data, fs, loss_settings::LossSettings,
+                     data_settings::Union{Nothing, DataSettings}=nothing)
+    return spectrum_iae(model_predictions, data, loss_settings, data_settings)
+end
+
+function spectrum_iae(df_sources::DataFrame, data::Data, loss_settings::LossSettings,
+                     data_settings::Union{Nothing, DataSettings}=nothing)
+    return spectrum_iae(_source_dataframe_to_dict(df_sources), data, loss_settings, data_settings)
+end
+
+function spectrum_iae(df_sources::DataFrame, data::Data, fs, loss_settings::LossSettings,
+                     data_settings::Union{Nothing, DataSettings}=nothing)
+    return spectrum_iae(df_sources, data, loss_settings, data_settings)
+end
+
+# Overload variants for region_weighted_spectrum_mae
+function region_weighted_spectrum_mae(model_predictions::Dict{String, Vector{Float64}}, data::Data, fs, loss_settings::LossSettings,
+                                     data_settings::Union{Nothing, DataSettings}=nothing)
+    return region_weighted_spectrum_mae(model_predictions, data, loss_settings, data_settings)
+end
+
+function region_weighted_spectrum_mae(df_sources::DataFrame, data::Data, loss_settings::LossSettings,
+                                     data_settings::Union{Nothing, DataSettings}=nothing)
+    return region_weighted_spectrum_mae(_source_dataframe_to_dict(df_sources), data, loss_settings, data_settings)
+end
+
+function region_weighted_spectrum_mae(df_sources::DataFrame, data::Data, fs, loss_settings::LossSettings,
+                                     data_settings::Union{Nothing, DataSettings}=nothing)
+    return region_weighted_spectrum_mae(df_sources, data, loss_settings, data_settings)
+end
+
+# Overload variants for region_weighted_spectrum_iae
+function region_weighted_spectrum_iae(model_predictions::Dict{String, Vector{Float64}}, data::Data, fs, loss_settings::LossSettings,
+                                     data_settings::Union{Nothing, DataSettings}=nothing)
+    return region_weighted_spectrum_iae(model_predictions, data, loss_settings, data_settings)
+end
+
+function region_weighted_spectrum_iae(df_sources::DataFrame, data::Data, loss_settings::LossSettings,
+                                     data_settings::Union{Nothing, DataSettings}=nothing)
+    return region_weighted_spectrum_iae(_source_dataframe_to_dict(df_sources), data, loss_settings, data_settings)
+end
+
+function region_weighted_spectrum_iae(df_sources::DataFrame, data::Data, fs, loss_settings::LossSettings,
+                                     data_settings::Union{Nothing, DataSettings}=nothing)
+    return region_weighted_spectrum_iae(df_sources, data, loss_settings, data_settings)
 end
 
 function weighted_iae(model_psd::Vector{Float64}, target_psd::Vector{Float64},

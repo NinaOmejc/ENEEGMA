@@ -133,6 +133,51 @@ function normalize_bound_policy(policy::Union{String, Symbol})::String
 end
 
 """
+    _infer_policy_from_models(network_settings::NetworkSettings)::String
+
+Infer the appropriate bounds policy based on node model types.
+
+Strategy:
+- If ANY node is a simple string (no grammar syntax), treat as canonical and use "scaled_defaults"
+- If ALL nodes contain grammar syntax ('{', '}', '|', etc.) or are RuleTree objects, use "named_table_level"
+
+Canonical models have well-defined defaults with known multipliers.
+Recipe models (with grammar syntax or RuleTree) may need custom bounds from a table.
+
+# Arguments
+- `network_settings::NetworkSettings`: Network configuration with node_models
+
+# Returns
+- `String`: "scaled_defaults" (canonical or simple models) or "named_table_level" (recipes)
+"""
+function _infer_policy_from_models(network_settings::Union{Nothing, NetworkSettings})::String
+    if network_settings === nothing || !hasproperty(network_settings, :node_models) || 
+       isempty(network_settings.node_models)
+        return "scaled_defaults"  # Default to scaled_defaults
+    end
+    
+    # Grammar syntax characters that indicate a recipe/complex model
+    grammar_chars = Set(['{', '}', '|', ',', ':', ';'])
+    
+    # Check if any node is a simple (non-recipe) model
+    for model in network_settings.node_models
+        if model isa String
+            model_str = String(model)
+            # Check if it contains grammar syntax
+            has_grammar = any(c in grammar_chars for c in model_str)
+            if !has_grammar
+                return "scaled_defaults"  # At least one simple/canonical model found
+            end
+        else
+            # RuleTree or other non-String is a recipe
+        end
+    end
+    
+    # All models are recipes/custom (contain grammar or are RuleTree)
+    return "named_table_level"
+end
+
+"""
     resolve_bound_policy(settings::Settings)::BoundPolicySpec
 
 Resolve bound policy from settings with backward compatibility.
@@ -196,20 +241,24 @@ function resolve_bound_policy(settings::Settings)::BoundPolicySpec
         table_path = hasproperty(os, :bounds_table_path) ? os.bounds_table_path : nothing
     else
         # Migrate from old naming (param_bound_scaling_level)
+        # Auto-detect policy based on node model type (recipe vs canonical)
+        policy_from_model = _infer_policy_from_models(settings.network_settings)
         old_level = hasproperty(os, :param_bound_scaling_level) ? 
-                    lowercase(os.param_bound_scaling_level) : "medium"
+                    lowercase(os.param_bound_scaling_level) : "recommended"
         
         # Map old levels to new policy+level
         if old_level in ["low", "medium", "high", "ultra"]
-            # Multiplier-based scaling
+            # Multiplier-based scaling (legacy names always use scaled_defaults)
             policy = "scaled_defaults"
             level = normalize_bound_level(old_level)
         elseif old_level in ["conservative", "recommended", "exploratory"]
-            # Named table level
-            policy = "named_table_level"
+            # Canonical level names: use inferred policy from model type
+            policy = policy_from_model  # Use inferred policy (scaled_defaults for canonical, named_table_level for recipes)
             level = old_level
-            table_path = hasproperty(os, :empirical_bounds_table_path) ? 
-                         os.empirical_bounds_table_path : nothing
+            if policy == "named_table_level"
+                table_path = hasproperty(os, :empirical_bounds_table_path) ? 
+                             os.empirical_bounds_table_path : nothing
+            end
         elseif old_level == "empirical"
             # Old empirical → named_table_level with default table
             policy = "named_table_level"

@@ -110,7 +110,7 @@
   },
   "optimization_settings": {
     "method": "CMAES",
-    "param_bound_scaling_level": "medium",
+    "param_bound_scaling_level": "recommended",
     "save_optimization_history": false,
     "save_modeled_psd": false,
     "include_settings_in_results_output": true,
@@ -119,6 +119,7 @@
     "maxiters": 100000,
     "time_limit_minutes": 120,
     "loss_settings": {
+      "loss_function": "spectrum_mae",
       "fmin": 1.0,
       "fmax": 45.0,
       "roi_weight": 1.0,

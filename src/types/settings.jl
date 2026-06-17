@@ -515,6 +515,24 @@ end
 
 
 function normalize_loss_settings_dict!(lossdict::Dict{String, Any})
+    # Map backward-compatible loss function aliases to canonical names
+    loss_func = get(lossdict, "loss_function", nothing)
+    if loss_func !== nothing
+        loss_func_lower = lowercase(String(loss_func))
+        canonical_name = if loss_func_lower in ("mae", "fsmae", "spectrum_mae")
+            "spectrum_mae"
+        elseif loss_func_lower in ("weighted_mae", "weighted_fsmae", "region_weighted_spectrum_mae")
+            "region_weighted_spectrum_mae"
+        elseif loss_func_lower in ("iae", "spectrum_iae")
+            "spectrum_iae"
+        elseif loss_func_lower in ("weighted_iae", "region_weighted_spectrum_iae")
+            "region_weighted_spectrum_iae"
+        else
+            loss_func_lower  # Use as-is; constructor will validate
+        end
+        lossdict["loss_function"] = canonical_name
+    end
+    
     # Minimal parsing: extract Welch/noise parameters from nested psd/time_noise sections if present
     psd = _losssettings_ensure_dict(get(lossdict, "psd", nothing))
     if psd !== nothing
@@ -549,18 +567,27 @@ Loss function configuration for optimization.
 # Fields
 - `fmin::Float64`: Minimum frequency (Hz) for PSD analysis.
 - `fmax::Float64`: Maximum frequency (Hz) for PSD analysis.
-- `roi_weight::Float64`: Weight for region of interest in loss computation.
-- `bg_weight::Float64`: Weight for background activity in loss computation.
+- `loss_function::String`: Spectral loss function type. 
+  - "spectrum_mae": Uniform MAE over all frequency bins (ignores ROI masks)
+  - "region_weighted_spectrum_mae": ROI/background weighted MAE (default)
+  - "spectrum_iae": Uniform IAE over all frequency bins (ignores ROI masks)
+  - "region_weighted_spectrum_iae": ROI/background weighted IAE
+  - Backward-compatible aliases: "mae"→"spectrum_mae", "weighted_mae"→"region_weighted_spectrum_mae", etc.
+- `roi_weight::Float64`: Weight for region of interest in loss computation (only used with region_weighted_spectrum_* losses).
+- `bg_weight::Float64`: Weight for background activity in loss computation (only used with region_weighted_spectrum_* losses).
 - `loss_abstol::Float64`: Absolute tolerance for loss convergence.
 - `loss_reltol::Float64`: Relative tolerance for loss convergence.
 - `abs_target_loss::Float64`: Absolute loss target for early stopping.
 """
 mutable struct LossSettings <: AbstractSettings
+    # Loss function type
+    loss_function::String                  # "spectrum_mae", "region_weighted_spectrum_mae", "spectrum_iae", "region_weighted_spectrum_iae"
+    
     # Frequency analysis range (for loss computation only; PSD settings now in DataSettings.psd)
     fmin::Float64                          # minimum frequency (Hz)
     fmax::Float64                          # maximum frequency (Hz)
     
-    # Region weighting (for roi vs background loss)
+    # Region weighting (only used with region_weighted_spectrum_* loss functions)
     roi_weight::Float64                    # weight for region of interest
     bg_weight::Float64                     # weight for background
     
@@ -574,6 +601,7 @@ mutable struct LossSettings <: AbstractSettings
         normalize_loss_settings_dict!(cooked)
         dict = cooked
         
+        loss_function = String(get(dict, "loss_function", "spectrum_mae"))
         fmin = Float64(get(dict, "fmin", 1.0))
         fmax = Float64(get(dict, "fmax", 45.0))
         
@@ -584,7 +612,7 @@ mutable struct LossSettings <: AbstractSettings
         loss_reltol = Float64(get(dict, "loss_reltol", 1e-3))
         abs_target_loss = max(Float64(get(dict, "abs_target_loss", 0.01)), 0.0)
 
-        new(fmin, fmax, roi_weight, bg_weight, loss_abstol, loss_reltol, abs_target_loss)
+        new(loss_function, fmin, fmax, roi_weight, bg_weight, loss_abstol, loss_reltol, abs_target_loss)
     end
 end
 
@@ -785,7 +813,7 @@ mutable struct OptimizationSettings <: AbstractSettings
         # OLD BOUND POLICY FIELDS (backward compatibility, will be deprecated)
         # ============================================================================
         raw_bound_scaling_level = get(optdict, "param_bound_scaling_level", nothing)
-        param_bound_scaling_level = raw_bound_scaling_level === nothing ? "medium" : String(raw_bound_scaling_level)
+        param_bound_scaling_level = raw_bound_scaling_level === nothing ? "recommended" : String(raw_bound_scaling_level)
         
         # Get empirical bounds table path (defaults to recommended_neural_mass_parameter_bounds_three_levels.csv)
         # Uses universal path separators via joinpath for cross-platform compatibility

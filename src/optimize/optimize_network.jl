@@ -36,7 +36,7 @@ function optimize_network(
     # get some optimization components
     solver = ENEEGMA.get_solver(net.problem, ss)
     solver_kwargs = ENEEGMA.get_solver_kwargs(net.problem, ss)
-    loss_fun = ENEEGMA.get_loss_function() 
+    loss_fun = ENEEGMA.get_loss_function(os.loss_settings) 
     optimizer = ENEEGMA.get_optimizer(os)
     
     blocks = ENEEGMA.prepare_optimization_blocks(net, os)

@@ -100,17 +100,15 @@ const WEIGHT_PARAM_TYPES = Set{Symbol}([
 ])
 
 const PARAM_RANGE_MULTIPLIERS = Dict(
-    "low" => (0.5, 2.0),
-    "medium" => (0.25, 4.0),
-    "high" => (0.125, 8.0),
-    "ultra" => (0.0625, 16.0)
+    "conservative" => (0.5, 2.0),
+    "recommended" => (0.25, 4.0),
+    "exploratory" => (0.125, 8.0)
 )
 
 const ZERO_DEFAULT_SPANS = Dict(
-    "low" => 1.0,
-    "medium" => 5.0,
-    "high" => 10.0,
-    "ultra" => 25.0
+    "conservative" => 1.0,
+    "recommended" => 5.0,
+    "exploratory" => 10.0
 )
 
 function _normalize_param_type(param_type::Union{String, Symbol})::Symbol

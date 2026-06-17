@@ -186,7 +186,7 @@ Top-level optimization workflow configuration.
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `method` | String | `"CMAES"` | Optimization method. Only `"CMAES"` is currently supported. |
-| `param_bound_scaling_level` | String | `"medium"` | Bounds scaling mode. Supported values include `low`, `medium`, `high`, `ultra`, `empirical`, `unbounded`. |
+| `param_bound_scaling_level` | String | `"recommended"` | Bounds scaling level (canonical name). Also supports legacy names: `low`, `medium`, `high`, `ultra`. Policy is auto-detected: canonical models use `scaled_defaults`, recipe models use `named_table_level`. |
 | `empirical_bounds_table_path` | String or `null` | `grammars/empirical_parameter_values.csv` | CSV path for empirical bounds. |
 | `empirical_lower_bound_column` | String | `"5perc"` | Lower-bound column name in the empirical bounds CSV. |
 | `empirical_upper_bound_column` | String | `"95perc"` | Upper-bound column name in the empirical bounds CSV. |
@@ -215,6 +215,7 @@ Nested under `optimization_settings.loss_settings`.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
+| `loss_function` | String | `"spectrum_mae"` | Loss function used for optimization. Canonical functions: `spectrum_mae`, `spectrum_iae`, `region_weighted_spectrum_mae`, `region_weighted_spectrum_iae`. Also accepts legacy aliases: `mae`/`fsmae`, `iae`, `weighted_mae`/`weighted_fsmae`, `weighted_iae`. |
 | `fmin` | Float64 | `1.0` | Minimum frequency used for loss computation. |
 | `fmax` | Float64 | `45.0` | Maximum frequency used for loss computation. |
 | `roi_weight` | Float64 | `1.0` | ROI loss weight. |
