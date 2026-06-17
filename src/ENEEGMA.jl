@@ -67,6 +67,7 @@ include("types/abstract_types.jl")
 include("types/settings.jl")
 include("types/variables.jl")
 include("types/params.jl")
+include("types/bounds.jl")
 include("types/network_types.jl")
 include("types/data.jl")
 include("types/optimization_types.jl")
@@ -77,6 +78,11 @@ export Population, InputDynamics, SensoryInput, InternodeInput, InterpopulationI
 export Data, NodeData, OptLogEntry, ReparamSpec
 export ParamTransform, ParamReparamTransform, Affine01, ExpPos, SoftplusPos, SigmoidBound, TanhBound, Identity
 
+# Bounds policy layer
+export BoundPolicySpec, normalize_bound_level, normalize_bound_policy, resolve_bound_policy
+export load_bounds_table, apply_scaled_default_bounds!, apply_table_bounds_by_type!
+export apply_named_table_level_bounds!, apply_unbounded_bounds!, apply_bound_policy!
+
 # Type management
 export update_param_minmax!, update_param_values!, update_param_tunability!
 export update_param_defaults!, update_param_bounds!
@@ -84,7 +90,7 @@ export get_param_minmax_values, get_param_default_values, get_param_tunability, 
 export get_tunable_params, get_param_by_name, get_param_by_symbol, get_symbols
 export sample_param_values, MIN_PARAM_VAL, MAX_PARAM_VAL
 export print_params_summary, print_vars_summary, set_all_params_tunable!, rebuild_network_problem!, round_for_display
-export configure_network_parameters!
+export configure_network_parameters!, set_param_bounds!
 
 # Variable management
 export StateVar, ExtraVar, Var, VarSet

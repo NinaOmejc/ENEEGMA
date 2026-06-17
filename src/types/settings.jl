@@ -681,13 +681,24 @@ Settings for network parameter optimization.
 - `empirical_upper_bound_column::String`: Column name for upper bound values (e.g., "95perc").
 - `n_restarts::Int64`: Number of optimization restarts.
 - Additional fields for loss configuration, reparameterization, and hyperparameter sweeping.
+
+NOTE: Parameter bounds are now always global by type only (task-independent).
+The deprecated `bounds_task` field is ignored if present in old configs.
 """
 mutable struct OptimizationSettings <: AbstractSettings
     method::String
+    
+    # New parameter bounds policy fields (preferred)
+    bound_policy::String
+    bound_level::String
+    bounds_table_path::Union{String, Nothing}
+    
+    # Old parameter bounds fields (deprecated, kept for backward compatibility)
     param_bound_scaling_level::String
     empirical_bounds_table_path::Union{String, Nothing}
     empirical_lower_bound_column::String
     empirical_upper_bound_column::String
+    
     save_optimization_history::Bool
     save_modeled_psd::Bool
     include_settings_in_results_output::Bool
@@ -740,19 +751,53 @@ mutable struct OptimizationSettings <: AbstractSettings
             end
         end
 
+        # ============================================================================
+        # NEW BOUND POLICY FIELDS (preferred)
+        # ============================================================================
+        bound_policy = String(get(optdict, "bound_policy", "scaled_defaults"))
+        bound_level = String(get(optdict, "bound_level", "recommended"))
+        bounds_table_path = get(optdict, "bounds_table_path", nothing)
+        if bounds_table_path !== nothing
+            bounds_table_path = String(bounds_table_path)
+        end
+        
+        # Check for deprecated bounds_task field
+        if haskey(optdict, "bounds_task") && optdict["bounds_task"] !== nothing && 
+           String(optdict["bounds_task"]) != "" && String(optdict["bounds_task"]) != "global"
+            vwarn(
+                "bounds_task='$(optdict["bounds_task"])' is deprecated and ignored. " *
+                "Parameter bounds are now always global by type only (task-independent).",
+                level=1
+            )
+        end
+        
+        # Check for deprecated table_by_type policy
+        if bound_policy == "table_by_type"
+            vwarn(
+                "bound_policy='table_by_type' is deprecated. " *
+                "Use 'named_table_level' instead (CSV with {level}_lower and {level}_upper columns).",
+                level=1
+            )
+            bound_policy = "named_table_level"
+        end
+        
+        # ============================================================================
+        # OLD BOUND POLICY FIELDS (backward compatibility, will be deprecated)
+        # ============================================================================
         raw_bound_scaling_level = get(optdict, "param_bound_scaling_level", nothing)
         param_bound_scaling_level = raw_bound_scaling_level === nothing ? "medium" : String(raw_bound_scaling_level)
         
-        # Get empirical bounds table path (defaults to grammars/canonical_models_param_ranges_by_paramtype.csv)
+        # Get empirical bounds table path (defaults to recommended_neural_mass_parameter_bounds_three_levels.csv)
         # Uses universal path separators via joinpath for cross-platform compatibility
-        empirical_bounds_table_path = get(optdict, "empirical_bounds_table_path", joinpath("grammars", "canonical_models_param_ranges_by_paramtype.csv"))
+        empirical_bounds_table_path = get(optdict, "empirical_bounds_table_path", 
+                                         joinpath("grammars", "recommended_neural_mass_parameter_bounds_three_levels.csv"))
         if empirical_bounds_table_path !== nothing
             empirical_bounds_table_path = String(empirical_bounds_table_path)
         end
         
         # Get empirical bounds column names (defaults to 5th/95th percentiles)
-        empirical_lower_bound_column = String(get(optdict, "empirical_lower_bound_column", "LCL"))
-        empirical_upper_bound_column = String(get(optdict, "empirical_upper_bound_column", "UCL"))
+        empirical_lower_bound_column = String(get(optdict, "empirical_lower_bound_column", "5perc"))
+        empirical_upper_bound_column = String(get(optdict, "empirical_upper_bound_column", "95perc"))
         
         save_optimization_history = _losssettings_as_bool(get(optdict, "save_optimization_history", false), false)
         save_modeled_psd = _losssettings_as_bool(get(optdict, "save_modeled_psd", false), false)
@@ -775,6 +820,9 @@ mutable struct OptimizationSettings <: AbstractSettings
 
     new(
             method,
+            bound_policy,
+            bound_level,
+            bounds_table_path,
             param_bound_scaling_level,
             empirical_bounds_table_path,
             empirical_lower_bound_column,

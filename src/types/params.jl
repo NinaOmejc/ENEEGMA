@@ -643,6 +643,13 @@ function _apply_type_based_range!(param::Param)::Bool
     end
 end
 
+function _apply_unbounded_range!(param::Param)::Bool
+    """Helper to set parameter bounds to unbounded (±Inf)."""
+    param.min = -Inf
+    param.max = Inf
+    return true
+end
+
 function _apply_multiplier_range!(param::Param, lower_mult::Float64, upper_mult::Float64, zero_span::Float64)
     default = param.default
     if iszero(default)
@@ -790,133 +797,41 @@ end
 
 """Set parameter bounds based on specified strategy.
 
-# Strategies (from settings.optimization_settings.param_bound_scaling_level):
-- **"empirical"**: Use percentiles from empirical table
-- **"unbounded"**: Set all bounds to ±Inf (was called "type_based")
-- **"low", "medium", "high", "ultra"**: Multiplier-based ranges around defaults
+This is the main public interface for setting parameter bounds. It delegates to the
+modular bound policy layer in bounds.jl.
+
+Supports both old (param_bound_scaling_level) and new (bound_policy/bound_level) naming conventions.
+
+# Strategies
+- **"scaled_defaults"**: Multiply bounds around defaults (low/medium/high/ultra → conservative/recommended/exploratory)
+- **"table_by_type"**: Load bounds from CSV with explicit lower/upper columns
+- **"named_table_level"**: Load bounds from CSV using named level columns
+- **"unbounded"**: Set all bounds to ±Inf
+
+# Backward Compatibility
+Old param_bound_scaling_level values still work and map to new policies:
+- "low"/"medium"/"high"/"ultra" → scaled_defaults with corresponding levels
+- "empirical" → table_by_type or named_table_level depending on table format
+- "conservative"/"recommended"/"exploratory" → named_table_level
+- "unbounded" → unbounded policy
 
 # Arguments
 - `paramset::ParamSet`: Parameters to set bounds for
-- `settings::Settings`: Complete settings object
+- `settings::Settings`: Complete settings object with optimization_settings
 
 # Examples
 ```julia
 set_param_bounds!(net.params, settings)  # Use strategy from settings
 ```
 """
-function set_param_bounds!(paramset::ParamSet, settings)
-    os = settings.optimization_settings
-    
-    if os === nothing || !hasproperty(os, :param_bound_scaling_level)
+function set_param_bounds!(paramset::ParamSet, settings::Settings)::ParamSet
+    if settings === nothing || settings.optimization_settings === nothing
         vwarn("No optimization settings found, skipping bounds update"; level=2)
         return paramset
     end
     
-    level = lowercase(os.param_bound_scaling_level)
-    type_scales = hasproperty(os, :reparam_type_scales) && !isempty(os.reparam_type_scales) ? 
-                  os.reparam_type_scales : nothing
-
-    # ugly patch for DS26, fix later TODO: remove this and make it more general
-    if level in ("conservative", "recommended", "exploratory")
-        empirical_table = nothing
-
-        if hasproperty(os, :empirical_bounds_table_path) &&
-        os.empirical_bounds_table_path !== nothing &&
-        os.empirical_bounds_table_path != ""
-            try
-                empirical_table = CSV.read(os.empirical_bounds_table_path, DataFrame)
-                vinfo("Loaded three-level parameter bounds table: $(os.empirical_bounds_table_path)"; level=2)
-            catch e
-                error("param_bound_scaling_level='$level' requires valid empirical_bounds_table_path: $e")
-            end
-        else
-            error("param_bound_scaling_level='$level' requires empirical_bounds_table_path in settings")
-        end
-
-        task = hasproperty(settings.data_settings, :task_type) ?
-            Symbol(settings.data_settings.task_type) : :rest
-
-        bounds_task = hasproperty(os, :bounds_task) ? Symbol(os.bounds_task) : :global
-
-        lb_col = Symbol("$(level)_lower")
-        ub_col = Symbol("$(level)_upper")
-
-        _apply_empirical_bounds!(
-            paramset,
-            empirical_table;
-            task=task,
-            bounds_task=bounds_task,
-            lb_col=lb_col,
-            ub_col=ub_col,
-        )
-
-        return paramset
-    end
-
-    if level == "empirical"
-        # Load empirical table and apply bounds
-        empirical_table = nothing
-        if hasproperty(os, :empirical_bounds_table_path) && 
-           os.empirical_bounds_table_path !== nothing && os.empirical_bounds_table_path != ""
-            try
-                empirical_table = CSV.read(os.empirical_bounds_table_path, DataFrame)
-                vinfo("Loaded empirical parameter table for bounds: $(os.empirical_bounds_table_path)"; level=2)
-            catch e
-                error("param_bound_scaling_level='empirical' requires valid empirical_bounds_table_path: $e")
-            end
-        else
-            error("param_bound_scaling_level='empirical' requires empirical_bounds_table_path in settings")
-        end
-        
-        task = hasproperty(settings.data_settings, :task_type) ? Symbol(settings.data_settings.task_type) : :rest
-        bounds_task = hasproperty(os, :bounds_task) ? Symbol(os.bounds_task) : :global
-        lb_col = hasproperty(os, :empirical_lower_bound_column) ? Symbol(os.empirical_lower_bound_column) : Symbol("5perc")
-        ub_col = hasproperty(os, :empirical_upper_bound_column) ? Symbol(os.empirical_upper_bound_column) : Symbol("95perc")
-        _apply_empirical_bounds!(paramset, empirical_table; task=task, bounds_task=bounds_task, lb_col=lb_col, ub_col=ub_col)
-        return paramset
-    end
-    
-    if level == "unbounded"
-        # Set all bounds to ±Inf (useful when relying entirely on reparametrization transforms)
-        for param in paramset.params
-            if is_verbose(2)
-                vinfo(string("Current param: ", param.name, " | default: ", param.default,
-                              " | min: ", param.min, " | max: ", param.max); level=2)
-            end
-            _apply_unbounded_range!(param)
-            if is_verbose(2)
-                transform_name, eff_min, eff_max = _describe_type_based_transform(param; type_scales=type_scales)
-                vinfo(string("Updated param: ", param.name, " | type: ", param.type,
-                              " | transform: ", transform_name, " | default: ", param.default,
-                              " | min: ", round(eff_min; digits=6),
-                              " | max: ", round(eff_max; digits=6)); level=2)
-            end
-        end
-        return paramset
-    end
-
-    # Multiplier-based bounds
-    haskey(PARAM_RANGE_MULTIPLIERS, level) || error(
-        "Unknown parameter range level: $(os.param_bound_scaling_level). " *
-        "Valid options: 'conservative', 'recommended', 'exploratory', " *
-        "'empirical', 'unbounded', 'low', 'medium', 'high', 'ultra'"
-    )
-    lower_mult, upper_mult = PARAM_RANGE_MULTIPLIERS[level]
-    zero_span = ZERO_DEFAULT_SPANS[level]
-
-    for param in paramset.params
-        if is_verbose(2)
-            vinfo(string("Current param: ", param.name, " | default: ", param.default,
-                          " | min: ", param.min, " | max: ", param.max); level=2)
-        end
-        _apply_multiplier_range!(param, lower_mult, upper_mult, zero_span)
-        if is_verbose(2)
-            vinfo(string("Updated param: ", param.name, " | type: ", param.type,
-                          " | strategy: multiplier | default: ", param.default,
-                          " | min: ", param.min, " | max: ", param.max); level=2)
-        end
-    end
-    return paramset
+    # Use the new modular policy layer
+    return apply_bound_policy!(paramset, settings)
 end
 
 function param_in_paramset(paramset::ParamSet, param::Param)::Bool
