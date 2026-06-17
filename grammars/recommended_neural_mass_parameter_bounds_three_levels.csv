@@ -1,0 +1,13 @@
+type,conservative_lower,conservative_upper,recommended_lower,recommended_upper,exploratory_lower,exploratory_upper,transform
+damping,0,10,0,15,0,30,positive_bounded
+frequency,10,1000,10,1700,1,2500,log-positive
+gain,0.1,300,0.1,1000,0.01,3000,log-positive
+noise_std,0.01,10,0.003,50,0.001,300,log-positive
+offset,0,300,0,1000,-250,2000,linear
+poly_coeff,-100,100,-150,150,-250,250,signed_linear
+population_coupling,-5,100,-10,300,-50,1000,signed_linear
+potential,-300,75,-400,100,-700,300,signed_linear
+probability,0,1,0,1,0,1,bounded_01
+rate,0.05,100,0.01,500,0.001,1500,log-positive
+time_constant,0.01,1,0.005,5,0.001,10,log-positive
+tscale,1,100,1,150,0.1,300,log-positive

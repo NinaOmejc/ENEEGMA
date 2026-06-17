@@ -815,7 +815,44 @@ function set_param_bounds!(paramset::ParamSet, settings)
     level = lowercase(os.param_bound_scaling_level)
     type_scales = hasproperty(os, :reparam_type_scales) && !isempty(os.reparam_type_scales) ? 
                   os.reparam_type_scales : nothing
-    
+
+    # ugly patch for DS26, fix later TODO: remove this and make it more general
+    if level in ("conservative", "recommended", "exploratory")
+        empirical_table = nothing
+
+        if hasproperty(os, :empirical_bounds_table_path) &&
+        os.empirical_bounds_table_path !== nothing &&
+        os.empirical_bounds_table_path != ""
+            try
+                empirical_table = CSV.read(os.empirical_bounds_table_path, DataFrame)
+                vinfo("Loaded three-level parameter bounds table: $(os.empirical_bounds_table_path)"; level=2)
+            catch e
+                error("param_bound_scaling_level='$level' requires valid empirical_bounds_table_path: $e")
+            end
+        else
+            error("param_bound_scaling_level='$level' requires empirical_bounds_table_path in settings")
+        end
+
+        task = hasproperty(settings.data_settings, :task_type) ?
+            Symbol(settings.data_settings.task_type) : :rest
+
+        bounds_task = hasproperty(os, :bounds_task) ? Symbol(os.bounds_task) : :global
+
+        lb_col = Symbol("$(level)_lower")
+        ub_col = Symbol("$(level)_upper")
+
+        _apply_empirical_bounds!(
+            paramset,
+            empirical_table;
+            task=task,
+            bounds_task=bounds_task,
+            lb_col=lb_col,
+            ub_col=ub_col,
+        )
+
+        return paramset
+    end
+
     if level == "empirical"
         # Load empirical table and apply bounds
         empirical_table = nothing
@@ -859,7 +896,11 @@ function set_param_bounds!(paramset::ParamSet, settings)
     end
 
     # Multiplier-based bounds
-    haskey(PARAM_RANGE_MULTIPLIERS, level) || error("Unknown parameter range level: $(os.param_bound_scaling_level). Valid options: 'empirical', 'unbounded', 'low', 'medium', 'high', 'ultra'")
+    haskey(PARAM_RANGE_MULTIPLIERS, level) || error(
+        "Unknown parameter range level: $(os.param_bound_scaling_level). " *
+        "Valid options: 'conservative', 'recommended', 'exploratory', " *
+        "'empirical', 'unbounded', 'low', 'medium', 'high', 'ultra'"
+    )
     lower_mult, upper_mult = PARAM_RANGE_MULTIPLIERS[level]
     zero_span = ZERO_DEFAULT_SPANS[level]
 
@@ -1130,7 +1171,7 @@ function _apply_empirical_bounds!(paramset::ParamSet, joined_table::DataFrame;
     
     tbl = copy(joined_table)
     tbl[!, :_type_sym] = Symbol.(_normalize_param_type.(Symbol.(String.(tbl[!, type_col]))))
-    tbl[!, :_task_sym] = Symbol.(lowercase.(String.(tbl[!, task_col])))
+    # tbl[!, :_task_sym] = Symbol.(lowercase.(String.(tbl[!, task_col])))
     task_sym = Symbol(lowercase(String(task)))
     
     widen_bounds = (lb, ub, α) -> begin
