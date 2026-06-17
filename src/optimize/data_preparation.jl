@@ -57,7 +57,9 @@ function prepare_data!(settings::Settings)
         freqs, powers = ENEEGMA.compute_preprocessed_welch_psd(signal, fs; loss_settings=ls, data_settings=ds)
         
         # Estimate measurement noise for this node
-        measurement_noise_std = ENEEGMA.estimate_measurement_noise_std(signal, fs, ds, ls)
+        measurement_noise_std = ENEEGMA.estimate_measurement_noise_std(signal, fs, ds, ls;
+                                                                       node_name=node_name,
+                                                                       channel=channel)
         
         # Compute frequency regions for this node
         freq_peak_metadata = ENEEGMA.compute_frequency_regions(freqs, powers, node_name, ds, ls)
@@ -259,6 +261,20 @@ function manual_spectral_roi_for_node(data_settings::DataSettings, node_name::St
     return Tuple{Float64, Float64}[]
 end
 
+function measurement_noise_bands_for_node(data_settings::DataSettings,
+                                          node_name::String,
+                                          channel::Union{Nothing, AbstractString}=nothing)::Vector{Tuple{Float64, Float64}}
+    if haskey(data_settings.measurement_noise_bands, node_name)
+        return data_settings.measurement_noise_bands[node_name]
+    elseif channel !== nothing && haskey(data_settings.measurement_noise_bands, String(channel))
+        return data_settings.measurement_noise_bands[String(channel)]
+    elseif haskey(data_settings.measurement_noise_bands, "__all__")
+        return data_settings.measurement_noise_bands["__all__"]
+    end
+
+    return Tuple{Float64, Float64}[]
+end
+
 """
     compute_frequency_regions(freqs, powers, node_name, data_settings::DataSettings, ls::LossSettings)
 
@@ -382,6 +398,43 @@ end
 
 estimate_sigma_floor(::Nothing, ::Any, ::Union{Nothing, DataSettings}, ::LossSettings) = nothing
 
+function estimate_sigma_floor_in_bands(data::AbstractVector,
+                                       fs::Real,
+                                       data_settings::Union{Nothing, DataSettings},
+                                       ls::LossSettings,
+                                       bands::Vector{Tuple{Float64, Float64}})
+    fs <= 0 && return nothing
+    isempty(bands) && return nothing
+    n = length(data)
+    n < 4 && return nothing
+
+    fspan = (ls.fmin, ls.fmax)
+    nperseg_val, nfft_val, overlap_val = ENEEGMA._resolve_welch_params(n, Float64(fs), data_settings)
+    freqs, data_psd = ENEEGMA.compute_welch_psd(Float64.(data), fs; xlims=fspan, nperseg=nperseg_val, nfft=nfft_val, overlap=overlap_val)
+    isempty(freqs) && return nothing
+
+    mask = ENEEGMA.build_mask_from_regions(freqs, bands)
+    any(mask) || return nothing
+    S_data = Statistics.median(data_psd[mask])
+    (isfinite(S_data) && S_data > 0) || return nothing
+
+    rng = if data_settings !== nothing && hasproperty(data_settings, :psd) && data_settings.psd.noise_seed !== nothing
+        Random.MersenneTwister(data_settings.psd.noise_seed)
+    else
+        nothing
+    end
+    unit = ENEEGMA._measurement_noise_template(n, rng)
+    freqs2, unit_psd = ENEEGMA.compute_welch_psd(Float64.(unit), fs; xlims=fspan, nperseg=nperseg_val, nfft=nfft_val, overlap=overlap_val)
+    isempty(freqs2) && return nothing
+
+    mask2 = ENEEGMA.build_mask_from_regions(freqs2, bands)
+    any(mask2) || return nothing
+    S_unit = Statistics.median(unit_psd[mask2])
+    (isfinite(S_unit) && S_unit > 0) || return nothing
+
+    return sqrt(S_data / S_unit)
+end
+
 
 function _is_valid_sigma(sigma::Union{Nothing, Real})
     """Check if sigma is a valid positive finite number."""
@@ -392,15 +445,29 @@ end
 function estimate_measurement_noise_std(signal::AbstractVector{<:Real},
                                         fs::Union{Nothing, Real},
                                         data_settings::DataSettings,
-                                        ls::LossSettings)::Float64
+                                        ls::LossSettings;
+                                        node_name::Union{Nothing, AbstractString}=nothing,
+                                        channel::Union{Nothing, AbstractString}=nothing)::Float64
     """
-    Estimate per-node measurement noise sigma from data using time and frequency-domain methods.
+    Estimate per-node measurement noise sigma according to `data_settings.measurement_noise_mode`.
 
     Returns `-1.0` when estimation is disabled or no valid estimate can be formed.
-    Prefers the frequency-domain estimate when available, otherwise uses the minimum valid estimate.
+    `:global_highfreq` preserves the legacy high-frequency heuristic, `:none` disables
+    measurement-noise estimation, and `:node_specific` uses configured per-node/per-channel bands.
     """
     if !data_settings.estimate_measurement_noise || signal === nothing
         return -1.0
+    end
+
+    if data_settings.measurement_noise_mode === :none
+        return -1.0
+    elseif data_settings.measurement_noise_mode === :node_specific
+        fs === nothing && return -1.0
+        resolved_node = node_name === nothing ? "" : String(node_name)
+        resolved_channel = channel === nothing ? nothing : String(channel)
+        bands = ENEEGMA.measurement_noise_bands_for_node(data_settings, resolved_node, resolved_channel)
+        sigma_bands = estimate_sigma_floor_in_bands(signal, Float64(fs), data_settings, ls, bands)
+        return _is_valid_sigma(sigma_bands) ? Float64(sigma_bands) : -1.0
     end
 
     sigma_init = estimate_sigma_init(signal)

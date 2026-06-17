@@ -75,7 +75,6 @@ and error detection, then applies a specific metric function to calculate the fi
 # Returns
 - `loss`: Computed loss value
 """
-const DEBUG_LOSS_COUNTER = Ref(0)
 function compute_loss(new_params, args, metric_fun::Function)
 
     net           = args.net
@@ -89,14 +88,6 @@ function compute_loss(new_params, args, metric_fun::Function)
     solver_kwargs = args.solver_kwargs
     loss_settings = args.loss_settings
     data_settings = haskey(args, :data_settings) ? args.data_settings : nothing
-
-    DEBUG_LOSS_COUNTER[] += 1
-    if DEBUG_LOSS_COUNTER[] <= 5
-        @show DEBUG_LOSS_COUNTER[]
-        @show new_params
-        @show minimum(new_params)
-        @show maximum(new_params)
-    end
 
     n_inits = length(prob.u0)
     n_param_block = length(new_params) - n_inits

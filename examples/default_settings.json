@@ -73,7 +73,16 @@
     "task_type": "rest",
     "fs": 256.0,
     "data_columns": null,
-    "estimate_measurement_noise": true,
+    "measurement_noise_mode": "global_highfreq",
+    "measurement_noise_bands": {
+      "EEG": [
+        [
+          40.0,
+          45.0
+        ]
+      ],
+      "EMG": []
+    },
     "spectral_roi_definition_mode": "manual",
     "spectral_roi_auto_peak_sensitivity": 0.3,
     "spectral_roi_manual": {

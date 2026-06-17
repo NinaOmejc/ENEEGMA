@@ -549,6 +549,13 @@ function settings_to_dict(settings::Settings)::OrderedDict{String, Any}
             end
             data_dict["spectral_roi_manual"] = spectral_roi_dict
         end
+        if haskey(data_dict, "measurement_noise_bands")
+            measurement_noise_dict = OrderedDict{String, Any}()
+            for (node_name, regions) in pairs(data_s.measurement_noise_bands)
+                measurement_noise_dict[String(node_name)] = [[fmin, fmax] for (fmin, fmax) in regions]
+            end
+            data_dict["measurement_noise_bands"] = measurement_noise_dict
+        end
         # Nested PSD settings are already serialized via reflection
         data_dict
     else

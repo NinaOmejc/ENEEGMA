@@ -98,10 +98,38 @@ Input data and spectral analysis metadata.
 | `task_type` | String or `null` | `"rest"` | Data/task label. |
 | `fs` | Float64 or `null` | `256.0` | Sampling frequency of the input data in Hz. |
 | `data_columns` | Array[String] or `null` | `null` | Explicit columns to load from the CSV. |
-| `estimate_measurement_noise` | Bool | `true` | Whether per-node measurement noise should be estimated from the data. |
+| `estimate_measurement_noise` | Bool | `true` | Legacy backward-compatible alias for measurement-noise control. Prefer `measurement_noise_mode`; when `measurement_noise_mode` is omitted, `false` maps to `none` and `true` maps to `global_highfreq`. |
+| `measurement_noise_mode` | String or Symbol | `"global_highfreq"` | Measurement-noise mode. Supported values are `global_highfreq`, `none`, and `node_specific`. |
+| `measurement_noise_bands` | Dict[String, Array of bands] | `{"EEG": [[40.0, 45.0]], "EMG": []}` | Optional per-node or per-channel noise-estimation bands used when `measurement_noise_mode = "node_specific"`. |
 | `spectral_roi_definition_mode` | String or Symbol | `"manual"` | ROI mode. Supported values are `auto` and `manual`. |
 | `spectral_roi_auto_peak_sensitivity` | Float64 | `0.3` | Sensitivity used by automatic peak detection. |
 | `spectral_roi_manual` | Array of bands or Dict[String, Array of bands] | `[[7.5, 14.0]]` | Manual ROI bands. A single array applies to all nodes; a dict enables per-node ROI bands. |
+
+### Measurement Noise Modes
+
+`estimate_measurement_noise` is legacy. New configs should use `measurement_noise_mode` only.
+
+`"global_highfreq"` preserves the existing ENEEGMA behavior and estimates noise from the high-frequency end of the modeled loss band.
+
+`"none"` disables measurement-noise estimation and skips synthetic measurement-noise injection during PSD averaging. This is functionally equivalent to legacy `estimate_measurement_noise = false`.
+
+`"node_specific"` uses `measurement_noise_bands` to choose bands per node or per channel. Keys are matched against node names first, then channel names, and `__all__` can be used as a fallback for every node.
+
+Examples:
+
+```julia
+Dict(
+    "EEG" => [(40.0, 45.0)],
+    "EMG" => []
+)
+```
+
+```julia
+Dict(
+    "__all__" => [(40.0, 45.0)],
+    "EMG" => [(1.0, 5.0)]
+)
+```
 
 ### Accepted `spectral_roi_manual` Forms
 

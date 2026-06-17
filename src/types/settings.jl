@@ -1024,6 +1024,75 @@ function _normalize_spectral_roi_manual(raw_value,
     return Dict(node_name => copy(regions) for node_name in names)
 end
 
+const _MEASUREMENT_NOISE_MODES = Set([:global_highfreq, :none, :node_specific])
+
+function _normalize_measurement_noise_mode(raw_mode)::Symbol
+    mode_key = replace(lowercase(strip(String(raw_mode))), '-' => '_', ' ' => '_')
+    mode = Symbol(mode_key)
+    mode in _MEASUREMENT_NOISE_MODES || throw(ArgumentError(
+        "DataSettings: measurement_noise_mode must be one of " *
+        "\"global_highfreq\", \"none\", or \"node_specific\". Got: $(repr(raw_mode))"
+    ))
+    return mode
+end
+
+function _default_measurement_noise_bands()::Dict{String, Vector{Tuple{Float64, Float64}}}
+    return Dict(
+        "EEG" => [(40.0, 45.0)],
+        "EMG" => Tuple{Float64, Float64}[]
+    )
+end
+
+function _coerce_measurement_noise_regions(raw_regions)
+    if raw_regions === nothing
+        return Tuple{Float64, Float64}[]
+    elseif raw_regions isa AbstractVector
+        try
+            regions = Tuple{Float64, Float64}[]
+            for r in raw_regions
+                if r === nothing
+                    continue
+                elseif r isa Tuple && length(r) >= 2
+                    fmin = Float64(r[1])
+                    fmax = Float64(r[2])
+                elseif r isa AbstractVector && length(r) >= 2
+                    fmin = Float64(r[1])
+                    fmax = Float64(r[2])
+                else
+                    throw(ArgumentError("Invalid measurement-noise band format: $r"))
+                end
+
+                (isfinite(fmin) && isfinite(fmax)) || throw(ArgumentError("Measurement-noise bands must be finite. Got: $(repr((fmin, fmax)))"))
+                fmin <= fmax || throw(ArgumentError("Measurement-noise band lower bound must be <= upper bound. Got: $(repr((fmin, fmax)))"))
+                push!(regions, (fmin, fmax))
+            end
+            return regions
+        catch e
+            throw(ArgumentError(
+                "DataSettings: measurement_noise_bands entries must be 2-element ranges, e.g. " *
+                "Dict(\"EEG\" => [[40.0, 45.0]], \"EMG\" => [[1.0, 5.0]]). Got: $raw_regions. Error: $e"
+            ))
+        end
+    else
+        throw(ArgumentError(
+            "DataSettings: measurement_noise_bands must be a dict of node/channel => bands. Got $(typeof(raw_regions))"
+        ))
+    end
+end
+
+function _normalize_measurement_noise_bands(raw_value)::Dict{String, Vector{Tuple{Float64, Float64}}}
+    source = raw_value === nothing ? _default_measurement_noise_bands() : raw_value
+    source isa AbstractDict || throw(ArgumentError(
+        "DataSettings: measurement_noise_bands must be a dict of node/channel => bands or `nothing`."
+    ))
+
+    band_dict = Dict{String, Vector{Tuple{Float64, Float64}}}()
+    for (k, v) in source
+        band_dict[String(k)] = _coerce_measurement_noise_regions(v)
+    end
+    return band_dict
+end
+
 """
     DataSettings
 
@@ -1036,6 +1105,8 @@ Configuration for data input and metadata.
 - `fs`: Sampling frequency (Hz)
 - `data_columns`: Specific columns to load
 - `estimate_measurement_noise`: Whether to estimate noise from data
+- `measurement_noise_mode`: Noise estimation mode (`:global_highfreq`, `:none`, or `:node_specific`)
+- `measurement_noise_bands`: Optional per-node or per-channel estimation bands used by `:node_specific`
 - `spectral_roi_definition_mode`: Mode for defining region of interest (:auto or :manual)
 - `spectral_roi_auto_peak_sensitivity`: Sensitivity for automatic peak detection (0.0-1.0)
 - `spectral_roi_manual`: Manual frequency bands for ROI definition
@@ -1050,6 +1121,8 @@ mutable struct DataSettings <: AbstractSettings
     fs::Union{Float64, Nothing}
     data_columns::Union{Vector{String}, Nothing}
     estimate_measurement_noise::Bool
+    measurement_noise_mode::Symbol
+    measurement_noise_bands::Dict{String, Vector{Tuple{Float64, Float64}}}
     spectral_roi_definition_mode::Symbol  # :auto or :manual
     spectral_roi_auto_peak_sensitivity::Float64  # 0.0-1.0, higher=looser peak detection
     spectral_roi_manual::Dict{String, Vector{Tuple{Float64, Float64}}}  # node_name => [(fmin, fmax), ...]; vector input is expanded to all nodes
@@ -1096,7 +1169,13 @@ mutable struct DataSettings <: AbstractSettings
         task_type = haskey(dict, "task_type") ? (dict["task_type"] === nothing ? nothing : String(dict["task_type"])) : "rest"
         fs = haskey(dict, "fs") ? (dict["fs"] === nothing ? nothing : Float64(dict["fs"])) : 256.0
         data_columns = haskey(dict, "data_columns") ? (dict["data_columns"] === nothing ? nothing : Vector{String}(dict["data_columns"])) : nothing
-        estimate_measurement_noise = _losssettings_as_bool(get(dict, "estimate_measurement_noise", true), true)
+        has_measurement_noise_mode = haskey(dict, "measurement_noise_mode")
+        estimate_measurement_noise_legacy = _losssettings_as_bool(get(dict, "estimate_measurement_noise", true), true)
+        measurement_noise_mode = has_measurement_noise_mode ?
+            _normalize_measurement_noise_mode(dict["measurement_noise_mode"]) :
+            (estimate_measurement_noise_legacy ? :global_highfreq : :none)
+        estimate_measurement_noise = measurement_noise_mode != :none
+        measurement_noise_bands = _normalize_measurement_noise_bands(get(dict, "measurement_noise_bands", nothing))
         
         # Region definition settings
         region_mode_raw = get(dict, "spectral_roi_definition_mode", "manual")
@@ -1114,12 +1193,17 @@ mutable struct DataSettings <: AbstractSettings
         psd = PSDSettings(dict)
 
         return new(data_file, target_channel, task_type, fs, data_columns, estimate_measurement_noise,
+                   measurement_noise_mode, measurement_noise_bands,
                    spectral_roi_definition_mode, spectral_roi_auto_peak_sensitivity, spectral_roi_manual, psd)
     end
 end
 
 function Base.setproperty!(ds::DataSettings, name::Symbol, value)
-    if name === :spectral_roi_manual
+    if name === :measurement_noise_mode
+        return setfield!(ds, :measurement_noise_mode, _normalize_measurement_noise_mode(value))
+    elseif name === :measurement_noise_bands
+        return setfield!(ds, :measurement_noise_bands, _normalize_measurement_noise_bands(value))
+    elseif name === :spectral_roi_manual
         current = getfield(ds, :spectral_roi_manual)
         node_names = String[k for k in keys(current) if k != "__all__"]
         return setfield!(ds, :spectral_roi_manual, _normalize_spectral_roi_manual(value, node_names))
