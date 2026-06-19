@@ -103,6 +103,7 @@ Input data and spectral analysis metadata.
 | `measurement_noise_bands` | Dict[String, Array of bands] | `{"EEG": [[40.0, 45.0]], "EMG": []}` | Optional per-node or per-channel noise-estimation bands used when `measurement_noise_mode = "node_specific"`. |
 | `spectral_roi_definition_mode` | String or Symbol | `"manual"` | ROI mode. Supported values are `auto` and `manual`. |
 | `spectral_roi_auto_peak_sensitivity` | Float64 | `0.3` | Sensitivity used by automatic peak detection. |
+| `spectral_roi_auto_remove_aperiodic_background` | Bool | `false` | If `true`, automatic peak detection fits and removes an aperiodic background before thresholding peaks. |
 | `spectral_roi_manual` | Array of bands or Dict[String, Array of bands] | `[[7.5, 14.0]]` | Manual ROI bands. A single array applies to all nodes; a dict enables per-node ROI bands. |
 
 ### Measurement Noise Modes

@@ -199,18 +199,90 @@ Automatically detect frequency peaks in the PSD for ROI masking.
 # Returns
 - `BitVector`: Mask where peaks are marked as `true` (ROI)
 """
+
+
+function range_mask(freq::Vector{Float64}, lower::Float64, upper::Float64)
+    return (freq .>= lower) .& (freq .<= upper)
+end
+
+function fit_line(x::Vector{Float64}, y::Vector{Float64})
+    length(x) == length(y) || error("Line fit vectors must have the same length")
+    length(x) >= 2 || error("Need at least two points for line fit")
+    x_mean = mean(x)
+    y_mean = mean(y)
+    denom = sum((x .- x_mean) .^ 2)
+    denom > 0 || return (intercept = y_mean, slope = 0.0)
+    slope = sum((x .- x_mean) .* (y .- y_mean)) / denom
+    intercept = y_mean - slope * x_mean
+    return (intercept = intercept, slope = slope)
+end
+
+function _powers_are_logged(powers::AbstractVector{<:Real})::Bool
+    return !isempty(powers) && any(<(0), powers)
+end
+
+function fit_aperiodic_background(freq::Vector{Float64},
+                                  powers::Vector{Float64},
+                                  fmin::Float64=4.0,
+                                  fmax::Float64=45.0;
+                                  powers_are_log::Bool=_powers_are_logged(powers),
+                                  refit_residual_quantile::Float64=0.80)
+    log_psd = powers_are_log ? powers : log10.(max.(powers, eps(Float64)))
+    mask = range_mask(freq, fmin, fmax) .& (freq .> 0)
+    fit_indices = findall(mask)
+    length(fit_indices) >= 3 || return fill(mean(log_psd), length(log_psd))
+
+    x = log10.(freq[fit_indices])
+    y = log_psd[fit_indices]
+    first_fit = fit_line(x, y)
+    y_hat = first_fit.intercept .+ first_fit.slope .* x
+    residual = y .- y_hat
+    cutoff = quantile(residual, refit_residual_quantile)
+    keep = residual .<= cutoff
+
+    if count(identity, keep) >= 3
+        second_fit = fit_line(x[keep], y[keep])
+    else
+        second_fit = first_fit
+    end
+
+    return second_fit.intercept .+ second_fit.slope .* log10.(max.(freq, eps(Float64)))
+end
+
 function detect_peaks_automatic(freqs::Vector{Float64}, powers::Vector{Float64}, sensitivity::Float64;
-                               fmin::Float64=1.0, fmax::Float64=48.0)
+                               fmin::Float64=1.0, fmax::Float64=48.0,
+                               remove_aperiodic_background::Bool=false,
+                               powers_are_log::Bool=_powers_are_logged(powers))
     n = length(freqs)
     roi_mask = falses(n)
     sensitivity = clamp(sensitivity, 0.0, 1.0)
+
+    aperiodic_log_powers = nothing
+    periodic_log_powers = nothing
+    periodic_relative_powers = nothing
+    detection_powers = powers
+
+    if remove_aperiodic_background
+        aperiodic_log_powers = fit_aperiodic_background(freqs, powers, fmin, fmax; powers_are_log=powers_are_log)
+        log_powers = powers_are_log ? powers : log10.(max.(powers, eps(Float64)))
+        periodic_log_powers = log_powers .- aperiodic_log_powers
+        periodic_relative_powers = 10.0 .^ periodic_log_powers
+        detection_powers = periodic_relative_powers
+    end
     
     # Restrict to frequency range
     freq_mask = (fmin .<= freqs .<= fmax)
     freq_indices = findall(freq_mask)
-    isempty(freq_indices) && return roi_mask
+    isempty(freq_indices) && return (
+        roi_mask=roi_mask,
+        detection_powers=detection_powers,
+        aperiodic_log_powers=aperiodic_log_powers,
+        periodic_log_powers=periodic_log_powers,
+        periodic_relative_powers=periodic_relative_powers,
+        powers_are_log=powers_are_log
+    )
     
-    powers_in_range = powers[freq_indices]
+    powers_in_range = detection_powers[freq_indices]
     
     # Compute threshold: baseline + (peak - baseline) * (1 - sensitivity)
     baseline = quantile(powers_in_range, 0.2)  # lower quartile as baseline
@@ -219,13 +291,22 @@ function detect_peaks_automatic(freqs::Vector{Float64}, powers::Vector{Float64},
     
     # Mark peaks above threshold
     for (local_idx, global_idx) in enumerate(freq_indices)
-        if powers[global_idx] >= threshold
+        if detection_powers[global_idx] >= threshold
             roi_mask[global_idx] = true
         end
     end
     
-    return roi_mask
+    return (
+        roi_mask=roi_mask,
+        detection_powers=detection_powers,
+        aperiodic_log_powers=aperiodic_log_powers,
+        periodic_log_powers=periodic_log_powers,
+        periodic_relative_powers=periodic_relative_powers,
+        powers_are_log=powers_are_log
+    )
 end
+
+
 
 """
     build_mask_from_regions(freqs, regions)
@@ -299,9 +380,18 @@ function compute_frequency_regions(freqs::Vector{Float64}, powers::Vector{Float6
     if data_settings.spectral_roi_definition_mode == :manual
         roi_regions = ENEEGMA.manual_spectral_roi_for_node(data_settings, node_name)
         roi_mask = ENEEGMA.build_mask_from_regions(freqs, roi_regions)
+        auto_peak_info = nothing
     else  # :auto
-        roi_mask = ENEEGMA.detect_peaks_automatic(freqs, powers, data_settings.spectral_roi_auto_peak_sensitivity;
-                                                 fmin=ls.fmin, fmax=ls.fmax)
+        auto_peak_info = ENEEGMA.detect_peaks_automatic(
+            freqs,
+            powers,
+            data_settings.spectral_roi_auto_peak_sensitivity;
+            fmin=ls.fmin,
+            fmax=ls.fmax,
+            remove_aperiodic_background=data_settings.spectral_roi_auto_remove_aperiodic_background,
+            powers_are_log=ENEEGMA.psd_preproc_has_log(data_settings.psd.preproc_pipeline)
+        )
+        roi_mask = auto_peak_info.roi_mask
     end
     
     bg_mask = .!roi_mask
@@ -310,7 +400,11 @@ function compute_frequency_regions(freqs::Vector{Float64}, powers::Vector{Float6
         roi_mask=roi_mask,
         bg_mask=bg_mask,
         roi_weight=ls.roi_weight,
-        bg_weight=ls.bg_weight
+        bg_weight=ls.bg_weight,
+        detection_powers=auto_peak_info === nothing ? nothing : auto_peak_info.detection_powers,
+        aperiodic_log_powers=auto_peak_info === nothing ? nothing : auto_peak_info.aperiodic_log_powers,
+        periodic_log_powers=auto_peak_info === nothing ? nothing : auto_peak_info.periodic_log_powers,
+        periodic_relative_powers=auto_peak_info === nothing ? nothing : auto_peak_info.periodic_relative_powers
     )
 end
 

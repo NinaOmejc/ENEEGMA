@@ -85,6 +85,7 @@
     },
     "spectral_roi_definition_mode": "manual",
     "spectral_roi_auto_peak_sensitivity": 0.3,
+    "spectral_roi_auto_remove_aperiodic_background": false,
     "spectral_roi_manual": {
       "N1": [
         [

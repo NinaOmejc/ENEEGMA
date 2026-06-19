@@ -1197,6 +1197,7 @@ Configuration for data input and metadata.
 - `measurement_noise_bands`: Optional per-node or per-channel estimation bands used by `:node_specific`
 - `spectral_roi_definition_mode`: Mode for defining region of interest (:auto or :manual)
 - `spectral_roi_auto_peak_sensitivity`: Sensitivity for automatic peak detection (0.0-1.0)
+- `spectral_roi_auto_remove_aperiodic_background`: Whether automatic peak detection removes a fitted aperiodic background before thresholding
 - `spectral_roi_manual`: Manual frequency bands for ROI definition
 - `psd`: Nested PSDSettings for spectrum computation
 
@@ -1213,6 +1214,7 @@ mutable struct DataSettings <: AbstractSettings
     measurement_noise_bands::Dict{String, Vector{Tuple{Float64, Float64}}}
     spectral_roi_definition_mode::Symbol  # :auto or :manual
     spectral_roi_auto_peak_sensitivity::Float64  # 0.0-1.0, higher=looser peak detection
+    spectral_roi_auto_remove_aperiodic_background::Bool
     spectral_roi_manual::Dict{String, Vector{Tuple{Float64, Float64}}}  # node_name => [(fmin, fmax), ...]; vector input is expanded to all nodes
     psd::PSDSettings  # Nested PSD preprocessing settings (includes noise_seed)
 
@@ -1271,6 +1273,10 @@ mutable struct DataSettings <: AbstractSettings
         spectral_roi_definition_mode in (:auto, :manual) || (spectral_roi_definition_mode = :auto)
         
         spectral_roi_auto_peak_sensitivity = clamp(Float64(get(dict, "spectral_roi_auto_peak_sensitivity", 0.3)), 0.0, 1.0)
+        spectral_roi_auto_remove_aperiodic_background = _losssettings_as_bool(
+            get(dict, "spectral_roi_auto_remove_aperiodic_background", false),
+            false
+        )
         
         spectral_roi_manual = _normalize_spectral_roi_manual(
             get(dict, "spectral_roi_manual", [[7.5, 14.0]]),
@@ -1282,7 +1288,8 @@ mutable struct DataSettings <: AbstractSettings
 
         return new(data_file, target_channel, task_type, fs, data_columns, estimate_measurement_noise,
                    measurement_noise_mode, measurement_noise_bands,
-                   spectral_roi_definition_mode, spectral_roi_auto_peak_sensitivity, spectral_roi_manual, psd)
+                   spectral_roi_definition_mode, spectral_roi_auto_peak_sensitivity,
+                   spectral_roi_auto_remove_aperiodic_background, spectral_roi_manual, psd)
     end
 end
 
