@@ -41,6 +41,29 @@ The package includes five examples covering the complete workflow:
 
 Optimization settings also include an optional `dynamically_increase_n_restarts_upon_unsuccess` fallback for cases where an entire restart batch collapses to the `1e9` penalty loss; see [settings_info.md](settings_info.md).
 
+## PSD Preprocessing
+
+PSD preprocessing is controlled by `settings.data_settings.psd.preproc_pipeline`. Parameters such as `smooth_gaussian_sigma`, `smooth_savgol_window_size`, and `smooth_savgol_poly_order` are only used if the pipeline string includes a smoothing step.
+
+For example, if `preproc_pipeline == "log10"`, changing `smooth_gaussian_sigma` has no effect because no smoothing operation is applied.
+
+Use one of the smoothing tokens in the pipeline to enable smoothing:
+
+```julia
+# Savitzky-Golay smoothing after log10 transform
+settings.data_settings.psd.preproc_pipeline = "log10-savgol"
+settings.data_settings.psd.smooth_savgol_window_size = 11
+settings.data_settings.psd.smooth_savgol_poly_order = 3
+data = ENEEGMA.prepare_data!(settings)
+
+# Gaussian smoothing after log10 transform
+settings.data_settings.psd.preproc_pipeline = "log10-gaussian"
+settings.data_settings.psd.smooth_gaussian_sigma = 2.0
+data = ENEEGMA.prepare_data!(settings)
+```
+
+Supported smoothing tokens include `savgol` (or `smooth`), `gaussian`, and `moving_avg`. The order in the pipeline matters: `"log10-gaussian"` smooths after the log transform, while `"gaussian-log10"` smooths before it.
+
 ## Related paper
 
 For a detailed description of the framework, see [the paper](https://www.biorxiv.org/content/early/2026/04/14/2026.04.10.717643.full.pdf). If you use ENEEGMA in your research, please cite:

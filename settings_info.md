@@ -162,20 +162,44 @@ Nested under `data_settings.psd`.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `preproc_pipeline` | String | `"log10"` | PSD preprocessing pipeline string, for example `"log10"` or `"relative-log10"`. |
+| `preproc_pipeline` | String | `"log10"` | PSD preprocessing pipeline string, for example `"log10"`, `"relative-log10"`, `"log10-gaussian"`, or `"log10-savgol"`. |
 | `welch_window_sec` | Float64 | `2.0` | Welch window duration in seconds. |
 | `welch_overlap` | Float64 | `0.1` | Welch overlap fraction. Clamped to `[0.0, 0.99]`. |
 | `welch_nperseg` | Int | `0` | Welch segment length. `0` means auto. |
 | `welch_nfft` | Int | `0` | FFT size. `0` means auto. |
 | `noise_avg_reps` | Int | `1` | Number of noisy PSD repetitions to average. |
-| `window_size` | Int | `5` | Savitzky-Golay window size. |
-| `smooth_poly_order` | Int | `2` | Savitzky-Golay polynomial order. |
+| `smooth_savgol_window_size` | Int | `5` | Savitzky-Golay window size. Used when the pipeline includes `savgol` or `smooth`. It should be odd and larger than `smooth_savgol_poly_order`. |
+| `smooth_savgol_poly_order` | Int | `2` | Savitzky-Golay polynomial order. Used when the pipeline includes `savgol` or `smooth`. |
 | `rel_eps` | Float64 | `1e-12` | Relative epsilon for numerical stability. |
-| `smooth_sigma` | Float64 | `1.0` | Gaussian smoothing sigma. |
+| `smooth_gaussian_sigma` | Float64 | `1.0` | Gaussian smoothing sigma. Used when the pipeline includes `gaussian`. |
 | `transient_period_duration` | Float64 | `2.0` | Initial transient duration to discard before PSD and metric computation, in seconds. |
 | `noise_seed` | Int or `null` | `42` | Seed for synthetic measurement-noise injection during PSD averaging. |
 
 `workspace` also exists on the runtime struct but is an internal cache, not a user-facing JSON setting.
+
+Important: smoothing is not enabled by `smooth_gaussian_sigma`, `smooth_savgol_window_size`, or `smooth_savgol_poly_order` alone. A smoothing token must be present in `preproc_pipeline`. For example, with:
+
+```julia
+settings.data_settings.psd.preproc_pipeline = "log10"
+settings.data_settings.psd.smooth_gaussian_sigma = 2.0
+```
+
+the PSD is only log-transformed, not smoothed.
+
+To enable smoothing, include it explicitly in the pipeline:
+
+```julia
+# Savitzky-Golay smoothing after log10
+settings.data_settings.psd.preproc_pipeline = "log10-savgol"
+settings.data_settings.psd.smooth_savgol_window_size = 11
+settings.data_settings.psd.smooth_savgol_poly_order = 3
+
+# Gaussian smoothing after log10
+settings.data_settings.psd.preproc_pipeline = "log10-gaussian"
+settings.data_settings.psd.smooth_gaussian_sigma = 2.0
+```
+
+Supported smoothing tokens are `savgol`, `smooth`, `gaussian`, and `moving_avg`. Pipeline order matters: `"log10-gaussian"` smooths after the log transform, while `"gaussian-log10"` smooths before it.
 
 ---
 

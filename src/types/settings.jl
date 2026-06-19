@@ -1008,10 +1008,10 @@ end
 Configuration for power spectral density (PSD) computation and preprocessing.
 
 # Fields
-- `window_size::Int`: Window size for Savitzky-Golay smoothing (default: 5)
-- `smooth_poly_order::Int`: Polynomial order for Savitzky-Golay smoothing (default: 2)
+- `smooth_savgol_window_size::Int`: Window size for Savitzky-Golay smoothing (default: 5)
+- `smooth_savgol_poly_order::Int`: Polynomial order for Savitzky-Golay smoothing (default: 2)
 - `rel_eps::Float64`: Relative epsilon for numerical stability (default: 1e-12)
-- `smooth_sigma::Float64`: Gaussian smoothing sigma (default: 1.0)
+- `smooth_gaussian_sigma::Float64`: Gaussian smoothing sigma (default: 1.0)
 - `workspace::Union{Nothing, SpectrumWorkspace}`: Cached workspace for Welch computation
 
 These settings control the preprocessing applied after Welch PSD computation
@@ -1024,10 +1024,10 @@ mutable struct PSDSettings <: AbstractSettings
     welch_nperseg::Int                      # Welch segment length (0=auto)
     welch_nfft::Int                         # FFT length (0=auto)
     noise_avg_reps::Int                     # averaging reps for noisy PSD
-    window_size::Int                        # Savitzky-Golay window size
-    smooth_poly_order::Int                  # Savitzky-Golay polynomial order
+    smooth_savgol_window_size::Int          # Savitzky-Golay window size
+    smooth_savgol_poly_order::Int           # Savitzky-Golay polynomial order
     rel_eps::Float64                        # Relative epsilon for numerical stability
-    smooth_sigma::Float64                   # Gaussian smoothing sigma
+    smooth_gaussian_sigma::Float64          # Gaussian smoothing sigma
     transient_period_duration::Float64      # Duration (seconds) of initial transient to skip (0.0 to disable)
     noise_seed::Union{Int, Nothing}         # Random seed for PSD noise (42=deterministic, nothing=random)
     workspace::Union{Nothing, Any}          # Cached SpectrumWorkspace (using Any to avoid circular dep)
@@ -1042,10 +1042,10 @@ mutable struct PSDSettings <: AbstractSettings
         welch_nfft = Int(get(psd_dict, "welch_nfft", 0))
         noise_avg_reps = max(Int(get(psd_dict, "noise_avg_reps", 1)), 1)
         
-        window_size = max(Int(get(psd_dict, "window_size", 5)), 1)
-        smooth_poly_order = max(Int(get(psd_dict, "smooth_poly_order", 2)), 0)
+        smooth_savgol_window_size = max(Int(get(psd_dict, "smooth_savgol_window_size", get(psd_dict, "window_size", 5))), 1)
+        smooth_savgol_poly_order = max(Int(get(psd_dict, "smooth_savgol_poly_order", get(psd_dict, "smooth_poly_order", 2))), 0)
         rel_eps = Float64(get(psd_dict, "rel_eps", 1e-12))
-        smooth_sigma = Float64(get(psd_dict, "smooth_sigma", 1.0))
+        smooth_gaussian_sigma = Float64(get(psd_dict, "smooth_gaussian_sigma", get(psd_dict, "smooth_sigma", 1.0)))
         transient_period_duration = max(Float64(get(psd_dict, "transient_period_duration", 2.0)), 0.0)
         
         # Noise seed for deterministic vs random noise generation
@@ -1057,7 +1057,7 @@ mutable struct PSDSettings <: AbstractSettings
         end
         
         return new(preproc_pipeline, welch_window_sec, welch_overlap, welch_nperseg, welch_nfft,
-                   noise_avg_reps, window_size, smooth_poly_order, rel_eps, smooth_sigma, transient_period_duration, noise_seed, nothing)
+                   noise_avg_reps, smooth_savgol_window_size, smooth_savgol_poly_order, rel_eps, smooth_gaussian_sigma, transient_period_duration, noise_seed, nothing)
     end
 end
 

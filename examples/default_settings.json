@@ -100,10 +100,10 @@
       "welch_nperseg": 0,
       "welch_nfft": 0,
       "noise_avg_reps": 1,
-      "window_size": 5,
-      "smooth_poly_order": 2,
+      "smooth_savgol_window_size": 5,
+      "smooth_savgol_poly_order": 2,
       "rel_eps": 1.0e-12,
-      "smooth_sigma": 1.0,
+      "smooth_gaussian_sigma": 1.0,
       "transient_period_duration": 2.0,
       "noise_seed": 42
     }

@@ -127,30 +127,6 @@ function _ensure_spectrum_workspace(workspace::Union{Nothing, SpectrumWorkspace}
     return workspace
 end
 
-const _IMAGEFILTERING_MODULE = Ref{Union{Module, Nothing}}(nothing)
-const _IMAGEFILTERING_TRIED = Ref(false)
-
-function _ensure_imagefiltering_module()
-    if _IMAGEFILTERING_TRIED[]
-        return _IMAGEFILTERING_MODULE[]
-    end
-    _IMAGEFILTERING_TRIED[] = true
-    try
-        mod = Base.require(:ImageFiltering)
-        _IMAGEFILTERING_MODULE[] = mod
-        return mod
-    catch err
-        _IMAGEFILTERING_MODULE[] = nothing
-        return nothing
-    end
-end
-
-function _require_imagefiltering(feature::String)
-    mod = _ensure_imagefiltering_module()
-    mod === nothing && error("$(feature) smoothing requires ImageFiltering.jl. Install it with `Pkg.add(\"ImageFiltering\")` and try again.")
-    return mod
-end
-
 function _resolve_nfft(len::Int, nfft::Union{Int, Nothing})
     if nfft === nothing
         return max(64, min(len, 2048))
@@ -426,7 +402,7 @@ function _apply_psd_preproc_op(op::PSDOffsetOp, psd::Vector{Float64}, freqs)
     return psd .- baseline
 end
 
-function _apply_psd_preproc_op(op::PSDSmoothOp, psd::Vector{Float64}, freqs)
+function _apply_psd_preproc_op(op::PSDSmoothOp, psd::AbstractVector{Float64}, freqs)
     return smooth_power_spectrum(psd; method=op.method, window_size=op.window_size, poly_order=op.poly_order, sigma=op.sigma)
 end
 
@@ -463,6 +439,14 @@ function _apply_psd_preproc_op!(op::PSDOffsetOp,
     return out
 end
 
+function _apply_psd_preproc_op!(op::PSDSmoothOp,
+                                out::AbstractVector{Float64},
+                                psd::AbstractVector{Float64},
+                                freqs)
+    smooth_power_spectrum!(out, psd; method=op.method, window_size=op.window_size, poly_order=op.poly_order, sigma=op.sigma)
+    return out
+end
+
 function _apply_psd_preproc_op!(op::AbstractPSDPreprocessOp,
                                 out::AbstractVector{Float64},
                                 psd::AbstractVector{Float64},
@@ -478,21 +462,10 @@ function _run_psd_preproc_pipeline!(ws::SpectrumWorkspace,
                                    freqs::Vector{Float64},
                                    ops::Vector{AbstractPSDPreprocessOp})
     (isempty(ops) || isempty(psd)) && return psd
-    len = length(psd)
     active = psd
-    spare = _psd_scratch_slice(ws, len)
+    spare = _psd_scratch_slice(ws, length(psd))
 
     for op in ops
-        if op isa PSDSmoothOp
-            active = _apply_psd_preproc_op(op, active, freqs)
-            new_len = length(active)
-            if new_len != len
-                len = new_len
-                spare = _psd_scratch_slice(ws, len)
-            end
-            continue
-        end
-
         _apply_psd_preproc_op!(op, spare, active, freqs)
         active, spare = spare, active
     end
@@ -565,10 +538,10 @@ function compute_preprocessed_welch_psd(
     # Extract PSD preprocessing settings from data_settings if available
     if data_settings !== nothing && hasproperty(data_settings, :psd)
         psd_settings = data_settings.psd
-        ctx_window_size = psd_settings.window_size
-        ctx_poly_order = psd_settings.smooth_poly_order
+        ctx_window_size = psd_settings.smooth_savgol_window_size
+        ctx_poly_order = psd_settings.smooth_savgol_poly_order
         ctx_rel_eps = psd_settings.rel_eps
-        ctx_sigma = psd_settings.smooth_sigma
+        ctx_sigma = psd_settings.smooth_gaussian_sigma
         pipeline_spec === nothing && (pipeline_spec = psd_settings.preproc_pipeline)
         if psd_settings.workspace !== nothing
             ws = psd_settings.workspace
@@ -706,7 +679,22 @@ end
 ## SMOOTHING
 ###################################################################################
 
-function smooth_power_spectrum(powers::Vector{Float64}; 
+struct SavitzkyGolayPlan
+    starts::Vector{Int}
+    lengths::Vector{Int}
+    weights::Matrix{Float64}
+end
+
+struct GaussianKernelPlan
+    radius::Int
+    kernel::Vector{Float64}
+end
+
+const _SMOOTH_PLAN_LOCK = ReentrantLock()
+const _SGOLAY_PLAN_CACHE = Dict{Tuple{Int, Int, Int}, SavitzkyGolayPlan}()
+const _GAUSSIAN_PLAN_CACHE = Dict{Float64, GaussianKernelPlan}()
+
+function _smooth_power_spectrum_legacy(powers::AbstractVector{Float64}; 
                               method="savitzky_golay", 
                               window_size=11, 
                               poly_order=3,
@@ -715,11 +703,9 @@ function smooth_power_spectrum(powers::Vector{Float64};
     if method == "none"
         return powers
     elseif method == "savitzky_golay"
-        # Savitzky-Golay filter
-        # Need to add: using DSP
-        return savitzky_golay(powers, window_size, poly_order).y  # 2nd order polynomial
+        return _savitzky_golay_smooth(powers, window_size, poly_order)
     elseif method == "gaussian"
-        img = _require_imagefiltering("Gaussian")
+        return _gaussian_smooth(powers, sigma)
         σ = sigma
         return img.imfilter(powers, img.Kernel.gaussian(σ))
     elseif method == "moving_avg"
@@ -737,6 +723,260 @@ function smooth_power_spectrum(powers::Vector{Float64};
     else
         error("Unknown smoothing method: $method")
     end
+end
+
+function _gaussian_smooth_legacy(powers::AbstractVector{Float64}, sigma::Real)
+    n = length(powers)
+    n == 0 && return Float64[]
+    sigma >= 0 || error("Gaussian smoothing requires sigma >= 0, got $sigma.")
+    sigma == 0 && return copy(powers)
+
+    radius = max(1, ceil(Int, 3 * sigma))
+    offsets = -radius:radius
+    kernel = exp.(-0.5 .* (Float64.(offsets) ./ Float64(sigma)).^2)
+    kernel ./= sum(kernel)
+
+    result = similar(powers, Float64)
+    lo = firstindex(powers)
+    hi = lastindex(powers)
+
+    for i in eachindex(powers)
+        acc = 0.0
+        for (k, offset) in enumerate(offsets)
+            idx = clamp(i + offset, lo, hi)
+            acc += kernel[k] * powers[idx]
+        end
+        result[i] = acc
+    end
+
+    return result
+end
+
+function _savitzky_golay_smooth_legacy(powers::AbstractVector{Float64},
+                                window_size::Int,
+                                poly_order::Int)
+    n = length(powers)
+    n == 0 && return Float64[]
+    window_size >= 1 || error("Savitzky-Golay smoothing requires window_size >= 1.")
+    isodd(window_size) || error("Savitzky-Golay smoothing requires an odd window_size, got $window_size.")
+    poly_order >= 0 || error("Savitzky-Golay smoothing requires poly_order >= 0.")
+    window_size > poly_order || error("Savitzky-Golay smoothing requires window_size > poly_order.")
+
+    result = similar(powers, Float64)
+    half_window = div(window_size, 2)
+
+    for i in eachindex(powers)
+        left = max(firstindex(powers), i - half_window)
+        right = min(lastindex(powers), i + half_window)
+        idxs = left:right
+        local_x = Float64[j - i for j in idxs]
+        order = min(poly_order, length(local_x) - 1)
+        vand = hcat((local_x .^ k for k in 0:order)...)
+        coeffs = vand \ Float64.(powers[idxs])
+        result[i] = coeffs[1]
+    end
+
+    return result
+end
+
+function _validate_savgol_params(window_size::Int, poly_order::Int)
+    window_size >= 1 || error("Savitzky-Golay smoothing requires window_size >= 1.")
+    isodd(window_size) || error("Savitzky-Golay smoothing requires an odd window_size, got $window_size.")
+    poly_order >= 0 || error("Savitzky-Golay smoothing requires poly_order >= 0.")
+    window_size > poly_order || error("Savitzky-Golay smoothing requires window_size > poly_order.")
+end
+
+function _validate_gaussian_sigma(sigma::Real)
+    sigma >= 0 || error("Gaussian smoothing requires sigma >= 0, got $sigma.")
+end
+
+function _gaussian_plan(sigma::Float64)
+    lock(_SMOOTH_PLAN_LOCK) do
+        get!(_GAUSSIAN_PLAN_CACHE, sigma) do
+            radius = max(1, ceil(Int, 3 * sigma))
+            offsets = collect(-radius:radius)
+            kernel = exp.(-0.5 .* (offsets ./ sigma) .^ 2)
+            kernel ./= sum(kernel)
+            GaussianKernelPlan(radius, kernel)
+        end
+    end
+end
+
+function _savitzky_golay_plan(n::Int, window_size::Int, poly_order::Int)
+    key = (n, window_size, poly_order)
+    lock(_SMOOTH_PLAN_LOCK) do
+        get!(_SGOLAY_PLAN_CACHE, key) do
+            half_window = div(window_size, 2)
+            max_len = min(n, window_size)
+            starts = Vector{Int}(undef, n)
+            lengths = Vector{Int}(undef, n)
+            weights = zeros(Float64, n, max_len)
+
+            for i in 1:n
+                left = max(1, i - half_window)
+                right = min(n, i + half_window)
+                len_i = right - left + 1
+                starts[i] = left
+                lengths[i] = len_i
+
+                order_i = min(poly_order, len_i - 1)
+                vand = Matrix{Float64}(undef, len_i, order_i + 1)
+
+                for row in 1:len_i
+                    x = Float64(left + row - 1 - i)
+                    term = 1.0
+                    for col in 1:(order_i + 1)
+                        vand[row, col] = term
+                        term *= x
+                    end
+                end
+
+                coeffs = (vand' * vand) \ vand'
+                @views weights[i, 1:len_i] .= coeffs[1, :]
+            end
+
+            SavitzkyGolayPlan(starts, lengths, weights)
+        end
+    end
+end
+
+function _moving_average_smooth!(out::AbstractVector{Float64},
+                                 powers::AbstractVector{Float64},
+                                 window_size::Int)
+    window_size >= 1 || error("Moving-average smoothing requires window_size >= 1.")
+    n = length(powers)
+    half_window = div(window_size, 2)
+
+    @inbounds for i in eachindex(powers)
+        start_idx = max(1, i - half_window)
+        end_idx = min(n, i + half_window)
+        acc = 0.0
+        for j in start_idx:end_idx
+            acc += powers[j]
+        end
+        out[i] = acc / (end_idx - start_idx + 1)
+    end
+    return out
+end
+
+function _gaussian_smooth!(out::AbstractVector{Float64},
+                           powers::AbstractVector{Float64},
+                           sigma::Real)
+    _validate_gaussian_sigma(sigma)
+    sigma == 0 && return copyto!(out, powers)
+
+    plan = _gaussian_plan(Float64(sigma))
+    kernel = plan.kernel
+    radius = plan.radius
+    n = length(powers)
+    last = length(kernel)
+    center_start = radius + 1
+    center_end = n - radius
+
+    @inbounds begin
+        for i in 1:min(n, radius)
+            acc = 0.0
+            for k in 1:last
+                idx = i + k - radius - 1
+                idx = idx < 1 ? 1 : (idx > n ? n : idx)
+                acc = muladd(kernel[k], powers[idx], acc)
+            end
+            out[i] = acc
+        end
+
+        if center_start <= center_end
+            for i in center_start:center_end
+                acc = 0.0
+                base = i - radius - 1
+                @simd for k in 1:last
+                    acc = muladd(kernel[k], powers[base + k], acc)
+                end
+                out[i] = acc
+            end
+        end
+
+        for i in max(center_end + 1, radius + 1):n
+            acc = 0.0
+            for k in 1:last
+                idx = i + k - radius - 1
+                idx = idx < 1 ? 1 : (idx > n ? n : idx)
+                acc = muladd(kernel[k], powers[idx], acc)
+            end
+            out[i] = acc
+        end
+    end
+    return out
+end
+
+function _savitzky_golay_smooth!(out::AbstractVector{Float64},
+                                 powers::AbstractVector{Float64},
+                                 window_size::Int,
+                                 poly_order::Int)
+    _validate_savgol_params(window_size, poly_order)
+    n = length(powers)
+    n == 0 && return out
+
+    plan = _savitzky_golay_plan(n, window_size, poly_order)
+    starts = plan.starts
+    lengths = plan.lengths
+    weights = plan.weights
+
+    @inbounds for i in 1:n
+        start_idx = starts[i]
+        len_i = lengths[i]
+        acc = 0.0
+        @simd for k in 1:len_i
+            acc = muladd(weights[i, k], powers[start_idx + k - 1], acc)
+        end
+        out[i] = acc
+    end
+    return out
+end
+
+function smooth_power_spectrum!(out::AbstractVector{Float64},
+                                powers::AbstractVector{Float64};
+                                method="savitzky_golay",
+                                window_size=11,
+                                poly_order=3,
+                                sigma=1.0)
+    length(out) == length(powers) || error("Output and input lengths must match for smoothing.")
+
+    if method == "none"
+        copyto!(out, powers)
+    elseif method == "savitzky_golay"
+        _savitzky_golay_smooth!(out, powers, window_size, poly_order)
+    elseif method == "gaussian"
+        _gaussian_smooth!(out, powers, sigma)
+    elseif method == "moving_avg"
+        _moving_average_smooth!(out, powers, window_size)
+    else
+        error("Unknown smoothing method: $method")
+    end
+    return out
+end
+
+function smooth_power_spectrum(powers::AbstractVector{Float64};
+                               method="savitzky_golay",
+                               window_size=11,
+                               poly_order=3,
+                               sigma=1.0)
+    result = similar(powers, Float64)
+    smooth_power_spectrum!(result, powers; method=method, window_size=window_size, poly_order=poly_order, sigma=sigma)
+    return result
+end
+
+function _gaussian_smooth(powers::AbstractVector{Float64}, sigma::Real)
+    result = similar(powers, Float64)
+    _gaussian_smooth!(result, powers, sigma)
+    return result
+end
+
+function _savitzky_golay_smooth(powers::AbstractVector{Float64},
+                                window_size::Int,
+                                poly_order::Int)
+    result = similar(powers, Float64)
+    _savitzky_golay_smooth!(result, powers, window_size, poly_order)
+    return result
 end
 
 
