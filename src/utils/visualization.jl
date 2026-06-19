@@ -230,15 +230,17 @@ function plot_timeseries_windows(simulated_times::Vector{Float64},
         n_sources = length(node_names)
         p = plot(layout=(2, n_sources), size=(400 * n_sources, 500), legend=:topright)
 
-        sim_time_min = minimum(simulated_times)
-        sim_time_max = maximum(simulated_times)
+        simulated_times_plot = simulated_times .- first(simulated_times)
+        sim_time_min = minimum(simulated_times_plot)
+        sim_time_max = maximum(simulated_times_plot)
         safe_zoom_sim = (max(zoom_window[1], sim_time_min), min(zoom_window[2], sim_time_max))
 
         if observed_times === nothing
             observed_times = simulated_times
         end
-        obs_time_min = minimum(observed_times)
-        obs_time_max = maximum(observed_times)
+        observed_times_plot = observed_times .- first(observed_times)
+        obs_time_min = minimum(observed_times_plot)
+        obs_time_max = maximum(observed_times_plot)
         safe_zoom_obs = (max(zoom_window[1], obs_time_min), min(zoom_window[2], obs_time_max))
 
         for (col_idx, node_name) in enumerate(node_names)
@@ -260,13 +262,13 @@ function plot_timeseries_windows(simulated_times::Vector{Float64},
             zoom_idx = _subplot_index(n_sources, 2, col_idx)
 
             if !isempty(simulated_signal)
-                plot!(p[full_idx], simulated_times, simulated_signal;
+                plot!(p[full_idx], simulated_times_plot, simulated_signal;
                       label="Simulated",
                       xlabel="",
                       ylabel=col_idx == 1 ? "Amplitude" : "",
                       title="$(node_name)\nFull",
                       linewidth=1.5)
-                plot!(p[zoom_idx], simulated_times, simulated_signal;
+                plot!(p[zoom_idx], simulated_times_plot, simulated_signal;
                       label="Simulated",
                       xlabel="Time (s)",
                       ylabel=col_idx == 1 ? "Amplitude" : "",
@@ -286,8 +288,8 @@ function plot_timeseries_windows(simulated_times::Vector{Float64},
             end
 
             if observed_signal !== nothing && !isempty(observed_signal)
-                plot!(p[full_idx], observed_times, observed_signal; label="Observed", color=:black)
-                plot!(p[zoom_idx], observed_times, observed_signal; label="Observed", color=:black, xlims=safe_zoom_obs)
+                plot!(p[full_idx], observed_times_plot, observed_signal; label="Observed", color=:black)
+                plot!(p[zoom_idx], observed_times_plot, observed_signal; label="Observed", color=:black, xlims=safe_zoom_obs)
             end
         end
 

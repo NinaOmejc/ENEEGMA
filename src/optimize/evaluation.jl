@@ -26,7 +26,7 @@ the brain source signals.
 - `inits`: Initial condition values (can be NamedTuple or Vector)
 - `settings::Settings`: Settings object containing simulation configuration
 - `demean::Bool=true`: Whether to subtract the mean from the prediction
-- The transient period is taken from `settings.data_settings.psd.transient_period_duration`
+- The simulation burn-in is taken from `settings.data_settings.psd.simulation_transient_sec`
 
 # Returns
 - `sol`: ODE solution object
@@ -35,7 +35,7 @@ the brain source signals.
 - `error_msg::String`: Error message if simulation failed, empty otherwise
 
 # Notes
-The configured transient period is discarded to allow the system to settle into steady-state before analysis.
+The configured simulation burn-in is discarded to allow the system to settle into steady-state before analysis.
 """
 
 function simulate_and_extract_predictions(

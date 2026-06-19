@@ -43,6 +43,8 @@ and values are NodeData objects containing per-node information.
   - Multi-node: Dict with multiple entries (e.g., {"C" => NodeData(...), "M" => NodeData(...)})
 - `sampling_rate::Float64`: Sampling frequency in Hz (shared across all nodes)
 - `times::Vector{Float64}`: Time axis in seconds (shared across all nodes)
+- `removed_transient_duration_sec::Float64`: Observed-data transient removed during loading. `prepare_data!`
+  currently leaves observed data untouched, so this is typically `0.0`.
 """
 Base.@kwdef struct Data
     node_data::Dict{String, NodeData}
@@ -96,7 +98,7 @@ function Base.show(io::IO, data::Data)
     println(io, "Sampling Rate: $(data.sampling_rate) Hz")
     println(io, "Samples: $n_samples")
     println(io, "Time Range: [$time_start, $time_end] s")
-    println(io, "Removed Transient: $(data.removed_transient_duration_sec) s")
+    println(io, "Observed Transient Removed: $(data.removed_transient_duration_sec) s")
 
     if n_nodes == 0
         println(io, "\n[Node Data]")

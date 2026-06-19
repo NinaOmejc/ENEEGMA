@@ -107,7 +107,7 @@ function save_simulation_results(df::DataFrame,
     df_sources, _ = ENEEGMA.prepare_source_dataframe_for_analysis(
         df_sources_raw,
         1.0 / simulation_settings.saveat,
-        data_settings.psd.transient_period_duration;
+        data_settings.psd.simulation_transient_sec;
         demean=true,
         source_names=source_names
     )

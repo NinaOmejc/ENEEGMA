@@ -288,7 +288,7 @@ function extract_validated_model_predictions(sol,
                                              demean::Bool=true
                                              )::Tuple{Bool, String, Vector{Float64}, Dict{String, Vector{Float64}}}
     simulation_settings = settings.simulation_settings
-    transient_duration = settings.data_settings.psd.transient_period_duration
+    transient_duration = settings.data_settings.psd.simulation_transient_sec
     fs_actual = 1.0 / simulation_settings.saveat
     keep_idx = ENEEGMA.get_indices_after_transient_removal(sol.t,
                                                            Float64(transient_duration),

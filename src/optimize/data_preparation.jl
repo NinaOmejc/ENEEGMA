@@ -32,6 +32,7 @@ function prepare_data!(settings::Settings)
     ds = settings.data_settings
     freq_peak_metadata_by_node = Dict{String, Any}()
     freq_grid_by_node = Dict{String, Vector{Float64}}()
+    shared_times = nothing
     
     # Load data for each node that has a channel mapping
     for node_name in node_names
@@ -46,14 +47,18 @@ function prepare_data!(settings::Settings)
         
         # Ensure times matches signal length
         times_node = times[1:length(signal)]
-        
-        # Remove transient period
-        transient_duration = ds.psd.transient_period_duration
-        keep_idx = ENEEGMA.get_indices_after_transient_removal(times_node, transient_duration, times_node[1], fs)
-        
-        if !isempty(keep_idx)
-            signal = signal[keep_idx]
-            times_node = times_node[keep_idx]
+
+        if shared_times === nothing
+            shared_times = copy(times_node)
+        else
+            length(shared_times) == length(times_node) || error(
+                "Observed time axis length mismatch across loaded nodes. " *
+                "Expected $(length(shared_times)) samples but node '$node_name' has $(length(times_node))."
+            )
+            all(isapprox.(shared_times, times_node; atol=1e-8, rtol=1e-6)) || error(
+                "Observed time axis values differ across loaded nodes. " *
+                "ENEEGMA expects one shared observed time axis for all loaded channels."
+            )
         end
         
         # Compute PSD for this node
@@ -119,9 +124,8 @@ function prepare_data!(settings::Settings)
     return Data(
         node_data=node_data_dict,
         sampling_rate=fs,
-        times=times[1:length(node_data_dict[first(keys(node_data_dict))].signal)],
-        # add removed transient duration to total duration for metadata completeness
-        removed_transient_duration_sec=ds.psd.transient_period_duration
+        times=shared_times === nothing ? Float64[] : shared_times,
+        removed_transient_duration_sec=0.0
     )
 end
 

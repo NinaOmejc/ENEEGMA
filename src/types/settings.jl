@@ -1042,7 +1042,8 @@ mutable struct PSDSettings <: AbstractSettings
     smooth_savgol_poly_order::Int           # Savitzky-Golay polynomial order
     rel_eps::Float64                        # Relative epsilon for numerical stability
     smooth_gaussian_sigma::Float64          # Gaussian smoothing sigma
-    transient_period_duration::Float64      # Duration (seconds) of initial transient to skip (0.0 to disable)
+    simulation_transient_sec::Float64       # Duration (seconds) removed from simulated output before PSD/loss/evaluation
+    transient_period_duration::Float64      # Deprecated alias for simulation_transient_sec
     noise_seed::Union{Int, Nothing}         # Random seed for PSD noise (42=deterministic, nothing=random)
     workspace::Union{Nothing, Any}          # Cached SpectrumWorkspace (using Any to avoid circular dep)
 
@@ -1060,7 +1061,9 @@ mutable struct PSDSettings <: AbstractSettings
         smooth_savgol_poly_order = max(Int(get(psd_dict, "smooth_savgol_poly_order", get(psd_dict, "smooth_poly_order", 2))), 0)
         rel_eps = Float64(get(psd_dict, "rel_eps", 1e-12))
         smooth_gaussian_sigma = Float64(get(psd_dict, "smooth_gaussian_sigma", get(psd_dict, "smooth_sigma", 1.0)))
-        transient_period_duration = max(Float64(get(psd_dict, "transient_period_duration", 2.0)), 0.0)
+        legacy_transient = Float64(get(psd_dict, "transient_period_duration", 2.0))
+        simulation_transient_sec = max(Float64(get(psd_dict, "simulation_transient_sec", legacy_transient)), 0.0)
+        transient_period_duration = simulation_transient_sec
         
         # Noise seed for deterministic vs random noise generation
         noise_seed = if haskey(psd_dict, "noise_seed")
@@ -1071,11 +1074,21 @@ mutable struct PSDSettings <: AbstractSettings
         end
         
         return new(preproc_pipeline, welch_window_sec, welch_overlap, welch_nperseg, welch_nfft,
-                   noise_avg_reps, smooth_savgol_window_size, smooth_savgol_poly_order, rel_eps, smooth_gaussian_sigma, transient_period_duration, noise_seed, nothing)
+                   noise_avg_reps, smooth_savgol_window_size, smooth_savgol_poly_order, rel_eps, smooth_gaussian_sigma,
+                   simulation_transient_sec, transient_period_duration, noise_seed, nothing)
     end
 end
 
 PSDSettings(dict::AbstractDict) = PSDSettings(_string_anyify(dict))
+
+function Base.setproperty!(psd::PSDSettings, name::Symbol, value)
+    if name === :simulation_transient_sec || name === :transient_period_duration
+        transient = max(Float64(value), 0.0)
+        setfield!(psd, :simulation_transient_sec, transient)
+        return setfield!(psd, :transient_period_duration, transient)
+    end
+    return setfield!(psd, name, value)
+end
 
 function _coerce_manual_roi_regions(raw_regions)
     if raw_regions === nothing

@@ -64,6 +64,8 @@ data = ENEEGMA.prepare_data!(settings)
 
 Supported smoothing tokens include `savgol` (or `smooth`), `gaussian`, and `moving_avg`. The order in the pipeline matters: `"log10-gaussian"` smooths after the log transform, while `"gaussian-log10"` smooths before it.
 
+`settings.data_settings.psd.simulation_transient_sec` is separate from PSD preprocessing. It removes only the initial burn-in from simulated model output before PSD/loss/evaluation. ENEEGMA does not trim observed EEG/EMG recordings with this setting; crop observed recordings upstream if needed. The older `transient_period_duration` name is still accepted as a deprecated alias.
+
 ## Spectral ROI
 
 The recommended way to configure per-node spectral ROI behavior in JSON/settings files is the `data_settings.spectral_roi` key.

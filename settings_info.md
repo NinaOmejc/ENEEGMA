@@ -253,7 +253,8 @@ Nested under `data_settings.psd`.
 | `smooth_savgol_poly_order` | Int | `2` | Savitzky-Golay polynomial order. Used when the pipeline includes `savgol` or `smooth`. |
 | `rel_eps` | Float64 | `1e-12` | Relative epsilon for numerical stability. |
 | `smooth_gaussian_sigma` | Float64 | `1.0` | Gaussian smoothing sigma. Used when the pipeline includes `gaussian`. |
-| `transient_period_duration` | Float64 | `2.0` | Initial transient duration to discard before PSD and metric computation, in seconds. |
+| `simulation_transient_sec` | Float64 | `2.0` | Initial burn-in duration removed from simulated model output before PSD, loss, and evaluation. Observed data are not trimmed by this setting. |
+| `transient_period_duration` | Float64 | `2.0` | Deprecated alias for `simulation_transient_sec`. If both are present, `simulation_transient_sec` takes precedence. |
 | `noise_seed` | Int or `null` | `42` | Seed for synthetic measurement-noise injection during PSD averaging. |
 
 `workspace` also exists on the runtime struct but is an internal cache, not a user-facing JSON setting.
@@ -281,6 +282,14 @@ settings.data_settings.psd.smooth_gaussian_sigma = 2.0
 ```
 
 Supported smoothing tokens are `savgol`, `smooth`, `gaussian`, and `moving_avg`. Pipeline order matters: `"log10-gaussian"` smooths after the log transform, while `"gaussian-log10"` smooths before it.
+
+Transient handling is simulation-only:
+
+```julia
+settings.data_settings.psd.simulation_transient_sec = 2.0
+```
+
+This removes the first 2 seconds from simulated model output before PSD/loss/evaluation. ENEEGMA does not crop observed recordings with this setting. If you want to shorten observed EEG/EMG data, do that upstream in preprocessing. The legacy key `transient_period_duration` is still accepted for backward compatibility.
 
 ---
 
@@ -418,7 +427,7 @@ If omitted, the following defaults are used:
       "preproc_pipeline": "log10",
       "welch_window_sec": 2.0,
       "welch_overlap": 0.1,
-      "transient_period_duration": 2.0,
+      "simulation_transient_sec": 2.0,
       "noise_seed": 42
     }
   },

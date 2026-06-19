@@ -31,12 +31,7 @@ function _effective_data_duration_for_optimization(ds::DataSettings)::Union{Noth
     times = ENEEGMA._extract_or_synthesize_time_axis(eeg_data, ds.fs, signal_length_estimate)
     length(times) < 2 && return nothing
 
-    transient_duration = ds.psd.transient_period_duration
-    keep_idx = ENEEGMA.get_indices_after_transient_removal(times, transient_duration, times[1], ds.fs)
-    times_kept = isempty(keep_idx) ? times : times[keep_idx]
-    length(times_kept) < 2 && return nothing
-
-    duration = Float64(times_kept[end] - times_kept[1])
+    duration = Float64(times[end] - times[1])
     return duration > 0 ? duration : nothing
 end
 
@@ -363,7 +358,7 @@ function check_settings(settings::Settings; for_optimization::Bool=false)::Bool
             if abs(sim_duration - data_duration) > duration_tol
                 new_tspan = (ss.tspan[1], ss.tspan[1] + data_duration)
                 vwarn(
-                    "For optimization, simulation duration should match the effective data duration after transient removal. " *
+                    "For optimization, simulation duration should match the observed data duration. " *
                     "Got simulation tspan=$(ss.tspan) (duration=$(round(sim_duration; digits=6)) s), " *
                     "but the data duration is $(round(data_duration; digits=6)) s. " *
                     "Snapping simulation_settings.tspan to $(new_tspan).";
@@ -585,6 +580,9 @@ function settings_to_dict(settings::Settings)::OrderedDict{String, Any}
             data_s;
             exclude=Set([:workspace, :spectral_roi_by_node, :spectral_roi_copy_source_by_node])
         )
+        if haskey(data_dict, "psd") && data_dict["psd"] isa AbstractDict
+            delete!(data_dict["psd"], "transient_period_duration")
+        end
         if haskey(data_dict, "spectral_roi_manual")
             spectral_roi_dict = OrderedDict{String, Any}()
             for (node_name, regions) in pairs(data_s.spectral_roi_manual)
