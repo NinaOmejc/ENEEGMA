@@ -39,6 +39,8 @@ The package includes five examples covering the complete workflow:
 - **Parameter Optimization - Sampled** ([example4b_optimization_of_sampled_model.jl](examples/example4b_optimization_of_sampled_model.jl)): Optimize parameters for grammar-generated models.
 - **Hyperparameter Optimization** ([example5_hyperparam_optimization.jl](examples/example5_hyperparam_optimization.jl)): Perform hyperparameter sweep to optimize loss function weights.
 
+Optimization settings also include an optional `dynamically_increase_n_restarts_upon_unsuccess` fallback for cases where an entire restart batch collapses to the `1e9` penalty loss; see [settings_info.md](settings_info.md).
+
 ## Related paper
 
 For a detailed description of the framework, see [the paper](https://www.biorxiv.org/content/early/2026/04/14/2026.04.10.717643.full.pdf). If you use ENEEGMA in your research, please cite:

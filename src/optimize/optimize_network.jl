@@ -1,8 +1,26 @@
 
 # using Evolutionary, Optimization, Statistics, Distributions, Interpolations, Dates
 
+const OPTIMIZATION_PENALTY_LOSS = 1e9
+const DYNAMIC_N_RESTARTS_MAX_BATCHES = 5
+
 restart_rng(seed::Union{Nothing, Int}, irestart::Int) =
     seed === nothing ? Random.default_rng() : MersenneTwister(seed + irestart)
+
+function restart_found_nonpenalty_loss(
+    optsol::Union{Nothing, SciMLBase.OptimizationSolution},
+    runlog::Vector{OptLogEntry},
+    expected_params_len::Int;
+    penalty_loss::Float64=OPTIMIZATION_PENALTY_LOSS,
+)::Bool
+    optsol === nothing && return false
+    effective_loss = ENEEGMA.effective_optimization_loss(
+        optsol,
+        runlog;
+        expected_params_len=expected_params_len,
+    )
+    return isfinite(effective_loss) && effective_loss < penalty_loss
+end
 
 function optimize_network(
     net::Network,
@@ -74,43 +92,94 @@ function optimize_network(
     best_loss = Inf
     optlogger = OptLogEntry[]
     failure_reasons = String[]
+    expected_tunables_len = length(tunables_lb)
+    dynamic_restart_mode = os.dynamically_increase_n_restarts_upon_unsuccess
+    base_restart_count = os.n_restarts
+    total_restart_limit = dynamic_restart_mode ? base_restart_count * DYNAMIC_N_RESTARTS_MAX_BATCHES : base_restart_count
+    irestart = 1
+    batch_idx = 1
 
-    for irestart = 1:os.n_restarts
+    while irestart <= total_restart_limit
+        batch_end = min(irestart + base_restart_count - 1, total_restart_limit)
+        batch_found_nonpenalty = false
 
-        start_time = Dates.now()
-        restart_rng = ENEEGMA.restart_rng(settings.general_settings.seed, irestart)
-        
-        optsol, runlog, failure_reason = ENEEGMA.singlerun_optimization(irestart, optfun, optimizer, args, 
-            tunable_params_symbols, tunables_lb, tunables_ub,
-            os, start_time, net, param_spec, init_spec, initial_values_native, inits_lb, inits_ub,
-            restart_rng
-        );
+        while irestart <= batch_end
+            start_time = Dates.now()
+            restart_rng = ENEEGMA.restart_rng(settings.general_settings.seed, irestart)
+            
+            optsol, runlog, failure_reason = ENEEGMA.singlerun_optimization(irestart, batch_end, optfun, optimizer, args, 
+                tunable_params_symbols, tunables_lb, tunables_ub,
+                os, start_time, net, param_spec, init_spec, initial_values_native, inits_lb, inits_ub,
+                restart_rng
+            );
 
-        append!(optlogger, runlog)
-        if failure_reason !== nothing
-            push!(failure_reasons, failure_reason)
+            append!(optlogger, runlog)
+            if failure_reason !== nothing
+                push!(failure_reasons, failure_reason)
+            end
+
+            if optsol !== nothing && optsol.objective < best_loss
+                best_loss = optsol.objective
+                best_optsol = optsol
+            end
+            
+            # Optionally save results for this restart
+            if optsol !== nothing
+                save_optimization_results(optsol, runlog, setter, net, data, settings; 
+                                        blocks=blocks, 
+                                        restart_idx=irestart,
+                                        hyperparam_combo=hyperparam_combo, 
+                                        hyperparam_idx=hyperparam_idx, 
+                                        hyperparam_keys=hyperparam_keys)
+            end
+
+            # vinfo("Completed restart $irestart/$(os.n_restarts), current best loss: $best_loss. \n"; level=1)
+            # flush(stdout)
+
+            if best_loss <= os.loss_settings.abs_target_loss
+                vinfo("Target loss $(os.loss_settings.abs_target_loss) reached. Ending optimization early."; level=1)
+                break
+            end
+
+            batch_found_nonpenalty |= ENEEGMA.restart_found_nonpenalty_loss(
+                optsol,
+                runlog,
+                expected_tunables_len,
+            )
+
+            irestart += 1
         end
-
-        if optsol !== nothing && optsol.objective < best_loss
-            best_loss = optsol.objective
-            best_optsol = optsol
-        end
-        
-        # Optionally save results for this restart
-        if optsol !== nothing
-            save_optimization_results(optsol, runlog, setter, net, data, settings; 
-                                    blocks=blocks, 
-                                    restart_idx=irestart,
-                                    hyperparam_combo=hyperparam_combo, 
-                                    hyperparam_idx=hyperparam_idx, 
-                                    hyperparam_keys=hyperparam_keys)
-        end
-
-        # vinfo("Completed restart $irestart/$(os.n_restarts), current best loss: $best_loss. \n"; level=1)
-        # flush(stdout)
 
         if best_loss <= os.loss_settings.abs_target_loss
-            vinfo("Target loss $(os.loss_settings.abs_target_loss) reached. Ending optimization early."; level=1)
+            break
+        end
+
+        if !dynamic_restart_mode
+            break
+        end
+
+        if batch_found_nonpenalty
+            if batch_idx > 1
+                vwarn(
+                    "Dynamic restart search found a non-penalty loss in batch $batch_idx. Ending after $(irestart - 1) total restart(s).";
+                    level=1,
+                )
+            end
+            break
+        elseif batch_idx < DYNAMIC_N_RESTARTS_MAX_BATCHES
+            next_batch_end = min(irestart + base_restart_count - 1, total_restart_limit)
+            vwarn(
+                "Batch $batch_idx finished with only penalty/non-finite losses. " *
+                "Trying restarts $(irestart):$next_batch_end.";
+                level=1,
+            )
+            batch_idx += 1
+        else
+            vwarn(
+                "Dynamic restart expansion stopped after $(irestart - 1) restart(s) " *
+                "across $(DYNAMIC_N_RESTARTS_MAX_BATCHES) batch(es) without a non-penalty loss.";
+                level=1,
+            )
             break
         end
     end
@@ -130,6 +199,7 @@ end
 
 function singlerun_optimization(
     irestart::Int,
+    restart_limit::Int,
     optfun::OptimizationFunction,
     optimizer::Evolutionary.AbstractOptimizer,
     args::NamedTuple,
@@ -147,7 +217,7 @@ function singlerun_optimization(
     restart_rng::AbstractRNG
 )
 
-    vinfo("\n[Restart $irestart/$(os.n_restarts)]"; level=1)
+    vinfo("\n[Restart $irestart/$restart_limit]"; level=1)
 
     optlogger = OptLogEntry[]
     failure_reason = nothing

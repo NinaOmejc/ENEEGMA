@@ -577,6 +577,7 @@ function settings_to_dict(settings::Settings)::OrderedDict{String, Any}
         "reparam_strategy" => String(os.reparam_strategy),
         "reparam_type_scales" => OrderedDict(String(k) => v for (k, v) in pairs(os.reparam_type_scales)),
         "n_restarts" => os.n_restarts,
+        "dynamically_increase_n_restarts_upon_unsuccess" => os.dynamically_increase_n_restarts_upon_unsuccess,
         "maxiters" => os.maxiters,
         "time_limit_minutes" => os.time_limit_minutes,
         "loss_settings" => struct_to_ordered_dict(os.loss_settings),

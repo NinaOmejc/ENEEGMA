@@ -118,6 +118,7 @@
     "include_settings_in_results_output": true,
     "reparametrize": true,
     "n_restarts": 1,
+    "dynamically_increase_n_restarts_upon_unsuccess": false,
     "maxiters": 100000,
     "time_limit_minutes": 120,
     "loss_settings": {

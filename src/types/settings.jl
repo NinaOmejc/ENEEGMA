@@ -714,6 +714,7 @@ Settings for network parameter optimization.
 - `bound_level::String`: Bounds level, for example `conservative`, `recommended`, or `exploratory`.
 - `bounds_table_path::Union{String, Nothing}`: CSV path used by `named_table_level`.
 - `n_restarts::Int64`: Number of optimization restarts.
+- `dynamically_increase_n_restarts_upon_unsuccess::Bool`: If `true`, always complete the first `n_restarts` batch; if that batch has no non-penalty restart, run up to four additional batches of size `n_restarts` and stop after the first successful batch or after five batches total.
 - Additional fields for loss configuration, reparameterization, output control, and hyperparameter sweeping.
 
 NOTE: Parameter bounds are now always global by type only (task-independent).
@@ -739,6 +740,7 @@ mutable struct OptimizationSettings <: AbstractSettings
     reparam_strategy::Symbol
     reparam_type_scales::Dict{Symbol, Float64}
     n_restarts::Int64
+    dynamically_increase_n_restarts_upon_unsuccess::Bool
     maxiters::Int64
     time_limit_minutes::Int64
     loss_settings::LossSettings
@@ -836,6 +838,10 @@ mutable struct OptimizationSettings <: AbstractSettings
         save_modeled_psd = _losssettings_as_bool(get(optdict, "save_modeled_psd", false), false)
         include_settings_in_results_output = _losssettings_as_bool(get(optdict, "include_settings_in_results_output", true), true)
         n_restarts = Int64(get(optdict, "n_restarts", 1))
+        dynamically_increase_n_restarts_upon_unsuccess = _losssettings_as_bool(
+            get(optdict, "dynamically_increase_n_restarts_upon_unsuccess", false),
+            false,
+        )
         raw_sweep_section = begin
             section = get(optdict, "hyperparameter_sweep", nothing)
             if section === nothing
@@ -867,6 +873,7 @@ mutable struct OptimizationSettings <: AbstractSettings
             reparam_strategy,
             reparam_type_scales,
             n_restarts,
+            dynamically_increase_n_restarts_upon_unsuccess,
             Int64(get(optdict, "maxiters", 100_000)),
             Int64(get(optdict, "time_limit_minutes", 120)),
             lossset,

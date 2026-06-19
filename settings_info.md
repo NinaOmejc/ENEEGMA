@@ -197,6 +197,7 @@ Top-level optimization workflow configuration.
 | `reparam_strategy` | String or Symbol | `"typed"` | Reparameterization strategy. Supported values are `typed` and `none`. |
 | `reparam_type_scales` | Dict[String, Float64] | `{}` | Optional type-specific reparameterization scales. Keys are normalized internally to lowercase symbols. |
 | `n_restarts` | Int | `1` | Number of optimization restarts. More you have, the better chance for global optimum; increase for better optimization (but longer runtime). |
+| `dynamically_increase_n_restarts_upon_unsuccess` | Bool | `false` | Optional fallback for penalty-only optimization runs. If `true`, ENEEGMA always completes the first `n_restarts` runs. If none of them achieve a loss below `1e9`, it runs another full batch of `n_restarts`, checks again, and repeats for at most 5 batches total (`5 * n_restarts`). |
 | `maxiters` | Int | `100000` | Maximum optimization iterations. |
 | `time_limit_minutes` | Int | `120` | Time limit per optimization run in minutes. |
 | `output_dir` | String or `null` | `null` | Output directory for the optimization job. Usually set internally. |
@@ -319,6 +320,7 @@ If omitted, the following defaults are used:
   "optimization_settings": {
     "method": "CMAES",
     "n_restarts": 5,
+    "dynamically_increase_n_restarts_upon_unsuccess": true,
     "param_bound_scaling_level": "high",
     "loss_settings": {
       "fmin": 1.0,
