@@ -798,13 +798,53 @@ print_settings_summary(settings; format_type="short")  # All sections, compact
 function print_settings_summary(settings::Union{Settings, Dict}; section::String="all", format_type::String="short")
     # Convert Settings to dict for consistent handling
     settings_dict = if settings isa Settings
-        settings_to_dict(settings)
+        _settings_to_display_dict(settings)
     else
         settings
     end
     
     print_section(section, settings_dict, format_type)
     println()  # Add extra newline at end for readability
+end
+
+function _settings_to_display_dict(settings::Settings)::OrderedDict{String, Any}
+    settings_dict = settings_to_dict(settings)
+    _tidy_data_settings_display!(settings_dict)
+    return settings_dict
+end
+
+function _tidy_data_settings_display!(settings_dict::AbstractDict)
+    haskey(settings_dict, "data_settings") || return settings_dict
+    data_dict = settings_dict["data_settings"]
+    data_dict isa OrderedDict || return settings_dict
+    haskey(data_dict, "spectral_roi") || return settings_dict
+
+    ordered = OrderedDict{String, Any}()
+    for key in (
+        "data_file",
+        "target_channel",
+        "task_type",
+        "fs",
+        "data_columns",
+        "estimate_measurement_noise",
+        "measurement_noise_mode",
+        "measurement_noise_bands",
+        "spectral_roi",
+        "spectral_roi_auto_peak_sensitivity",
+        "spectral_roi_auto_remove_aperiodic_background",
+        "psd",
+    )
+        haskey(data_dict, key) && (ordered[key] = data_dict[key])
+    end
+
+    for (key, value) in data_dict
+        key in keys(ordered) && continue
+        key in ("spectral_roi_definition_mode", "spectral_roi_manual") && continue
+        ordered[key] = value
+    end
+
+    settings_dict["data_settings"] = ordered
+    return settings_dict
 end
 
 function print_section(section::String, settings_dict::AbstractDict, format_type::String="short")

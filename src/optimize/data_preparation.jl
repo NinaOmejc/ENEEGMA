@@ -226,7 +226,14 @@ Automatically detect frequency peaks in the PSD for ROI masking.
 - `fmin`, `fmax`: Frequency range to search
 
 # Returns
-- `BitVector`: Mask where peaks are marked as `true` (ROI)
+- `NamedTuple` with:
+  - `roi_mask::BitVector`: Mask where detected peaks are marked as `true`
+  - `peaks::Vector`: Peak descriptors from `find_spectral_peaks`
+  - `detection_powers`: Spectrum used for peak detection
+  - `aperiodic_log_powers`: Fitted aperiodic background in log10 space, or `nothing`
+  - `periodic_log_powers`: Log10 residual above the aperiodic background, or `nothing`
+  - `periodic_relative_powers`: Linear-scale periodic component, or `nothing`
+  - `powers_are_log::Bool`: Whether the input `powers` are already in log10 space
 """
 
 
@@ -568,7 +575,15 @@ function detect_peaks_automatic(
     freq_indices = findall(freq_mask)
 
     if isempty(freq_indices)
-        return roi_mask, NamedTuple[]
+        return (
+            roi_mask = roi_mask,
+            peaks = NamedTuple[],
+            detection_powers = detection_powers,
+            aperiodic_log_powers = aperiodic_log_powers,
+            periodic_log_powers = periodic_log_powers,
+            periodic_relative_powers = periodic_relative_powers,
+            powers_are_log = powers_are_log,
+        )
     end
 
     # -----------------------------------------------------------------
@@ -602,7 +617,15 @@ function detect_peaks_automatic(
         roi_mask[p.left_idx:p.right_idx] .= true
     end
 
-    return roi_mask, peaks
+    return (
+        roi_mask = roi_mask,
+        peaks = peaks,
+        detection_powers = detection_powers,
+        aperiodic_log_powers = aperiodic_log_powers,
+        periodic_log_powers = periodic_log_powers,
+        periodic_relative_powers = periodic_relative_powers,
+        powers_are_log = powers_are_log,
+    )
 end
 
 
@@ -672,6 +695,7 @@ Compute ROI and background masks for weighted loss based on data settings.
   - `bg_mask::BitVector`: Background regions
   - `roi_weight::Float64`: Weight for ROI loss
   - `bg_weight::Float64`: Weight for background loss
+  - `auto_peak_info`: Automatic peak-detection details for `:auto` ROI mode, otherwise `nothing`
 """
 function compute_frequency_regions(freqs::Vector{Float64}, powers::Vector{Float64},
                                    node_name::String,
@@ -704,10 +728,6 @@ function compute_frequency_regions(freqs::Vector{Float64}, powers::Vector{Float6
         roi_weight=ls.roi_weight,
         bg_weight=ls.bg_weight,
         auto_peak_info=auto_peak_info,
-        detection_powers=auto_peak_info === nothing ? nothing : auto_peak_info.detection_powers,
-        aperiodic_log_powers=auto_peak_info === nothing ? nothing : auto_peak_info.aperiodic_log_powers,
-        periodic_log_powers=auto_peak_info === nothing ? nothing : auto_peak_info.periodic_log_powers,
-        periodic_relative_powers=auto_peak_info === nothing ? nothing : auto_peak_info.periodic_relative_powers
     )
 end
 

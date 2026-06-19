@@ -29,6 +29,20 @@ function _dict_to_matrix(raw::AbstractDict, ::Type{T}) where T
     return reshape(data, dims...)
 end
 
+function _string_anyify(value)
+    if value isa AbstractDict
+        out = Dict{String, Any}()
+        for (k, v) in value
+            out[String(k)] = _string_anyify(v)
+        end
+        return out
+    elseif value isa AbstractVector
+        return [_string_anyify(v) for v in value]
+    end
+
+    return value
+end
+
 # Default grammar file location
 const DEFAULT_GRAMMAR = joinpath(pkgdir(@__MODULE__), "grammars", "default_grammar.cfg")
 
@@ -1061,6 +1075,8 @@ mutable struct PSDSettings <: AbstractSettings
     end
 end
 
+PSDSettings(dict::AbstractDict) = PSDSettings(_string_anyify(dict))
+
 function _coerce_manual_roi_regions(raw_regions)
     if raw_regions === nothing
         return Tuple{Float64, Float64}[]
@@ -1114,7 +1130,7 @@ end
 
 const _SPECTRAL_ROI_NODE_MODES = Set([:auto, :manual, :copy])
 
-function _validate_known_node_name(node_name::String,
+function _validate_known_node_name(node_name::AbstractString,
                                    node_names::AbstractVector{<:AbstractString},
                                    setting_name::AbstractString)
     isempty(node_names) && return
@@ -1141,7 +1157,7 @@ function _normalize_spectral_roi_node_entry(raw_value,
         elseif raw_lower == "copy"
             return (mode = :copy, copy_source = nothing, bands = nothing)
         elseif startswith(raw_lower, "copy:")
-            source = strip(raw_str[(findfirst(':', raw_str) + 1):end])
+            source = String(strip(raw_str[(findfirst(':', raw_str) + 1):end]))
             isempty(source) && throw(ArgumentError(
                 "DataSettings: copy source for node '$node_name' in $setting_name cannot be empty. Example: \"copy:C\"."
             ))
@@ -1169,7 +1185,7 @@ function _normalize_spectral_roi_node_entry(raw_value,
             "DataSettings: spectral ROI object for node '$node_name' in $setting_name uses \"source\" only with mode \"copy\"."
         ))
         if entry.mode == :copy && source_key !== nothing
-            source = strip(String(raw_value[source_key]))
+            source = String(strip(String(raw_value[source_key])))
             isempty(source) && throw(ArgumentError(
                 "DataSettings: copy source for node '$node_name' in $setting_name cannot be empty. Example: {\"mode\": \"copy\", \"source\": \"C\"}."
             ))
@@ -1441,6 +1457,8 @@ mutable struct DataSettings <: AbstractSettings
     end
 end
 
+DataSettings(dict::AbstractDict, node_names::Vector{String}=String[]) = DataSettings(_string_anyify(dict), node_names)
+
 function Base.setproperty!(ds::DataSettings, name::Symbol, value)
     if name === :measurement_noise_mode
         return setfield!(ds, :measurement_noise_mode, _normalize_measurement_noise_mode(value))
@@ -1492,6 +1510,8 @@ mutable struct Settings
         return new(gen, net, samp, sim, data, opt, nothing)
     end
 end
+
+Settings(dict::AbstractDict) = Settings(_string_anyify(dict))
 
 """
 Custom display for Settings objects - shows full configuration summary.
