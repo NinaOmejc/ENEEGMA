@@ -64,6 +64,62 @@ data = ENEEGMA.prepare_data!(settings)
 
 Supported smoothing tokens include `savgol` (or `smooth`), `gaussian`, and `moving_avg`. The order in the pipeline matters: `"log10-gaussian"` smooths after the log transform, while `"gaussian-log10"` smooths before it.
 
+## Spectral ROI
+
+The recommended way to configure per-node spectral ROI behavior in JSON/settings files is the `data_settings.spectral_roi` key.
+
+Examples:
+
+```json
+{
+  "data_settings": {
+    "spectral_roi": {
+      "C": "auto",
+      "M": "copy:C"
+    }
+  }
+}
+```
+
+```json
+{
+  "data_settings": {
+    "spectral_roi": {
+      "C": {
+        "mode": "manual",
+        "bands": [[13.0, 30.0]]
+      },
+      "M": "copy:C"
+    }
+  }
+}
+```
+
+```json
+{
+  "data_settings": {
+    "spectral_roi": {
+      "C": "auto",
+      "M": {
+        "mode": "manual",
+        "bands": [[13.0, 30.0]]
+      }
+    }
+  }
+}
+```
+
+Supported per-node values are:
+
+- `"auto"` or `"automatic"` or `true`
+- `"manual"` or `false`
+- `"copy:<node_name>"`
+- `{"mode": "manual", "bands": [[fmin, fmax], ...]}`
+- `{"mode": "auto"}`
+- `{"mode": "copy", "source": "C"}`
+
+`"copy:C"` means the copied node uses exactly the same ROI/background frequency-bin mask as `C`, not its own separately detected peaks. For now, the source node must appear earlier in `network_settings.node_names` than the dependent copy node.
+
 ## Related paper
 
 For a detailed description of the framework, see [the paper](https://www.biorxiv.org/content/early/2026/04/14/2026.04.10.717643.full.pdf). If you use ENEEGMA in your research, please cite:

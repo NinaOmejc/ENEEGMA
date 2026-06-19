@@ -30,6 +30,8 @@ function prepare_data!(settings::Settings)
     
     ls = settings.optimization_settings.loss_settings
     ds = settings.data_settings
+    freq_peak_metadata_by_node = Dict{String, Any}()
+    freq_grid_by_node = Dict{String, Vector{Float64}}()
     
     # Load data for each node that has a channel mapping
     for node_name in node_names
@@ -63,7 +65,33 @@ function prepare_data!(settings::Settings)
                                                                        channel=channel)
         
         # Compute frequency regions for this node
-        freq_peak_metadata = ENEEGMA.compute_frequency_regions(freqs, powers, node_name, ds, ls)
+        roi_mode = get(ds.spectral_roi_by_node, node_name, ds.spectral_roi_definition_mode)
+        freq_peak_metadata = if roi_mode == :copy
+            source_node = get(ds.spectral_roi_copy_source_by_node, node_name, "")
+            isempty(source_node) && error(
+                "Node '$node_name' uses spectral ROI copy mode, but no source node is configured. " *
+                "Use data_settings.spectral_roi = Dict(\"$node_name\" => \"copy:<source>\")."
+            )
+            haskey(freq_peak_metadata_by_node, source_node) || error(
+                "Node '$node_name' wants to copy spectral ROI from '$source_node', but '$source_node' has not been computed yet. " *
+                "Put source node before dependent node in network_settings.node_names, or use an explicit non-copy ROI."
+            )
+            source_freqs = freq_grid_by_node[source_node]
+            length(source_freqs) == length(freqs) || error(
+                "Node '$node_name' wants to copy spectral ROI from '$source_node', but their frequency-grid lengths differ " *
+                "($(length(freqs)) vs $(length(source_freqs)))."
+            )
+            all(isapprox.(source_freqs, freqs; atol=1e-8, rtol=1e-6)) || error(
+                "Node '$node_name' wants to copy spectral ROI from '$source_node', but their frequency grids do not match."
+            )
+
+            src_meta = freq_peak_metadata_by_node[source_node]
+            (; src_meta..., copied_from = source_node)
+        else
+            ENEEGMA.compute_frequency_regions(freqs, powers, node_name, ds, ls)
+        end
+        freq_peak_metadata_by_node[node_name] = freq_peak_metadata
+        freq_grid_by_node[node_name] = freqs
         
         # Determine PSD representation
         pipeline_has_log = ENEEGMA.psd_preproc_has_log(ds.psd.preproc_pipeline)
@@ -648,11 +676,12 @@ Compute ROI and background masks for weighted loss based on data settings.
 function compute_frequency_regions(freqs::Vector{Float64}, powers::Vector{Float64},
                                    node_name::String,
                                    data_settings::DataSettings, ls::LossSettings)
-    if data_settings.spectral_roi_definition_mode == :manual
+    roi_mode = get(data_settings.spectral_roi_by_node, node_name, data_settings.spectral_roi_definition_mode)
+    if roi_mode == :manual
         roi_regions = ENEEGMA.manual_spectral_roi_for_node(data_settings, node_name)
         roi_mask = ENEEGMA.build_mask_from_regions(freqs, roi_regions)
         auto_peak_info = nothing
-    else  # :auto
+    elseif roi_mode == :auto
         auto_peak_info = ENEEGMA.detect_peaks_automatic(
             freqs,
             powers,
@@ -662,7 +691,9 @@ function compute_frequency_regions(freqs::Vector{Float64}, powers::Vector{Float6
             remove_aperiodic_background=data_settings.spectral_roi_auto_remove_aperiodic_background,
             powers_are_log=ENEEGMA.psd_preproc_has_log(data_settings.psd.preproc_pipeline)
         )
-        roi_mask = auto_peak_info[1]
+        roi_mask = auto_peak_info.roi_mask
+    else
+        error("compute_frequency_regions does not handle spectral ROI mode '$roi_mode' directly for node '$node_name'. Copy mode must be resolved in prepare_data!().")
     end
     
     bg_mask = .!roi_mask
@@ -672,7 +703,11 @@ function compute_frequency_regions(freqs::Vector{Float64}, powers::Vector{Float6
         bg_mask=bg_mask,
         roi_weight=ls.roi_weight,
         bg_weight=ls.bg_weight,
-        auto_peak_info = auto_peak_info
+        auto_peak_info=auto_peak_info,
+        detection_powers=auto_peak_info === nothing ? nothing : auto_peak_info.detection_powers,
+        aperiodic_log_powers=auto_peak_info === nothing ? nothing : auto_peak_info.aperiodic_log_powers,
+        periodic_log_powers=auto_peak_info === nothing ? nothing : auto_peak_info.periodic_log_powers,
+        periodic_relative_powers=auto_peak_info === nothing ? nothing : auto_peak_info.periodic_relative_powers
     )
 end
 

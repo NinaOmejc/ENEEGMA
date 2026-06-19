@@ -498,6 +498,45 @@ function struct_to_ordered_dict(obj::T; exclude::Set{Symbol}=Set{Symbol}())::Ord
     return out
 end
 
+function _effective_manual_spectral_roi(ds::DataSettings, node_name::String)::Vector{Tuple{Float64, Float64}}
+    if haskey(ds.spectral_roi_manual, node_name)
+        return ds.spectral_roi_manual[node_name]
+    elseif haskey(ds.spectral_roi_manual, "__all__")
+        return ds.spectral_roi_manual["__all__"]
+    end
+    return Tuple{Float64, Float64}[]
+end
+
+function _spectral_roi_to_ordered_dict(ds::DataSettings)::OrderedDict{String, Any}
+    out = OrderedDict{String, Any}()
+    node_names = collect(keys(ds.spectral_roi_by_node))
+
+    if isempty(node_names)
+        for node_name in keys(ds.spectral_roi_manual)
+            node_name == "__all__" && continue
+            push!(node_names, node_name)
+        end
+    end
+
+    for node_name in node_names
+        mode = get(ds.spectral_roi_by_node, node_name, ds.spectral_roi_definition_mode)
+        if mode == :auto
+            out[node_name] = "auto"
+        elseif mode == :copy
+            source = get(ds.spectral_roi_copy_source_by_node, node_name, "")
+            out[node_name] = "copy:$source"
+        else
+            regions = _effective_manual_spectral_roi(ds, node_name)
+            out[node_name] = OrderedDict(
+                "mode" => "manual",
+                "bands" => [[fmin, fmax] for (fmin, fmax) in regions]
+            )
+        end
+    end
+
+    return out
+end
+
 """
     settings_to_dict(settings::Settings)::Dict{String, Any}
 
@@ -542,7 +581,10 @@ function settings_to_dict(settings::Settings)::OrderedDict{String, Any}
     # Data settings - serialize if not nothing
     data_s = settings.data_settings
     d["data_settings"] = if data_s !== nothing
-        data_dict = struct_to_ordered_dict(data_s; exclude=Set([:workspace]))
+        data_dict = struct_to_ordered_dict(
+            data_s;
+            exclude=Set([:workspace, :spectral_roi_by_node, :spectral_roi_copy_source_by_node])
+        )
         if haskey(data_dict, "spectral_roi_manual")
             spectral_roi_dict = OrderedDict{String, Any}()
             for (node_name, regions) in pairs(data_s.spectral_roi_manual)
@@ -550,6 +592,7 @@ function settings_to_dict(settings::Settings)::OrderedDict{String, Any}
             end
             data_dict["spectral_roi_manual"] = spectral_roi_dict
         end
+        data_dict["spectral_roi"] = _spectral_roi_to_ordered_dict(data_s)
         if haskey(data_dict, "measurement_noise_bands")
             measurement_noise_dict = OrderedDict{String, Any}()
             for (node_name, regions) in pairs(data_s.measurement_noise_bands)

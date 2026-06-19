@@ -101,10 +101,90 @@ Input data and spectral analysis metadata.
 | `estimate_measurement_noise` | Bool | `true` | Legacy backward-compatible alias for measurement-noise control. Prefer `measurement_noise_mode`; when `measurement_noise_mode` is omitted, `false` maps to `none` and `true` maps to `global_highfreq`. |
 | `measurement_noise_mode` | String or Symbol | `"global_highfreq"` | Measurement-noise mode. Supported values are `global_highfreq`, `none`, and `node_specific`. |
 | `measurement_noise_bands` | Dict[String, Array of bands] | `{"EEG": [[40.0, 45.0]], "EMG": []}` | Optional per-node or per-channel noise-estimation bands used when `measurement_noise_mode = "node_specific"`. |
-| `spectral_roi_definition_mode` | String or Symbol | `"manual"` | ROI mode. Supported values are `auto` and `manual`. |
+| `spectral_roi` | Dict[String, Any] | not set | Recommended per-node ROI configuration. Supports `"auto"`, `"manual"`, `"copy:<node>"`, booleans, and object forms such as `{"mode": "manual", "bands": [[13.0, 30.0]]}`. |
+| `spectral_roi_definition_mode` | String or Symbol | `"manual"` | Legacy global ROI mode. Supported values are `auto` and `manual`. |
+| `spectral_roi_by_node` | Dict[String, Any] | `{}` | Legacy intermediate per-node override API. Values may be `true`, `false`, `"auto"`, `"manual"`, or `"copy:<node>"`. |
 | `spectral_roi_auto_peak_sensitivity` | Float64 | `0.3` | Sensitivity used by automatic peak detection. |
 | `spectral_roi_auto_remove_aperiodic_background` | Bool | `false` | If `true`, automatic peak detection fits and removes an aperiodic background before thresholding peaks. |
-| `spectral_roi_manual` | Array of bands or Dict[String, Array of bands] | `[[7.5, 14.0]]` | Manual ROI bands. A single array applies to all nodes; a dict enables per-node ROI bands. |
+| `spectral_roi_manual` | Array of bands or Dict[String, Array of bands] | `[[7.5, 14.0]]` | Legacy manual ROI bands. A single array applies to all nodes; a dict enables per-node ROI bands. |
+
+### Recommended `spectral_roi`
+
+`spectral_roi` is the recommended JSON-compatible interface for per-node ROI policy.
+
+Supported per-node values:
+
+- String: `"auto"`, `"automatic"`, `"manual"`, `"copy:<node_name>"`
+- Bool: `true -> auto`, `false -> manual`
+- Object: `{"mode": "manual", "bands": [[fmin, fmax], ...]}`
+- Object: `{"mode": "auto"}`
+- Object: `{"mode": "copy", "source": "C"}`
+
+Examples:
+
+```json
+{
+  "spectral_roi": {
+    "C": "auto",
+    "M": "copy:C"
+  }
+}
+```
+
+```json
+{
+  "spectral_roi": {
+    "C": {
+      "mode": "manual",
+      "bands": [[13.0, 30.0]]
+    },
+    "M": "copy:C"
+  }
+}
+```
+
+```json
+{
+  "spectral_roi": {
+    "C": {
+      "mode": "manual",
+      "bands": [[13.0, 30.0]]
+    },
+    "M": {
+      "mode": "manual",
+      "bands": [[13.0, 30.0]]
+    }
+  }
+}
+```
+
+```json
+{
+  "spectral_roi": {
+    "C": "auto",
+    "M": {
+      "mode": "manual",
+      "bands": [[13.0, 30.0]]
+    }
+  }
+}
+```
+
+Recommended EEG-EMG example:
+
+```json
+{
+  "spectral_roi": {
+    "C": {
+      "mode": "manual",
+      "bands": [[13.0, 30.0]]
+    },
+    "M": "copy:C"
+  }
+}
+```
+
+`"copy:C"` means the copied node uses exactly the same ROI/background mask as `C`, not its own separately detected peaks. For now, the source node must appear earlier in `network_settings.node_names`.
 
 ### Measurement Noise Modes
 
@@ -132,7 +212,7 @@ Dict(
 )
 ```
 
-### Accepted `spectral_roi_manual` Forms
+### Legacy `spectral_roi_manual` Forms
 
 Shared ROI for all nodes:
 

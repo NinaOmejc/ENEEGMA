@@ -1112,6 +1112,120 @@ function _normalize_spectral_roi_manual(raw_value,
     return Dict(node_name => copy(regions) for node_name in names)
 end
 
+const _SPECTRAL_ROI_NODE_MODES = Set([:auto, :manual, :copy])
+
+function _validate_known_node_name(node_name::String,
+                                   node_names::AbstractVector{<:AbstractString},
+                                   setting_name::AbstractString)
+    isempty(node_names) && return
+    node_name in node_names || throw(ArgumentError(
+        "DataSettings: unknown node name '$node_name' in $setting_name. Known nodes: $(collect(String.(node_names)))."
+    ))
+end
+
+function _normalize_spectral_roi_node_entry(raw_value,
+                                            node_name::String,
+                                            node_names::AbstractVector{<:AbstractString},
+                                            setting_name::AbstractString)
+    _validate_known_node_name(node_name, node_names, setting_name)
+
+    if raw_value isa Bool
+        return (mode = raw_value ? :auto : :manual, copy_source = nothing, bands = nothing)
+    elseif raw_value isa AbstractString || raw_value isa Symbol
+        raw_str = strip(String(raw_value))
+        raw_lower = lowercase(raw_str)
+        if raw_lower in ("auto", "automatic")
+            return (mode = :auto, copy_source = nothing, bands = nothing)
+        elseif raw_lower == "manual"
+            return (mode = :manual, copy_source = nothing, bands = nothing)
+        elseif raw_lower == "copy"
+            return (mode = :copy, copy_source = nothing, bands = nothing)
+        elseif startswith(raw_lower, "copy:")
+            source = strip(raw_str[(findfirst(':', raw_str) + 1):end])
+            isempty(source) && throw(ArgumentError(
+                "DataSettings: copy source for node '$node_name' in $setting_name cannot be empty. Example: \"copy:C\"."
+            ))
+            _validate_known_node_name(source, node_names, setting_name)
+            return (mode = :copy, copy_source = source, bands = nothing)
+        end
+    elseif raw_value isa AbstractDict
+        mode_raw = if haskey(raw_value, "mode")
+            raw_value["mode"]
+        elseif haskey(raw_value, :mode)
+            raw_value[:mode]
+        elseif haskey(raw_value, "bands") || haskey(raw_value, :bands)
+            "manual"
+        else
+            throw(ArgumentError(
+                "DataSettings: spectral ROI object for node '$node_name' in $setting_name must contain \"mode\" or \"bands\". Example: {\"mode\": \"manual\", \"bands\": [[13.0, 30.0]]}."
+            ))
+        end
+
+        bands_key = haskey(raw_value, "bands") ? "bands" : (haskey(raw_value, :bands) ? :bands : nothing)
+        source_key = haskey(raw_value, "source") ? "source" : (haskey(raw_value, :source) ? :source : nothing)
+        entry = _normalize_spectral_roi_node_entry(mode_raw, node_name, node_names, setting_name)
+
+        entry.mode == :copy || source_key === nothing || throw(ArgumentError(
+            "DataSettings: spectral ROI object for node '$node_name' in $setting_name uses \"source\" only with mode \"copy\"."
+        ))
+        if entry.mode == :copy && source_key !== nothing
+            source = strip(String(raw_value[source_key]))
+            isempty(source) && throw(ArgumentError(
+                "DataSettings: copy source for node '$node_name' in $setting_name cannot be empty. Example: {\"mode\": \"copy\", \"source\": \"C\"}."
+            ))
+            _validate_known_node_name(source, node_names, setting_name)
+            entry = (mode = :copy, copy_source = source, bands = nothing)
+        elseif entry.mode == :copy && source_key === nothing && !(mode_raw isa AbstractString && startswith(lowercase(strip(String(mode_raw))), "copy:"))
+            throw(ArgumentError(
+                "DataSettings: spectral ROI object for node '$node_name' in $setting_name with mode \"copy\" must include \"source\". Example: {\"mode\": \"copy\", \"source\": \"C\"}."
+            ))
+        end
+
+        bands = nothing
+        if bands_key !== nothing
+            entry.mode == :manual || throw(ArgumentError(
+                "DataSettings: spectral ROI object for node '$node_name' in $setting_name uses \"bands\" only with mode \"manual\"."
+            ))
+            bands = _coerce_manual_roi_regions(raw_value[bands_key])
+        end
+
+        return (mode = entry.mode, copy_source = entry.copy_source, bands = bands)
+    end
+
+    throw(ArgumentError(
+        "DataSettings: unsupported spectral ROI entry for node '$node_name' in $setting_name. Use \"auto\", \"manual\", true, false, \"copy:C\", or an object like {\"mode\": \"manual\", \"bands\": [[13.0, 30.0]]}."
+    ))
+end
+
+function _apply_spectral_roi_overrides!(modes::Dict{String, Symbol},
+                                        copy_sources::Dict{String, String},
+                                        manual::Dict{String, Vector{Tuple{Float64, Float64}}},
+                                        raw_value,
+                                        node_names::AbstractVector{<:AbstractString},
+                                        setting_name::AbstractString)
+    raw_value isa AbstractDict || throw(ArgumentError(
+        "DataSettings: $setting_name must be a dict of node => ROI configuration. Example: Dict(\"C\" => \"auto\", \"M\" => \"copy:C\")."
+    ))
+
+    for (k, v) in raw_value
+        node_name = String(k)
+        entry = _normalize_spectral_roi_node_entry(v, node_name, node_names, setting_name)
+        modes[node_name] = entry.mode
+        if entry.mode == :copy
+            copy_sources[node_name] = entry.copy_source::String
+        else
+            delete!(copy_sources, node_name)
+        end
+        if entry.bands !== nothing
+            manual[node_name] = entry.bands
+        elseif entry.mode == :manual && !haskey(manual, node_name) && !haskey(manual, "__all__")
+            manual[node_name] = Tuple{Float64, Float64}[]
+        end
+    end
+
+    return nothing
+end
+
 const _MEASUREMENT_NOISE_MODES = Set([:global_highfreq, :none, :node_specific])
 
 function _normalize_measurement_noise_mode(raw_mode)::Symbol
@@ -1196,6 +1310,8 @@ Configuration for data input and metadata.
 - `measurement_noise_mode`: Noise estimation mode (`:global_highfreq`, `:none`, or `:node_specific`)
 - `measurement_noise_bands`: Optional per-node or per-channel estimation bands used by `:node_specific`
 - `spectral_roi_definition_mode`: Mode for defining region of interest (:auto or :manual)
+- `spectral_roi_by_node`: Legacy per-node ROI modes (`:auto`, `:manual`, `:copy`)
+- `spectral_roi_copy_source_by_node`: Per-node copy source used when ROI mode is `:copy`
 - `spectral_roi_auto_peak_sensitivity`: Sensitivity for automatic peak detection (0.0-1.0)
 - `spectral_roi_auto_remove_aperiodic_background`: Whether automatic peak detection removes a fitted aperiodic background before thresholding
 - `spectral_roi_manual`: Manual frequency bands for ROI definition
@@ -1213,6 +1329,8 @@ mutable struct DataSettings <: AbstractSettings
     measurement_noise_mode::Symbol
     measurement_noise_bands::Dict{String, Vector{Tuple{Float64, Float64}}}
     spectral_roi_definition_mode::Symbol  # :auto or :manual
+    spectral_roi_by_node::Dict{String, Symbol}  # node_name => :auto, :manual, or :copy
+    spectral_roi_copy_source_by_node::Dict{String, String}  # node_name => source node name for :copy
     spectral_roi_auto_peak_sensitivity::Float64  # 0.0-1.0, higher=looser peak detection
     spectral_roi_auto_remove_aperiodic_background::Bool
     spectral_roi_manual::Dict{String, Vector{Tuple{Float64, Float64}}}  # node_name => [(fmin, fmax), ...]; vector input is expanded to all nodes
@@ -1271,24 +1389,54 @@ mutable struct DataSettings <: AbstractSettings
         region_mode_raw = get(dict, "spectral_roi_definition_mode", "manual")
         spectral_roi_definition_mode = Symbol(lowercase(String(region_mode_raw)))
         spectral_roi_definition_mode in (:auto, :manual) || (spectral_roi_definition_mode = :auto)
-        
+
+        spectral_roi_manual = _normalize_spectral_roi_manual(
+            get(dict, "spectral_roi_manual", [[7.5, 14.0]]),
+            node_names
+        )
+
+        spectral_roi_by_node = Dict{String, Symbol}()
+        if !isempty(node_names)
+            for node_name in node_names
+                spectral_roi_by_node[node_name] = spectral_roi_definition_mode
+            end
+        end
+        spectral_roi_copy_source_by_node = Dict{String, String}()
+
+        if haskey(dict, "spectral_roi_by_node")
+            _apply_spectral_roi_overrides!(
+                spectral_roi_by_node,
+                spectral_roi_copy_source_by_node,
+                spectral_roi_manual,
+                dict["spectral_roi_by_node"],
+                node_names,
+                "spectral_roi_by_node"
+            )
+        end
+        if haskey(dict, "spectral_roi")
+            _apply_spectral_roi_overrides!(
+                spectral_roi_by_node,
+                spectral_roi_copy_source_by_node,
+                spectral_roi_manual,
+                dict["spectral_roi"],
+                node_names,
+                "spectral_roi"
+            )
+        end
+
         spectral_roi_auto_peak_sensitivity = clamp(Float64(get(dict, "spectral_roi_auto_peak_sensitivity", 0.3)), 0.0, 1.0)
         spectral_roi_auto_remove_aperiodic_background = _losssettings_as_bool(
             get(dict, "spectral_roi_auto_remove_aperiodic_background", false),
             false
         )
-        
-        spectral_roi_manual = _normalize_spectral_roi_manual(
-            get(dict, "spectral_roi_manual", [[7.5, 14.0]]),
-            node_names
-        )
-        
+
         # Initialize PSD settings
         psd = PSDSettings(dict)
 
         return new(data_file, target_channel, task_type, fs, data_columns, estimate_measurement_noise,
-                   measurement_noise_mode, measurement_noise_bands,
-                   spectral_roi_definition_mode, spectral_roi_auto_peak_sensitivity,
+                    measurement_noise_mode, measurement_noise_bands,
+                   spectral_roi_definition_mode, spectral_roi_by_node, spectral_roi_copy_source_by_node,
+                   spectral_roi_auto_peak_sensitivity,
                    spectral_roi_auto_remove_aperiodic_background, spectral_roi_manual, psd)
     end
 end
