@@ -3,6 +3,7 @@ Data preparation utilities centralize timeseries loading, PSD computation,
 and cached metadata used by optimization losses.
 """
 
+using Statistics
 # Data struct is defined in src/types/data.jl
 
 function prepare_data!(settings::Settings)
@@ -249,10 +250,265 @@ function fit_aperiodic_background(freq::Vector{Float64},
     return second_fit.intercept .+ second_fit.slope .* log10.(max.(freq, eps(Float64)))
 end
 
-function detect_peaks_automatic(freqs::Vector{Float64}, powers::Vector{Float64}, sensitivity::Float64;
-                               fmin::Float64=1.0, fmax::Float64=48.0,
-                               remove_aperiodic_background::Bool=false,
-                               powers_are_log::Bool=_powers_are_logged(powers))
+# ---------------------------------------------------------------------
+# Small utilities
+# ---------------------------------------------------------------------
+
+function moving_mean(x::AbstractVector, w::Int)
+    w = max(1, w)
+    w += iseven(w) ? 1 : 0
+    h = div(w, 2)
+
+    xf = collect(float.(x))
+    out = similar(xf, Float64)
+
+    for i in eachindex(xf)
+        lo = max(firstindex(xf), i - h)
+        hi = min(lastindex(xf), i + h)
+        out[i] = mean(view(xf, lo:hi))
+    end
+
+    return out
+end
+
+
+function moving_quantile(x::AbstractVector, w::Int, q::Real)
+    w = max(3, w)
+    w += iseven(w) ? 1 : 0
+    h = div(w, 2)
+
+    xf = collect(float.(x))
+    out = similar(xf, Float64)
+
+    for i in eachindex(xf)
+        lo = max(firstindex(xf), i - h)
+        hi = min(lastindex(xf), i + h)
+        out[i] = quantile(view(xf, lo:hi), q)
+    end
+
+    return out
+end
+
+# ---------------------------------------------------------------------
+# Peak boundary finder
+# ---------------------------------------------------------------------
+
+"""
+    peak_bounds(freqs, y, baseline, peak_idx; width_fraction=0.5, fmin=-Inf, fmax=Inf)
+
+Find start/end of one peak.
+
+Boundary level is:
+
+    baseline[peak] + width_fraction * (y[peak] - baseline[peak])
+
+Recommended:
+- `width_fraction = 0.5`: core half-prominence width
+- `width_fraction = 0.25`: broader ROI mask
+"""
+function peak_bounds(
+    freqs::AbstractVector{<:Real},
+    y::AbstractVector{<:Real},
+    baseline::AbstractVector{<:Real},
+    peak_idx::Int;
+    width_fraction::Real = 0.25,
+    fmin::Real = -Inf,
+    fmax::Real = Inf,
+)
+    n = length(y)
+
+    peak_excess = y[peak_idx] - baseline[peak_idx]
+
+    if peak_excess <= 0
+        return (
+            left_idx = peak_idx,
+            right_idx = peak_idx,
+            left_freq = Float64(freqs[peak_idx]),
+            right_freq = Float64(freqs[peak_idx]),
+            width_hz = 0.0,
+            boundary_level = Float64(baseline[peak_idx]),
+        )
+    end
+
+    boundary_level = baseline[peak_idx] + width_fraction * peak_excess
+
+    left = peak_idx
+    while left > 1 && freqs[left] >= fmin
+        if y[left] <= boundary_level
+            break
+        end
+        left -= 1
+    end
+
+    right = peak_idx
+    while right < n && freqs[right] <= fmax
+        if y[right] <= boundary_level
+            break
+        end
+        right += 1
+    end
+
+    return (
+        left_idx = left,
+        right_idx = right,
+        left_freq = Float64(freqs[left]),
+        right_freq = Float64(freqs[right]),
+        width_hz = Float64(freqs[right] - freqs[left]),
+        boundary_level = Float64(boundary_level),
+    )
+end
+
+
+# ---------------------------------------------------------------------
+# Spectral peak finder
+# ---------------------------------------------------------------------
+
+"""
+    find_spectral_peaks(freqs, powers; kwargs...)
+
+Detect spectral peaks using:
+1. smoothing,
+2. rolling lower-quantile baseline,
+3. excess above baseline,
+4. derivative/local-maximum candidates,
+5. adaptive threshold independent of the largest peak,
+6. peak bounds for ROI mask.
+
+Returns a vector of NamedTuples containing:
+    idx, freq, power, smooth_power, baseline, excess,
+    left_idx, right_idx, left_freq, right_freq, width_hz
+"""
+function find_spectral_peaks(
+    freqs::AbstractVector{<:Real},
+    powers::AbstractVector{<:Real};
+    fmin::Real = 1.0,
+    fmax::Real = 48.0,
+    max_peaks::Int = 5,
+    sensitivity::Real = 0.5,
+    smooth_bins::Int = 5,
+    baseline_bins::Int = 31,
+    baseline_quantile::Real = 0.20,
+    width_fraction::Real = 0.25,
+    min_width_hz::Real = 0.0,
+    min_distance_hz::Real = 1.0,
+)
+    @assert length(freqs) == length(powers)
+
+    sensitivity = clamp(sensitivity, 0.0, 1.0)
+
+    freq_mask = (freqs .>= fmin) .& (freqs .<= fmax)
+    freq_indices = findall(freq_mask)
+    length(freq_indices) < 3 && return NamedTuple[]
+
+    y = collect(float.(powers))
+
+    # Smooth spectrum.
+    ys = moving_mean(y, smooth_bins)
+
+    # Estimate local baseline. Window should be wider than typical peak width.
+    baseline = moving_quantile(ys, baseline_bins, baseline_quantile)
+
+    # Positive peak component above local baseline.
+    excess = ys .- baseline
+
+    # Candidate peaks: local maxima of excess.
+    candidates = Int[]
+
+    for k in 2:(length(freq_indices) - 1)
+        i = freq_indices[k]
+        iprev = freq_indices[k - 1]
+        inext = freq_indices[k + 1]
+
+        if excess[i] > excess[iprev] &&
+           excess[i] >= excess[inext] &&
+           excess[i] > 0
+            push!(candidates, i)
+        end
+    end
+
+    isempty(candidates) && return NamedTuple[]
+
+    positive_excess = excess[freq_indices][excess[freq_indices] .> 0]
+    isempty(positive_excess) && return NamedTuple[]
+
+    # Sensitivity mapping:
+    # sensitivity = 0.0 -> strict threshold
+    # sensitivity = 1.0 -> permissive threshold
+    #
+    # This is independent of the biggest peak.
+    threshold_quantile = 0.90 - 0.40 * sensitivity
+    threshold_quantile = clamp(threshold_quantile, 0.50, 0.95)
+    min_excess = quantile(positive_excess, threshold_quantile)
+
+    raw_peaks = NamedTuple[]
+
+    for i in candidates
+        if excess[i] < min_excess
+            continue
+        end
+
+        b = peak_bounds(
+            freqs,
+            ys,
+            baseline,
+            i;
+            width_fraction = width_fraction,
+            fmin = fmin,
+            fmax = fmax,
+        )
+
+        if b.width_hz < min_width_hz
+            continue
+        end
+
+        push!(raw_peaks, (
+            idx = i,
+            freq = Float64(freqs[i]),
+            power = Float64(y[i]),
+            smooth_power = Float64(ys[i]),
+            baseline = Float64(baseline[i]),
+            excess = Float64(excess[i]),
+            left_idx = b.left_idx,
+            right_idx = b.right_idx,
+            left_freq = b.left_freq,
+            right_freq = b.right_freq,
+            width_hz = b.width_hz,
+            boundary_level = b.boundary_level,
+        ))
+    end
+
+    isempty(raw_peaks) && return NamedTuple[]
+
+    # Keep strongest peaks first.
+    raw_peaks = sort(raw_peaks, by = p -> p.excess, rev = true)
+
+    # Enforce minimum distance so one broad bump is not split into many peaks.
+    selected = NamedTuple[]
+
+    for p in raw_peaks
+        far_enough = all(abs(p.freq - q.freq) >= min_distance_hz for q in selected)
+
+        if far_enough
+            push!(selected, p)
+        end
+
+        length(selected) >= max_peaks && break
+    end
+
+    # Return sorted by frequency.
+    return sort(selected, by = p -> p.freq)
+end
+
+
+function detect_peaks_automatic(
+    freqs::Vector{Float64},
+    powers::Vector{Float64},
+    sensitivity::Float64;
+    fmin::Float64 = 1.0,
+    fmax::Float64 = 48.0,
+    remove_aperiodic_background::Bool = false,
+    powers_are_log::Bool = _powers_are_logged(powers),
+)
     n = length(freqs)
     roi_mask = falses(n)
     sensitivity = clamp(sensitivity, 0.0, 1.0)
@@ -263,47 +519,62 @@ function detect_peaks_automatic(freqs::Vector{Float64}, powers::Vector{Float64},
     detection_powers = powers
 
     if remove_aperiodic_background
-        aperiodic_log_powers = fit_aperiodic_background(freqs, powers, fmin, fmax; powers_are_log=powers_are_log)
+        aperiodic_log_powers = fit_aperiodic_background(
+            freqs,
+            powers,
+            fmin,
+            fmax;
+            powers_are_log = powers_are_log,
+        )
+
         log_powers = powers_are_log ? powers : log10.(max.(powers, eps(Float64)))
         periodic_log_powers = log_powers .- aperiodic_log_powers
         periodic_relative_powers = 10.0 .^ periodic_log_powers
+
+        # Detect peaks on periodic component.
         detection_powers = periodic_relative_powers
     end
-    
-    # Restrict to frequency range
-    freq_mask = (fmin .<= freqs .<= fmax)
+
+    # Restrict to frequency range.
+    freq_mask = (freqs .>= fmin) .& (freqs .<= fmax)
     freq_indices = findall(freq_mask)
-    isempty(freq_indices) && return (
-        roi_mask=roi_mask,
-        detection_powers=detection_powers,
-        aperiodic_log_powers=aperiodic_log_powers,
-        periodic_log_powers=periodic_log_powers,
-        periodic_relative_powers=periodic_relative_powers,
-        powers_are_log=powers_are_log
-    )
-    
-    powers_in_range = detection_powers[freq_indices]
-    
-    # Compute threshold: baseline + (peak - baseline) * (1 - sensitivity)
-    baseline = quantile(powers_in_range, 0.2)  # lower quartile as baseline
-    peak = maximum(powers_in_range)
-    threshold = baseline + (peak - baseline) * (1.0 - sensitivity)
-    
-    # Mark peaks above threshold
-    for (local_idx, global_idx) in enumerate(freq_indices)
-        if detection_powers[global_idx] >= threshold
-            roi_mask[global_idx] = true
-        end
+
+    if isempty(freq_indices)
+        return roi_mask, NamedTuple[]
     end
-    
-    return (
-        roi_mask=roi_mask,
-        detection_powers=detection_powers,
-        aperiodic_log_powers=aperiodic_log_powers,
-        periodic_log_powers=periodic_log_powers,
-        periodic_relative_powers=periodic_relative_powers,
-        powers_are_log=powers_are_log
+
+    # -----------------------------------------------------------------
+    # New peak detection
+    # -----------------------------------------------------------------
+
+    peaks = find_spectral_peaks(
+        freqs,
+        detection_powers;
+        fmin = fmin,
+        fmax = fmax,
+        sensitivity = sensitivity,
+        max_peaks = 5,
+
+        # Start values I would use for EEG/EMG spectra.
+        smooth_bins = 5,
+        baseline_bins = 31,
+        baseline_quantile = 0.20,
+
+        # ROI width.
+        # 0.5 = core peak; 0.25 = wider peak support.
+        width_fraction = 0.25,
+
+        # Optional shape constraints.
+        min_width_hz = 0.0,
+        min_distance_hz = 1.0,
     )
+
+    # Create ROI mask from peak bounds.
+    for p in peaks
+        roi_mask[p.left_idx:p.right_idx] .= true
+    end
+
+    return roi_mask, peaks
 end
 
 
@@ -391,7 +662,7 @@ function compute_frequency_regions(freqs::Vector{Float64}, powers::Vector{Float6
             remove_aperiodic_background=data_settings.spectral_roi_auto_remove_aperiodic_background,
             powers_are_log=ENEEGMA.psd_preproc_has_log(data_settings.psd.preproc_pipeline)
         )
-        roi_mask = auto_peak_info.roi_mask
+        roi_mask = auto_peak_info[1]
     end
     
     bg_mask = .!roi_mask
@@ -401,10 +672,7 @@ function compute_frequency_regions(freqs::Vector{Float64}, powers::Vector{Float6
         bg_mask=bg_mask,
         roi_weight=ls.roi_weight,
         bg_weight=ls.bg_weight,
-        detection_powers=auto_peak_info === nothing ? nothing : auto_peak_info.detection_powers,
-        aperiodic_log_powers=auto_peak_info === nothing ? nothing : auto_peak_info.aperiodic_log_powers,
-        periodic_log_powers=auto_peak_info === nothing ? nothing : auto_peak_info.periodic_log_powers,
-        periodic_relative_powers=auto_peak_info === nothing ? nothing : auto_peak_info.periodic_relative_powers
+        auto_peak_info = auto_peak_info
     )
 end
 
