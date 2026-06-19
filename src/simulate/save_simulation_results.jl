@@ -162,7 +162,7 @@ function _write_simulation_results(df_sources::DataFrame,
     vinfo("Saved brain source signals to CSV: $path_csv"; level=2)
 
     timestamp_str = Dates.format(Dates.now(), "yyyy-mm-ddTHH:MM:SSZ")
-    settings_path = joinpath(general_settings.path_out, general_settings.exp_name, "settings.json")
+    settings_path = something(settings.settings_source_path, joinpath(general_settings.path_out, general_settings.exp_name, "settings.json"))
     settings_path_normalized = replace(settings_path, "\\" => "/")
 
     metadata = OrderedDict(
@@ -212,4 +212,3 @@ function _write_simulation_results(df_sources::DataFrame,
     vinfo("Simulation results saved to: $simulation_output_dir"; level=1)
     return simulation_output_dir
 end
-

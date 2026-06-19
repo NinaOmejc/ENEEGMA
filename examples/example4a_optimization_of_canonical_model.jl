@@ -60,7 +60,8 @@ set_all_params_tunable!(net.params);
 # ============================================================================
 print_settings_summary(settings; section="optimization_settings")
 settings.optimization_settings.maxiters = 10 # set low for testing; increase for better optimization
-settings.optimization_settings.param_bound_scaling_level = "high"
+settings.optimization_settings.bound_policy = "scaled_defaults"
+settings.optimization_settings.bound_level = "exploratory"
 settings.optimization_settings.n_restarts = 1 # better chance for global optimum; increase for better optimization (but longer runtime)
 optsol, optlogger, setter, blocks = optimize_network(net, data, settings);
 

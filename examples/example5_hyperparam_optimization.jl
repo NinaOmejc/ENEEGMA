@@ -30,7 +30,7 @@ set_all_params_tunable!(net.params)
 # ============================================================================
 
 # DEFAULT SWEEP AXES (automatically included):
-#   • param_bound_scaling_level: ["medium", "high"]
+#   • bound_level: ["recommended", "exploratory"]
 #   • sigma0: [-1.0, 2.0, 8.0]  (where -1.0 means use CMAES default)
 #   • population_size: [-1, 100, 150]  (where -1 means use CMAES default)
 #

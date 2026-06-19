@@ -107,7 +107,14 @@ add_hyperparameter_axis!(settings, "optimization_settings.loss_settings.bg_weigh
 """
 function add_hyperparameter_axis!(settings::Settings, param_path::String, values::Vector)
     """Add a new hyperparameter to the sweep configuration."""
-    settings.optimization_settings.hyperparameter_sweep.hyperparameters[param_path] = Any[v for v in values]
+    canonical_path = param_path == "optimization_settings.param_bound_scaling_level" ?
+                     "optimization_settings.bound_level" : param_path
+    canonical_values = if canonical_path == "optimization_settings.bound_level"
+        Any[normalize_bound_level(v) for v in values]
+    else
+        Any[v for v in values]
+    end
+    settings.optimization_settings.hyperparameter_sweep.hyperparameters[canonical_path] = canonical_values
 end
 
 """
@@ -181,14 +188,14 @@ function run_hyperparameter_sweep(settings::Union{Nothing, Settings},
     gs = settings.general_settings
     ns = settings.network_settings
     base_output_dir = ENEEGMA.construct_output_dir(gs, ns)
-    sweep_output_dir = ENEEGMA.find_next_numbered_folder(base_output_dir, "hyperparam_sweep")
+    sweep_output_dir = ENEEGMA.find_next_numbered_folder(base_output_dir, "h"; separator="")
     mkpath(sweep_output_dir)
     settings.optimization_settings.output_dir = sweep_output_dir
     vinfo("Created hyperparameter sweep folder: $sweep_output_dir"; level=1)
     
     # Save settings to the sweep folder
     settings_path = joinpath(sweep_output_dir, "settings.json")
-    ENEEGMA.save_settings(settings, settings_path)
+    # ENEEGMA.save_settings(settings, settings_path)
 
     if combo_idx !== nothing
         vinfo("\n[Hyperparameter Sweep $(combo_idx) / $(length(combos))]"; level=1)

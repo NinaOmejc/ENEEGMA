@@ -118,7 +118,7 @@ function construct_output_dir(gs::GeneralSettings, ns::NetworkSettings)::String
 end
 
 """
-    find_next_numbered_folder(base_path::String, prefix::String="optimization")::String
+    find_next_numbered_folder(base_path::String, prefix::String="optimization"; separator::String="_")::String
 
 Find the next available numbered folder in a directory, creating it if needed.
 
@@ -131,6 +131,7 @@ as well as grammar sampling results.
 # Arguments
 - `base_path::String`: Base directory where numbered folders should be created
 - `prefix::String`: Prefix for folder names (default: "optimization")
+- `separator::String`: Separator between prefix and number (default: "_")
 
 # Returns
 String: Full path to the next available numbered folder (e.g., "./results/exp/optimization_1")
@@ -142,13 +143,13 @@ output_dir = find_next_numbered_folder("./results/my_exp", "optimization")
 # Returns: "./results/my_exp/optimization_2/" if optimization_1 already exists
 ```
 """
-function find_next_numbered_folder(base_path::String, prefix::String="optimization")::String
+function find_next_numbered_folder(base_path::String, prefix::String="optimization"; separator::String="_")::String
     mkpath(base_path)
     idx = 1
-    while isdir(joinpath(base_path, "$(prefix)_$idx"))
+    while isdir(joinpath(base_path, "$(prefix)$(separator)$(idx)"))
         idx += 1
     end
-    return joinpath(base_path, "$(prefix)_$idx")
+    return joinpath(base_path, "$(prefix)$(separator)$(idx)")
 end
 
 """
@@ -566,17 +567,22 @@ function settings_to_dict(settings::Settings)::OrderedDict{String, Any}
     os = settings.optimization_settings
     d["optimization_settings"] = OrderedDict(
         "method" => os.method,
-        "param_bound_scaling_level" => os.param_bound_scaling_level,
+        "bound_policy" => os.bound_policy,
+        "bound_level" => os.bound_level,
+        "bounds_table_path" => os.bounds_table_path,
         "save_optimization_history" => os.save_optimization_history,
         "save_modeled_psd" => os.save_modeled_psd,
         "include_settings_in_results_output" => os.include_settings_in_results_output,
         "reparametrize" => os.reparametrize,
+        "reparam_strategy" => String(os.reparam_strategy),
+        "reparam_type_scales" => OrderedDict(String(k) => v for (k, v) in pairs(os.reparam_type_scales)),
         "n_restarts" => os.n_restarts,
         "maxiters" => os.maxiters,
         "time_limit_minutes" => os.time_limit_minutes,
         "loss_settings" => struct_to_ordered_dict(os.loss_settings),
         "optimizer_settings" => struct_to_ordered_dict(os.optimizer_settings),
-        "hyperparameter_sweep" => os.hyperparameter_sweep.hyperparameters
+        "hyperparameter_sweep" => os.hyperparameter_sweep.hyperparameters,
+        "output_dir" => os.output_dir,
     )
     
     return d
@@ -1115,6 +1121,7 @@ function load_settings(settings_path::String)::Settings
     # Build Settings object from loaded settings dict
     # The Settings constructors handle all default values internally
     s = Settings(settings)
+    s.settings_source_path = normpath(settings_path)
     set_task_settings(s)  # Store settings in task-local storage and set verbosity
 
     vinfo("Settings loaded and initialized from: $settings_path", level=1)

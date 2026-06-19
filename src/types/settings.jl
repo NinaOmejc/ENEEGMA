@@ -669,7 +669,14 @@ function _parse_hyperparameter_sweep(raw_section)::OrderedDict{String, Vector{An
     if raw_section isa AbstractDict
         for (param_path, values) in raw_section
             if param_path isa AbstractString && values isa AbstractVector
-                result[String(param_path)] = Any[v for v in values]
+                canonical_path = String(param_path) == "optimization_settings.param_bound_scaling_level" ?
+                                 "optimization_settings.bound_level" : String(param_path)
+                canonical_values = if canonical_path == "optimization_settings.bound_level"
+                    Any[normalize_bound_level(v) for v in values]
+                else
+                    Any[v for v in values]
+                end
+                result[canonical_path] = canonical_values
             end
         end
     end
@@ -686,7 +693,7 @@ mutable struct HyperparameterSweepSettings <: AbstractSettings
         # If no hyperparameters provided, use sensible defaults for sweep
         if isempty(hyperparams)
             hyperparams = OrderedDict(
-                "optimization_settings.param_bound_scaling_level" => ["medium", "high"],
+                "optimization_settings.bound_level" => ["recommended", "exploratory"],
                 "optimization_settings.optimizer_settings.sigma0" => [2.0, 8.0],
                 "optimization_settings.optimizer_settings.population_size" => [100, 150],
             )
@@ -703,25 +710,23 @@ Settings for network parameter optimization.
 
 # Fields
 - `method::String`: Optimization method. **Currently only "CMAES" is supported.**
-- `param_bound_scaling_level::String`: Parameter bounds scaling level (low, medium, high, ultra, empirical, unbounded).
-- `empirical_bounds_table_path::Union{String, Nothing}`: Path to CSV with empirical parameter bounds.
-- `empirical_lower_bound_column::String`: Column name for lower bound values (e.g., "5perc").
-- `empirical_upper_bound_column::String`: Column name for upper bound values (e.g., "95perc").
+- `bound_policy::String`: Parameter-bounds policy, for example `scaled_defaults`, `named_table_level`, or `unbounded`.
+- `bound_level::String`: Bounds level, for example `conservative`, `recommended`, or `exploratory`.
+- `bounds_table_path::Union{String, Nothing}`: CSV path used by `named_table_level`.
 - `n_restarts::Int64`: Number of optimization restarts.
-- Additional fields for loss configuration, reparameterization, and hyperparameter sweeping.
+- Additional fields for loss configuration, reparameterization, output control, and hyperparameter sweeping.
 
 NOTE: Parameter bounds are now always global by type only (task-independent).
-The deprecated `bounds_task` field is ignored if present in old configs.
 """
 mutable struct OptimizationSettings <: AbstractSettings
     method::String
     
-    # New parameter bounds policy fields (preferred)
+    # Current parameter-bounds API
     bound_policy::String
     bound_level::String
     bounds_table_path::Union{String, Nothing}
     
-    # Old parameter bounds fields (deprecated, kept for backward compatibility)
+    # Transitional compatibility fields. Prefer bound_policy/bound_level/bounds_table_path.
     param_bound_scaling_level::String
     empirical_bounds_table_path::Union{String, Nothing}
     empirical_lower_bound_column::String
@@ -1310,6 +1315,7 @@ mutable struct Settings
     simulation_settings::Union{SimulationSettings, Nothing}
     data_settings::Union{DataSettings, Nothing}
     optimization_settings::Union{OptimizationSettings, Nothing}
+    settings_source_path::Union{String, Nothing}
 
     function Settings(dict::Dict{String, Any})
 
@@ -1321,7 +1327,7 @@ mutable struct Settings
         datad = get(dict, "data_settings", Dict{String, Any}())
         data  = DataSettings(datad, net.node_names)
 
-        return new(gen, net, samp, sim, data, opt)
+        return new(gen, net, samp, sim, data, opt, nothing)
     end
 end
 

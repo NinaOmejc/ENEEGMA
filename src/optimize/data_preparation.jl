@@ -454,6 +454,7 @@ function estimate_measurement_noise_std(signal::AbstractVector{<:Real},
     Returns `-1.0` when estimation is disabled or no valid estimate can be formed.
     `:global_highfreq` preserves the legacy high-frequency heuristic, `:none` disables
     measurement-noise estimation, and `:node_specific` uses configured per-node/per-channel bands.
+    For `:node_specific`, an empty band list (`[]`) disables estimation for that node/channel.
     """
     if !data_settings.estimate_measurement_noise || signal === nothing
         return -1.0
@@ -466,6 +467,7 @@ function estimate_measurement_noise_std(signal::AbstractVector{<:Real},
         resolved_node = node_name === nothing ? "" : String(node_name)
         resolved_channel = channel === nothing ? nothing : String(channel)
         bands = ENEEGMA.measurement_noise_bands_for_node(data_settings, resolved_node, resolved_channel)
+        isempty(bands) && return -1.0
         sigma_bands = estimate_sigma_floor_in_bands(signal, Float64(fs), data_settings, ls, bands)
         return _is_valid_sigma(sigma_bands) ? Float64(sigma_bands) : -1.0
     end

@@ -110,7 +110,9 @@
   },
   "optimization_settings": {
     "method": "CMAES",
-    "param_bound_scaling_level": "recommended",
+    "bound_policy": "scaled_defaults",
+    "bound_level": "recommended",
+    "bounds_table_path": null,
     "save_optimization_history": false,
     "save_modeled_psd": false,
     "include_settings_in_results_output": true,
@@ -133,9 +135,9 @@
       "sigma0": -1.0
     },
     "hyperparameter_sweep": {
-      "optimization_settings.param_bound_scaling_level": [
-        "medium",
-        "high"
+      "optimization_settings.bound_level": [
+        "recommended",
+        "exploratory"
       ],
       "optimization_settings.optimizer_settings.sigma0": [
         2.0,

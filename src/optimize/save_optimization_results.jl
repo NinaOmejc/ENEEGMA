@@ -79,6 +79,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
                                     fullfname_fig=path_obs_freq,
                                     general_settings=general_settings)
 
+        #=         
         fname_param = "$(base_prefix)_parameter_exploration.png"
         path_param = joinpath(figures_dir, fname_param)
         ENEEGMA.plot_param_exploration(optlogger, net;
@@ -86,7 +87,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
                                        node_names=result.node_names,
                                        loss_settings=loss_settings,
                                        fullfname_fig=path_param,
-                                       general_settings=general_settings)
+                                       general_settings=general_settings) =#
 
         fname_freq_plot = "$(base_prefix)_spectrum_evolution.png"
         fname_freq_anim = "$(base_prefix)_spectrum_evolution.gif"
@@ -110,10 +111,15 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     
     # Build best_params dict with normalized names
     best_opt_params_named = OrderedDict{String, Any}()
+    best_opt_param_bounds_named = OrderedDict{String, Any}()
     if !isempty(blocks.tunable_params_symbols)
-        for (sym, val) in zip(blocks.tunable_params_symbols, params_native)
+        for (idx, (sym, val)) in enumerate(zip(blocks.tunable_params_symbols, params_native))
             normalized_name = normalize_parameter_name(String(sym))
             best_opt_params_named[normalized_name] = val
+            best_opt_param_bounds_named[normalized_name] = OrderedDict(
+                "lower" => blocks.tunable_params_lb[idx],
+                "upper" => blocks.tunable_params_ub[idx],
+            )
         end
     end
     
@@ -135,9 +141,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
     
     # Build metadata section with settings file reference
     timestamp_str = Dates.format(Dates.now(), "yyyy-mm-ddTHH:MM:SSZ")
-    # Settings file is saved in the experiment folder (exp_name subfolder)
-    settings_path = joinpath(general_settings.path_out, general_settings.exp_name, "settings.json")
-    # Convert to forward slashes for cross-platform JSON compatibility
+    settings_path = something(settings.settings_source_path, joinpath(general_settings.path_out, general_settings.exp_name, "settings.json"))
     settings_path_normalized = replace(settings_path, "\\" => "/")
     
     metadata = OrderedDict(
@@ -193,6 +197,7 @@ function save_optimization_results(optsol::SciMLBase.OptimizationSolution,
         "per_node_metrics" => per_node_metrics_dict,
         "metadata" => metadata,
         "best_parameters" => best_opt_params_named,
+        "best_parameter_bounds" => best_opt_param_bounds_named,
         "initial_states" => initial_states_dict,
         "hyperparam_adaptation" => hyperparam_adaptation_dict,
     )
