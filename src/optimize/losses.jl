@@ -183,15 +183,6 @@ function compute_loss(new_params, args, metric_fun::Function, loss_settings::Los
         demean=true
     )
 
-    for (node_name, pred) in model_predictions
-        @show node_name
-        @show length(pred)
-        @show mean(pred)
-        @show std(pred)
-        @show extrema(pred)
-        @show pred[1:min(20, end)]
-    end
-    
     if !success
         return 1e9
     end

@@ -18,10 +18,12 @@ function build_nodes!(net::Network)::Network
             serialize_rule_tree(node_model)
         end
         
-        if any(occursin(model_str, canonical_node) for canonical_node in canonical_node_models)
+        is_canonical_model = any(occursin(model_str, canonical_node) for canonical_node in canonical_node_models)
+        if is_canonical_model
             pops, node = ENEEGMA.get_canonical_node_model_info!(node)
         else
             pops, node = ENEEGMA.configure_node_model!(node, sampsett)
+            ENEEGMA.ensure_recipe_internode_routing!(pops, node, netsett)
         end
         node.populations = [ENEEGMA.build_population_dynamics(pop, simsett) for pop in pops]
         node.n_pops = length(node.populations)
@@ -34,6 +36,50 @@ function build_nodes!(net::Network)::Network
 
     print_network_nodes_info(net)
     return net
+end
+
+function _has_active_network_conn(weight::Real, conn_fun::AbstractString)::Bool
+    weight == 0.0 && return false
+    conn_fun_lower = lowercase(strip(conn_fun))
+    return !(conn_fun_lower in ("", "none", "false"))
+end
+
+function _pop_has_internode_target(pop::Population)::Bool
+    return any(lowercase(conn_fun) != "none" for conn_fun in pop.build_setts.internode_conn_func)
+end
+
+function ensure_recipe_internode_routing!(pops::Vector{Population}, node::Node, netsett::NetworkSettings)
+    isempty(pops) && return pops
+
+    has_active_incoming = any(
+        source_id != node.id &&
+        ENEEGMA._has_active_network_conn(netsett.network_conn[node.id, source_id],
+                                         netsett.network_conn_funcs[node.id, source_id])
+        for source_id in 1:netsett.n_nodes
+    )
+    has_active_outgoing = any(
+        target_id != node.id &&
+        ENEEGMA._has_active_network_conn(netsett.network_conn[target_id, node.id],
+                                         netsett.network_conn_funcs[target_id, node.id])
+        for target_id in 1:netsett.n_nodes
+    )
+
+    has_target = any(ENEEGMA._pop_has_internode_target(pop) for pop in pops)
+    has_sender = any(pop.build_setts.sends_internode_output for pop in pops)
+    pop1 = pops[1]
+
+    if has_active_incoming && !has_target
+        pop1.build_setts.internode_conn_func[1] = "linear"
+        pop1.build_setts.gets_internode_input = true
+        vwarn("Grammar-sampled node $(node.id):$(node.name) has active incoming network coupling but no internode target in the recipe. Injecting a linear internode placeholder into population 1."; level=1)
+    end
+
+    if has_active_outgoing && !has_sender
+        pop1.build_setts.sends_internode_output = true
+        vwarn("Grammar-sampled node $(node.id):$(node.name) has active outgoing network coupling but no internode sender in the recipe. Promoting population 1 to sender."; level=1)
+    end
+
+    return pops
 end
 
 
@@ -307,18 +353,18 @@ function _set_pop_from_grammar(parsed_rules::Vector{ParsedRule}, ip::Int, node::
     kwargs = Dict{Symbol,Any}()
 
     # Inputs
-    input_dynamics_rules = _get_parsed_rule_by_lhs(pop_parsed_rules, "InputDyn")
+    input_dynamics_rules = ENEEGMA._get_parsed_rule_by_lhs(pop_parsed_rules, "InputDyn")
     kwargs[:input_dynamics_spec] = String[]
 
     for idyn in input_dynamics_rules
         if idyn.rhs == "S S"
-            if isempty(_get_parsed_rule_by_lhs(pop_parsed_rules, "V"))
+            if isempty(ENEEGMA._get_parsed_rule_by_lhs(pop_parsed_rules, "V"))
                 push!(kwargs[:input_dynamics_spec], "poly_kernel")
             else
                 poly_parsed_rules_start = idyn.pos
                 poly_parsed_rules = parsed_rules[poly_parsed_rules_start:end]
 
-                polys = _build_input_polynomials(poly_parsed_rules)
+                polys = ENEEGMA._build_input_polynomials(poly_parsed_rules)
                 push!(kwargs[:input_dynamics_spec], polys)
             end
         else
@@ -327,7 +373,7 @@ function _set_pop_from_grammar(parsed_rules::Vector{ParsedRule}, ip::Int, node::
     end
 
     # Output dynamics
-    od = _get_parsed_rule_by_lhs(pop_parsed_rules, "OutputDyn", order=1)
+    od = ENEEGMA._get_parsed_rule_by_lhs(pop_parsed_rules, "OutputDyn", order=1)
     kwargs[:output_dynamics_spec] = od.rhs
     # Grammar models currently do not encode which population exports node-level output.
     # Match the canonical-model convention by treating the first population as the sender.
@@ -350,10 +396,10 @@ function _set_pop_from_grammar(parsed_rules::Vector{ParsedRule}, ip::Int, node::
         kwargs[:internode_conn_func] = mapped[3:4]
     else
         error("Unexpected number of ECF rules ($(length(pop_mcfs))) in Pop$(ip) block.")
-    end
+    end 
 
     # Stochastic noise
-    noise = _get_parsed_rule_by_lhs(pop_parsed_rules, "SN"; order=1).rhs
+    noise = ENEEGMA._get_parsed_rule_by_lhs(pop_parsed_rules, "SN"; order=1).rhs
     if noise == "true"
         kwargs[:noise_dynamics_spec] = "stochastic"
         kwargs[:noise_dynamics] = "c"

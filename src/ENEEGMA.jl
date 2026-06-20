@@ -52,6 +52,7 @@ D = Differential(t)
 
 include("grammar/grammar.jl")
 include("grammar/grammar_utils.jl")
+include("grammar/known_models_parse_trees.jl")
 
 export Grammar, GrammarRule
 export sample_from_grammar, export_grammar, save_grammar, load_grammar

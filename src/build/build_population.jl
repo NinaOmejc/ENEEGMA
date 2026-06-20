@@ -16,6 +16,8 @@ function build_population_dynamics(pop::Population, ss::SimulationSettings)
         pop.params = ENEEGMA.join_paramsets([pop.params; output_params...])
     end
 
+    ENEEGMA.ensure_population_internode_output!(pop)
+
     ENEEGMA.build_additive_noise_dynamics!(pop, ss)
 
     # Enforce consistency between population-level flags and variable-level flags
@@ -95,6 +97,30 @@ function remove_current_output_vars!(pop::Population)
     for var in current_internode_output_vars.vars
         var.sends_internode_output = false
     end
+end
+
+function ensure_population_internode_output!(pop::Population)
+    pop.build_setts.sends_internode_output || return pop
+
+    current_output_vars = get_vars_sending_internode_output(pop.vars)
+    isempty(current_output_vars.vars) || return pop
+
+    candidate_sets = (
+        get_vars_sending_interpop_output(pop.vars),
+        get_vars_sending_intrapop_output(pop.vars),
+        get_state_vars(pop.vars),
+    )
+
+    for candidate_set in candidate_sets
+        isempty(candidate_set.vars) && continue
+        for var in candidate_set.vars
+            var.sends_internode_output = true
+        end
+        return pop
+    end
+
+    vwarn("Population $(pop.parent_node.name):$(pop.id) is configured to send internode output, but no state variable is available to export."; level=1)
+    return pop
 end
 
 
