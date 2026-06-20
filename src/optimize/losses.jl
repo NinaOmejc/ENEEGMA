@@ -145,6 +145,12 @@ and error detection, then applies a specific metric function to calculate the fi
 
 # Returns
 - `loss`: Computed loss value
+
+new_params = ENEEGMA.decode_reparam_solution!(
+    tunables_guess,
+    blocks.param_spec,
+    blocks.init_spec,
+)
 """
 function compute_loss(new_params, args, metric_fun::Function, loss_settings::LossSettings)
 
@@ -169,13 +175,22 @@ function compute_loss(new_params, args, metric_fun::Function, loss_settings::Los
     updated_all_params = setter(all_params, θ)
     new_prob = remake(prob; p=updated_all_params, u0=iv, tspan=tspan)
     sol = safe_solve(new_prob, solver; solver_kwargs=solver_kwargs)
-    
+
     success, error_msg, _, model_predictions = ENEEGMA.extract_validated_model_predictions(
         sol,
         net,
         settings;
         demean=true
     )
+
+    for (node_name, pred) in model_predictions
+        @show node_name
+        @show length(pred)
+        @show mean(pred)
+        @show std(pred)
+        @show extrema(pred)
+        @show pred[1:min(20, end)]
+    end
     
     if !success
         return 1e9

@@ -103,6 +103,7 @@ export get_vars_by_nodeid, get_vars_by_eq_idx, get_symbols
 export sample_inits, update_var_inits!, get_var_mean_inits, get_var_minmax_values
 export get_postfix_index, var_in_varset, get_highest_postfix_index
 export print_vars_summary
+export update_initial_conditions!
 
 # ============================================================================
 # UTILITIES

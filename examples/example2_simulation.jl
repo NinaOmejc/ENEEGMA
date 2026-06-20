@@ -20,7 +20,7 @@ settings = create_default_settings();
 # print_settings_summary(settings; section="general_settings");
 # print_settings_summary(settings; section="network_settings");
 # print_settings_summary(settings; section="simulation_settings");
-
+settings.network_settings.node_models = ["WC"]
 # ============================================================================
 # Step 2: Build Network
 # ============================================================================

@@ -14,12 +14,7 @@ function restart_found_nonpenalty_loss(
     penalty_loss::Float64=OPTIMIZATION_PENALTY_LOSS,
 )::Bool
     optsol === nothing && return false
-    effective_loss = ENEEGMA.effective_optimization_loss(
-        optsol,
-        runlog;
-        expected_params_len=expected_params_len,
-    )
-    return isfinite(effective_loss) && effective_loss < penalty_loss
+    return isfinite(optsol.objective) && optsol.objective < penalty_loss
 end
 
 function optimize_network(
@@ -105,12 +100,12 @@ function optimize_network(
 
         while irestart <= batch_end
             start_time = Dates.now()
-            restart_rng = ENEEGMA.restart_rng(settings.general_settings.seed, irestart)
+            rrng = ENEEGMA.restart_rng(settings.general_settings.seed, irestart)
             
             optsol, runlog, failure_reason = ENEEGMA.singlerun_optimization(irestart, batch_end, optfun, optimizer, args, 
                 tunable_params_symbols, tunables_lb, tunables_ub,
                 os, start_time, net, param_spec, init_spec, initial_values_native, inits_lb, inits_ub,
-                restart_rng
+                rrng
             );
 
             append!(optlogger, runlog)
@@ -157,7 +152,7 @@ function optimize_network(
         if !dynamic_restart_mode
             break
         end
-
+        print("HEre inside dynamic restart mode. batch_found_nonpenalty: $batch_found_nonpenalty, batch_idx: $batch_idx, irestart: $irestart, total_restart_limit: $total_restart_limit\n")
         if batch_found_nonpenalty
             if batch_idx > 1
                 vwarn(
@@ -198,7 +193,7 @@ function optimize_network(
 end
 
 function singlerun_optimization(
-    irestart::Int,
+    irestart::Int, 
     restart_limit::Int,
     optfun::OptimizationFunction,
     optimizer::Evolutionary.AbstractOptimizer,
@@ -214,7 +209,7 @@ function singlerun_optimization(
     initial_values_native::Vector{Float64},
     inits_lb::Vector{Float64},
     inits_ub::Vector{Float64},
-    restart_rng::AbstractRNG
+    rrng::AbstractRNG
 )
 
     vinfo("\n[Restart $irestart/$restart_limit]"; level=1)
@@ -226,9 +221,9 @@ function singlerun_optimization(
                                    init_spec=init_spec)
 
     # Sample fresh parameter and initial values for this restart
-    tunable_params_guess = ENEEGMA.sample_param_values(net.params; p_subset=tunable_params_symbols, return_type="vector", rng=restart_rng)
+    tunable_params_guess = ENEEGMA.sample_param_values(net.params; p_subset=tunable_params_symbols, return_type="vector", rng=rrng)
     tunable_params_guess = ENEEGMA.map_to_shared_space(tunable_params_guess, param_spec)
-    initial_values_guess_native = ENEEGMA.sample_inits(net.vars; return_type="vector", sort=true, rng=restart_rng)
+    initial_values_guess_native = ENEEGMA.sample_inits(net.vars; return_type="vector", sort=true, rng=rrng)
     initial_values_guess = ENEEGMA.map_to_shared_space(initial_values_guess_native, init_spec)
     tunables_guess = vcat(tunable_params_guess, initial_values_guess)
 
@@ -246,7 +241,7 @@ function singlerun_optimization(
                                             optimizer;
                                             callback=callback_fun,
                                             maxiters=os.maxiters,
-                                            rng=restart_rng
+                                            rng=rrng
         )
 
         u_phys = materialize_logged_params(current_optsol.u, param_spec, init_spec)

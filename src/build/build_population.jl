@@ -1,25 +1,25 @@
 function build_population_dynamics(pop::Population, ss::SimulationSettings)
     
     # Build each component of the dynamics
-    build_input_dynamics!(pop)
+    ENEEGMA.build_input_dynamics!(pop)
     input_vars = [d.vars for d in pop.input_dynamics]
     input_params = [d.params for d in pop.input_dynamics]
-    pop.vars = join_varsets([pop.vars; input_vars...])
-    pop.params = join_paramsets([pop.params; input_params...])
+    pop.vars = ENEEGMA.join_varsets([pop.vars; input_vars...])
+    pop.params = ENEEGMA.join_paramsets([pop.params; input_params...])
 
-    build_output_dynamics!(pop)
+    ENEEGMA.build_output_dynamics!(pop)
     if !(pop.build_setts.output_dynamics_spec in ("none", "direct_readout"))
-        remove_current_output_vars!(pop)
+        ENEEGMA.remove_current_output_vars!(pop)
         output_vars = [d.vars for d in pop.output_dynamics]
         output_params = [d.params for d in pop.output_dynamics]
-        pop.vars = join_varsets([pop.vars; output_vars...])
-        pop.params = join_paramsets([pop.params; output_params...])
+        pop.vars = ENEEGMA.join_varsets([pop.vars; output_vars...])
+        pop.params = ENEEGMA.join_paramsets([pop.params; output_params...])
     end
 
-    build_additive_noise_dynamics!(pop, ss)
+    ENEEGMA.build_additive_noise_dynamics!(pop, ss)
 
     # Enforce consistency between population-level flags and variable-level flags
-    enforce_population_flag_consistency!(pop)
+    ENEEGMA.enforce_population_flag_consistency!(pop)
 
     pop.dynamics = vcat(
         [d.dynamics for d in pop.input_dynamics]...,

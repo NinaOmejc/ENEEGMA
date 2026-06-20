@@ -28,7 +28,7 @@ function construct_internode_conn_dynamics!(net::Network)::Network
         for target_placeholder_symbol in target_placeholder_symbols
             target_placeholder_var = get_var_by_symbol(target_placeholder_vars, target_placeholder_symbol)
             target_pop = target_placeholder_var.parent_pop
-            internode_conn_substitute_term = Num(0)
+            internode_conn_substitute_term = Symbolics.Num(0)
 
             for is = 1:length(net.nodes)
                 source_node = get_node_by_nodeid(net, is)
@@ -51,12 +51,21 @@ function construct_internode_conn_dynamics!(net::Network)::Network
                     end
 
                     conn_fun = ns.network_conn_funcs[target_node.id, source_node.id]
+                    conn_fun_lower = lowercase(conn_fun)
+                    if conn_fun_lower in ("", "none", "false")
+                        continue
+                    end
+
                     supported_conn_funcs = get_conn_funcs()
                     if !haskey(supported_conn_funcs, conn_fun)
                         throw(ArgumentError("Invalid transformation dynamics: $(conn_fun). Supported types are: $(keys(supported_conn_funcs))."))
                     end
                     func = supported_conn_funcs[conn_fun]
-                    nc_term, nc_params = func(target_pop, VarSet([source_var_final]))
+                    nc_term, nc_params = if conn_fun_lower == "linear"
+                        func(target_pop, VarSet([source_var_final]); add_c=false)
+                    else
+                        func(target_pop, VarSet([source_var_final]))
+                    end
 
                     highest_constant_idx = get_highest_postfix_index(target_pop.params; pop_id=target_pop.id)
                     conn_default = Float64(ns.network_conn[target_node.id, source_node.id])

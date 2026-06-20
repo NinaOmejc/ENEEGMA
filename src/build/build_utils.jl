@@ -330,6 +330,68 @@ end
 
 
 """
+    update_initial_conditions!(net::Network, saved_inits::AbstractDict)::Network
+
+Update network initial conditions from a saved state dictionary and rebuild the problem.
+
+This is the initial-condition analogue of [`update_param_defaults!`](@ref) for `Network`.
+It accepts saved initial states keyed by normalized names (as written to JSON outputs) or
+by the raw state-variable names used internally by the network. Each matched state variable
+has its initialization range pinned to the supplied value and `net.problem.u0` is remade so
+future simulations and result exports use the updated defaults.
+
+# Arguments
+- `net::Network`: Network whose initial conditions should be updated
+- `saved_inits::AbstractDict`: Dictionary mapping state-variable names to initial values
+
+# Returns
+- `net::Network`: The updated network (for method chaining)
+"""
+function update_initial_conditions!(net::Network, saved_inits::AbstractDict)::Network
+    state_vars = get_state_vars(net.vars)
+    current_init_names = if net.problem.u0 isa NamedTuple
+        String.(keys(net.problem.u0))
+    else
+        string.(get_symbols(state_vars; sort=true))
+    end
+
+    init_values = Float64[]
+    missing_names = String[]
+
+    for init_name in current_init_names
+        normalized_name = normalize_parameter_name(init_name)
+
+        if haskey(saved_inits, normalized_name)
+            init_val = Float64(saved_inits[normalized_name])
+        elseif haskey(saved_inits, init_name)
+            init_val = Float64(saved_inits[init_name])
+        else
+            push!(missing_names, normalized_name)
+            continue
+        end
+
+        update_var_inits!(net.vars, init_name, init_val, init_val)
+        push!(init_values, init_val)
+    end
+
+    isempty(missing_names) || error(
+        "Saved initial states do not match current network state names: $(join(missing_names, ", "))"
+    )
+
+    u0_for_remake = if net.problem.u0 isa NamedTuple
+        init_symbols = Tuple(Symbol.(current_init_names))
+        NamedTuple{init_symbols}(Tuple(init_values))
+    else
+        init_values
+    end
+
+    net.problem = DifferentialEquations.remake(net.problem; u0=u0_for_remake)
+    vinfo("Network $(net.name) initial conditions updated and problem rebuilt"; level=1)
+    return net
+end
+
+
+"""
     update_param_defaults!(net::Network, dict::AbstractDict)::Network
 
 Update parameter defaults and rebuild the network problem.

@@ -532,6 +532,24 @@ function _spectral_roi_to_ordered_dict(ds::DataSettings)::OrderedDict{String, An
     return out
 end
 
+function _cleanup_serialized_data_settings!(data_dict::AbstractDict, data_s::DataSettings)
+    if haskey(data_dict, "psd") && data_dict["psd"] isa AbstractDict
+        delete!(data_dict["psd"], "transient_period_duration")
+    end
+
+    delete!(data_dict, "spectral_roi_definition_mode")
+    delete!(data_dict, "spectral_roi_manual")
+    data_dict["spectral_roi"] = _spectral_roi_to_ordered_dict(data_s)
+
+    has_auto_roi = any(==( :auto), values(data_s.spectral_roi_by_node))
+    if !has_auto_roi
+        delete!(data_dict, "spectral_roi_auto_peak_sensitivity")
+        delete!(data_dict, "spectral_roi_auto_remove_aperiodic_background")
+    end
+
+    return data_dict
+end
+
 """
     settings_to_dict(settings::Settings)::Dict{String, Any}
 
@@ -580,17 +598,6 @@ function settings_to_dict(settings::Settings)::OrderedDict{String, Any}
             data_s;
             exclude=Set([:workspace, :spectral_roi_by_node, :spectral_roi_copy_source_by_node])
         )
-        if haskey(data_dict, "psd") && data_dict["psd"] isa AbstractDict
-            delete!(data_dict["psd"], "transient_period_duration")
-        end
-        if haskey(data_dict, "spectral_roi_manual")
-            spectral_roi_dict = OrderedDict{String, Any}()
-            for (node_name, regions) in pairs(data_s.spectral_roi_manual)
-                spectral_roi_dict[String(node_name)] = [[fmin, fmax] for (fmin, fmax) in regions]
-            end
-            data_dict["spectral_roi_manual"] = spectral_roi_dict
-        end
-        data_dict["spectral_roi"] = _spectral_roi_to_ordered_dict(data_s)
         if haskey(data_dict, "measurement_noise_bands")
             measurement_noise_dict = OrderedDict{String, Any}()
             for (node_name, regions) in pairs(data_s.measurement_noise_bands)
@@ -598,6 +605,7 @@ function settings_to_dict(settings::Settings)::OrderedDict{String, Any}
             end
             data_dict["measurement_noise_bands"] = measurement_noise_dict
         end
+        _cleanup_serialized_data_settings!(data_dict, data_s)
         # Nested PSD settings are already serialized via reflection
         data_dict
     else

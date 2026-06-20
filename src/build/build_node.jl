@@ -19,9 +19,9 @@ function build_nodes!(net::Network)::Network
         end
         
         if any(occursin(model_str, canonical_node) for canonical_node in canonical_node_models)
-            pops, node = get_canonical_node_model_info!(node)
+            pops, node = ENEEGMA.get_canonical_node_model_info!(node)
         else
-            pops, node = configure_node_model!(node, sampsett)
+            pops, node = ENEEGMA.configure_node_model!(node, sampsett)
         end
         node.populations = [ENEEGMA.build_population_dynamics(pop, simsett) for pop in pops]
         node.n_pops = length(node.populations)
@@ -235,7 +235,7 @@ function configure_node_model!(node::Node, sampsett::SamplingSettings)::Tuple{Ve
     
     # Parse rule ids into parsed rules
     model_rule_ids = [parse(Int, m.match) for m in eachmatch(r"\d+", model_str)]
-    parsed_rules = Vector{ParsedRule}(undef, length(model_rule_ids))
+    parsed_rules = Vector{ENEEGMA.ParsedRule}(undef, length(model_rule_ids))
     for (rule_pos, rule_id) in enumerate(model_rule_ids)
         chosen_rule = if rule_id == 0
             # Wildcard sentinel emitted by terminals2rules for "any" terminals.
@@ -248,21 +248,21 @@ function configure_node_model!(node::Node, sampsett::SamplingSettings)::Tuple{Ve
             cf_term_idx !== nothing ? cf_rules[cf_term_idx] :
                 error("configure_node_model!: no terminal rule found for CF (cannot resolve wildcard)")
         else
-            _find_rule_by_id(grammar, rule_id)
+            ENEEGMA._find_rule_by_id(grammar, rule_id)
         end
-        parsed_rules[rule_pos] = ParsedRule(rule_pos, chosen_rule)
+        parsed_rules[rule_pos] = ENEEGMA.ParsedRule(rule_pos, chosen_rule)
     end
     # list_rules(parsed_rules)
 
-    node.n_pops = length(_get_parsed_rule_by_lhs(parsed_rules, "Pop")) 
+    node.n_pops = length(ENEEGMA._get_parsed_rule_by_lhs(parsed_rules, "Pop")) 
     pops = Vector{Population}(undef, node.n_pops)
     for ip = 1:node.n_pops
-        pops[ip] = _set_pop_from_grammar(parsed_rules, ip, node)
+        pops[ip] = ENEEGMA._set_pop_from_grammar(parsed_rules, ip, node)
     end
 
     # Build pop connectivity
     (node.build_setts.pop_conn, node.build_setts.pop_conn_motif) = 
-        _set_pop_conn_from_grammar(parsed_rules)
+        ENEEGMA._set_pop_conn_from_grammar(parsed_rules)
     
     return pops, node
 end
@@ -329,10 +329,17 @@ function _set_pop_from_grammar(parsed_rules::Vector{ParsedRule}, ip::Int, node::
     # Output dynamics
     od = _get_parsed_rule_by_lhs(pop_parsed_rules, "OutputDyn", order=1)
     kwargs[:output_dynamics_spec] = od.rhs
+    # Grammar models currently do not encode which population exports node-level output.
+    # Match the canonical-model convention by treating the first population as the sender.
+    kwargs[:sends_internode_output] = (ip == 1)
+    # kwargs[:gets_internode_output] = (ip == 1)
 
     # Collect MCFs in this pop block (order matters)
     pop_mcfs = [r.rhs for r in pop_parsed_rules if r.lhs == "ECF"]
-    to_conn = x -> lowercase(x) == "custom" ? customCF : x
+    to_conn = x -> begin
+        x_lower = lowercase(x)
+        x_lower == "custom" ? customCF : (x_lower == "false" ? "none" : x)
+    end
     mapped = to_conn.(pop_mcfs)
 
     if length(mapped) == 2

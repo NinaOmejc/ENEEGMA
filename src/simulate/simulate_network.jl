@@ -118,6 +118,7 @@ function simulate_network(prob::SciMLBase.AbstractDEProblem;
     # Convert Dict to NamedTuple if needed
     params_for_remake = new_params
     if new_params isa Dict
+        # println("New params detected: $(new_params). Converting to NamedTuple for problem remapping.")
         vinfo("Converting parameter Dict to NamedTuple"; level=2)
         # Handle both String and Symbol keys by converting to Symbols
         sym_dict = Dict(Symbol(k) => v for (k, v) in pairs(new_params))
