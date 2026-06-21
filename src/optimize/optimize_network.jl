@@ -78,6 +78,8 @@ function optimize_network(
         settings=settings,
         prob=net.problem, data=data, setter=setter,
         all_params=all_params,
+        optimize_initial_conditions=blocks.optimize_initial_conditions,
+        fixed_initial_values_native=blocks.initial_values_native,
         tspan=ss.tspan, loss_settings=ls,
         solver=solver, solver_kwargs=solver_kwargs,
         data_settings=settings.data_settings,
@@ -223,7 +225,9 @@ function singlerun_optimization(
     # Sample fresh parameter and initial values for this restart
     tunable_params_guess = ENEEGMA.sample_param_values(net.params; p_subset=tunable_params_symbols, return_type="vector", rng=rrng)
     tunable_params_guess = ENEEGMA.map_to_shared_space(tunable_params_guess, param_spec)
-    initial_values_guess_native = ENEEGMA.sample_inits(net.vars; return_type="vector", sort=true, rng=rrng)
+    initial_values_guess_native = os.optimize_initial_conditions ?
+        ENEEGMA.sample_inits(net.vars; return_type="vector", sort=true, rng=rrng) :
+        Float64[]
     initial_values_guess = ENEEGMA.map_to_shared_space(initial_values_guess_native, init_spec)
     tunables_guess = vcat(tunable_params_guess, initial_values_guess)
 

@@ -509,6 +509,7 @@ function prepare_optimization_blocks(net::Network, os::OptimizationSettings)
     initial_values_native = u0_container isa NamedTuple ? collect(values(u0_container)) : collect(u0_container)
     initial_values_native = Vector{Float64}(initial_values_native)
     length(initial_values_native) == n_states || error("Initial state vector length mismatch.")
+    optimize_initial_conditions = os.optimize_initial_conditions
 
     use_reparam = os.reparametrize && os.reparam_strategy != :none
     type_scales = isempty(os.reparam_type_scales) ? nothing : os.reparam_type_scales
@@ -516,17 +517,21 @@ function prepare_optimization_blocks(net::Network, os::OptimizationSettings)
                                     types=tunable_param_types,
                                     strategy=os.reparam_strategy,
                                     type_scales=type_scales)
-    init_spec = build_reparam_spec(inits_lb, inits_ub, use_reparam;
-                                   types=init_types,
+    init_spec = build_reparam_spec(
+                                   optimize_initial_conditions ? inits_lb : Float64[],
+                                   optimize_initial_conditions ? inits_ub : Float64[],
+                                   use_reparam;
+                                   types=optimize_initial_conditions ? init_types : Symbol[],
                                    strategy=os.reparam_strategy,
                                    type_scales=type_scales)
 
     return (; tunable_params_symbols,
             tunable_params_lb,
             tunable_params_ub,
-            init_lb=inits_lb,
-            init_ub=inits_ub,
+            init_lb=optimize_initial_conditions ? inits_lb : Float64[],
+            init_ub=optimize_initial_conditions ? inits_ub : Float64[],
             initial_values_native,
+            optimize_initial_conditions,
             param_spec,
             init_spec)
 end

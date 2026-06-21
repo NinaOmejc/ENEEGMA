@@ -754,6 +754,7 @@ mutable struct OptimizationSettings <: AbstractSettings
     reparam_strategy::Symbol
     reparam_type_scales::Dict{Symbol, Float64}
     n_restarts::Int64
+    optimize_initial_conditions::Bool
     dynamically_increase_n_restarts_upon_unsuccess::Bool
     maxiters::Int64
     time_limit_minutes::Int64
@@ -852,6 +853,10 @@ mutable struct OptimizationSettings <: AbstractSettings
         save_modeled_psd = _losssettings_as_bool(get(optdict, "save_modeled_psd", false), false)
         include_settings_in_results_output = _losssettings_as_bool(get(optdict, "include_settings_in_results_output", true), true)
         n_restarts = Int64(get(optdict, "n_restarts", 1))
+        optimize_initial_conditions = _losssettings_as_bool(
+            get(optdict, "optimize_initial_conditions", true),
+            true,
+        )
         dynamically_increase_n_restarts_upon_unsuccess = _losssettings_as_bool(
             get(optdict, "dynamically_increase_n_restarts_upon_unsuccess", false),
             false,
@@ -887,6 +892,7 @@ mutable struct OptimizationSettings <: AbstractSettings
             reparam_strategy,
             reparam_type_scales,
             n_restarts,
+            optimize_initial_conditions,
             dynamically_increase_n_restarts_upon_unsuccess,
             Int64(get(optdict, "maxiters", 100_000)),
             Int64(get(optdict, "time_limit_minutes", 120)),

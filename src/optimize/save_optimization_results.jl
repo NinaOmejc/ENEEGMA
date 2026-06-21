@@ -226,15 +226,14 @@ end
 function best_params_inits(optsol::SciMLBase.OptimizationSolution,
                            optlogger::Vector{OptLogEntry},
                            blocks)
-    n_state_vars = length(blocks.initial_values_native)
+    n_state_vars = length(blocks.init_spec)
     n_params = length(optsol.u) - n_state_vars
     n_params < 0 && error("Optimization solution length is inconsistent with state/measurement-noise counts.")
     length(blocks.param_spec) == n_params || error("Mismatch between tunable parameter count and optimization solution length.")
-    length(blocks.init_spec) == n_state_vars || error("Mismatch between initial-state count and optimization solution length.")
 
     decoded_solution = materialize_logged_params(optsol.u, blocks.param_spec, blocks.init_spec)
     params_native = decoded_solution[1:n_params]
-    inits_native = decoded_solution[n_params + 1 : n_params + n_state_vars]
+    inits_native = n_state_vars == 0 ? Vector{Float64}(blocks.initial_values_native) : decoded_solution[n_params + 1 : n_params + n_state_vars]
     return params_native, inits_native, Float64(optsol.objective)
 end
 
@@ -245,14 +244,15 @@ function verified_best_params_inits(optsol::SciMLBase.OptimizationSolution,
                                     net::Network,
                                     data::Data,
                                     settings::Settings)
+    n_params = length(blocks.param_spec)
+    n_state_vars = length(blocks.init_spec)
     params_native, inits_native, best_loss = ENEEGMA.best_params_inits(optsol, optlogger, blocks)
+    best_eval_inits = n_state_vars == 0 ? blocks.initial_values_native : inits_native
     best_result = ENEEGMA.evaluate_optimization_candidate(
-        net, setter, params_native, inits_native, data, settings
+        net, setter, params_native, best_eval_inits, data, settings
     )
     best_recomputed_loss = ENEEGMA.recomputed_candidate_loss(best_result)
 
-    n_params = length(blocks.param_spec)
-    n_state_vars = length(blocks.init_spec)
     expected_params_len = n_params + n_state_vars
     candidate_entries = OptLogEntry[]
     best_logged_loss = Float64(optsol.objective)
@@ -270,7 +270,7 @@ function verified_best_params_inits(optsol::SciMLBase.OptimizationSolution,
 
     for entry in candidate_entries
         candidate_params = entry.params[1:n_params]
-        candidate_inits = entry.params[n_params + 1 : n_params + n_state_vars]
+        candidate_inits = n_state_vars == 0 ? blocks.initial_values_native : entry.params[n_params + 1 : n_params + n_state_vars]
         candidate_result = ENEEGMA.evaluate_optimization_candidate(
             net, setter, candidate_params, candidate_inits, data, settings
         )

@@ -165,13 +165,15 @@ function compute_loss(new_params, args, metric_fun::Function, loss_settings::Los
     solver_kwargs = args.solver_kwargs
     loss_settings = args.loss_settings
     data_settings = haskey(args, :data_settings) ? args.data_settings : nothing
+    optimize_initial_conditions = haskey(args, :optimize_initial_conditions) ? Bool(args.optimize_initial_conditions) : true
+    fixed_initial_values_native = haskey(args, :fixed_initial_values_native) ? Vector{Float64}(args.fixed_initial_values_native) : Float64[]
 
-    n_inits = length(prob.u0)
+    n_inits = optimize_initial_conditions ? length(prob.u0) : 0
     n_param_block = length(new_params) - n_inits
     @assert n_param_block >= 0 "Decision vector smaller than expected"
 
     θ = new_params[1:n_param_block]
-    iv = new_params[n_param_block + 1 : n_param_block + n_inits]
+    iv = optimize_initial_conditions ? new_params[n_param_block + 1 : n_param_block + n_inits] : fixed_initial_values_native
     updated_all_params = setter(all_params, θ)
     new_prob = remake(prob; p=updated_all_params, u0=iv, tspan=tspan)
     sol = safe_solve(new_prob, solver; solver_kwargs=solver_kwargs)
