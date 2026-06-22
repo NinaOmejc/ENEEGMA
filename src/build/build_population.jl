@@ -43,12 +43,15 @@ function build_input_dynamics!(pop::Population)
         push!(pop.input_dynamics, InputDynamics(dyn, vars, params))
         pop.n_state_vars += length(dyn)
         
-        # Update highest indices
-        if !isempty(vars.vars)
-            pop.build_setts.highest_var_idx = get_highest_postfix_index(vars; var_idx_only=true)
+        # Update highest indices against the cumulative population state, not just the
+        # latest component. Grammar-sampled populations can combine several blocks.
+        cumulative_vars = join_varsets([pop.vars, vars])
+        cumulative_params = join_paramsets([pop.params, params])
+        if !isempty(cumulative_vars.vars)
+            pop.build_setts.highest_var_idx = get_highest_postfix_index(cumulative_vars; var_idx_only=true)
         end
-        if !isempty(params.params)
-            pop.build_setts.highest_param_idx = get_highest_postfix_index(params)
+        if !isempty(cumulative_params.params)
+            pop.build_setts.highest_param_idx = get_highest_postfix_index(cumulative_params)
         end
     end
     return pop
@@ -63,12 +66,14 @@ function build_output_dynamics!(pop::Population)
     push!(pop.output_dynamics, OutputDynamics(dyn, vars, params))
     pop.n_state_vars += length(dyn)
 
-    # Update highest indices
-    if !isempty(vars.vars)
-        pop.build_setts.highest_var_idx = get_highest_postfix_index(vars; var_idx_only=true)
+    # Update highest indices against the cumulative population state.
+    cumulative_vars = join_varsets([pop.vars, vars])
+    cumulative_params = join_paramsets([pop.params, params])
+    if !isempty(cumulative_vars.vars)
+        pop.build_setts.highest_var_idx = get_highest_postfix_index(cumulative_vars; var_idx_only=true)
     end
-    if !isempty(params.params)
-        pop.build_setts.highest_param_idx = get_highest_postfix_index(params)
+    if !isempty(cumulative_params.params)
+        pop.build_setts.highest_param_idx = get_highest_postfix_index(cumulative_params)
     end
 
     return pop

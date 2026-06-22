@@ -67,9 +67,21 @@ function construct_internode_conn_dynamics!(net::Network)::Network
                         func(target_pop, VarSet([source_var_final]))
                     end
 
-                    highest_constant_idx = get_highest_postfix_index(target_pop.params; pop_id=target_pop.id)
                     conn_default = Float64(ns.network_conn[target_node.id, source_node.id])
-                    c = Param("$(target_pop.parent_node.name)₊c$(target_pop.id)$(highest_constant_idx + length(nc_params.params) + 1)", :node_coupling, target_pop;
+                    existing_pop_params = [
+                        p for p in vcat(net.params.params, target_pop.params.params, nc_params.params)
+                        if p.parent_pop.parent_node.id == target_pop.parent_node.id &&
+                           p.parent_pop.id == target_pop.id
+                    ]
+                    existing_names = Set(p.name for p in existing_pop_params)
+                    next_idx = get_highest_postfix_index(ParamSet(existing_pop_params); pop_id=target_pop.id) + 1
+                    candidate_name = "$(target_pop.parent_node.name)₊c$(target_pop.id)$(next_idx)"
+                    while candidate_name in existing_names
+                        next_idx += 1
+                        candidate_name = "$(target_pop.parent_node.name)₊c$(target_pop.id)$(next_idx)"
+                    end
+
+                    c = Param(candidate_name, :node_coupling, target_pop;
                         default=conn_default, tunable=true, description="network connectivity strength")
                     add_param!(nc_params, c)
                     join_paramsets!(net.params, [nc_params])

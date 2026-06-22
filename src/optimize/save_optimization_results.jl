@@ -757,10 +757,11 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
     ss = settings.simulation_settings
     ls = settings.optimization_settings.loss_settings
     ds = settings.data_settings
+    optimize_inits = settings.optimization_settings.optimize_initial_conditions
 
     solver = get_solver(net.problem, ss)
     solver_kwargs = get_solver_kwargs(net.problem, ss)
-    n_state_vars = length(net.problem.u0)
+    n_state_vars = optimize_inits ? length(net.problem.u0) : 0
     n_params = length(entries[1].params) - n_state_vars
 
     spectra_frames = NamedTuple{(:iter, :loss, :restart, :sigma, :psd_dict)}[]
@@ -776,7 +777,7 @@ function plot_psd_spetra_evolution(optlogger::Vector{OptLogEntry},
         length(params_vec) == n_params + n_state_vars || continue
 
         param_block = params_vec[1:n_params]
-        init_block = params_vec[n_params + 1 : n_params + n_state_vars]
+        init_block = optimize_inits ? params_vec[n_params + 1 : n_params + n_state_vars] : nothing
         new_params = setter(net.problem.p, param_block)
 
         try
